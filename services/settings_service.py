@@ -4,6 +4,10 @@ from db.db_factory import get_db_client
 
 SECRET_KEYS = frozenset({"openrouter_api_key"})
 
+# Daily sync / weekly analysis defaults (seconds)
+DEFAULT_SYNC_INTERVAL = "86400"       # 24h
+DEFAULT_ANALYSIS_INTERVAL = "604800"  # 7d
+
 
 def _mask_secret(value: str) -> str:
     v = value.strip()
@@ -16,7 +20,11 @@ class SettingsService:
     DEFAULTS = {
         "analysis_model": os.getenv("ANALYSIS_MODEL", "deepseek/deepseek-v4-pro"),
         "research_model": os.getenv("RESEARCH_MODEL", "deepseek/deepseek-v4-flash"),
-        "analysis_interval": os.getenv("ANALYSIS_INTERVAL", os.getenv("SCRAPING_INTERVAL", "86400")),
+        "sync_interval": os.getenv("SYNC_INTERVAL", DEFAULT_SYNC_INTERVAL),
+        "analysis_interval": os.getenv(
+            "ANALYSIS_INTERVAL",
+            os.getenv("SCRAPING_INTERVAL", DEFAULT_ANALYSIS_INTERVAL),
+        ),
     }
 
     def _stored(self) -> dict[str, str]:
@@ -60,6 +68,7 @@ class SettingsService:
         allowed = {
             "analysis_model",
             "research_model",
+            "sync_interval",
             "analysis_interval",
             "openrouter_api_key",
         }
@@ -67,7 +76,6 @@ class SettingsService:
             if key not in allowed:
                 continue
             if key == "openrouter_api_key":
-                # Empty / placeholder = leave existing key unchanged
                 if value is None:
                     continue
                 text = str(value).strip()
@@ -83,9 +91,20 @@ class SettingsService:
             )
         return self.get_all()
 
+    def get_sync_interval_seconds(self) -> int:
+        return self._parse_interval("sync_interval", int(DEFAULT_SYNC_INTERVAL))
+
+    def get_analysis_interval_seconds(self) -> int:
+        return self._parse_interval("analysis_interval", int(DEFAULT_ANALYSIS_INTERVAL))
+
     def get_interval_seconds(self) -> int:
-        settings = self.get_all()
+        """Back-compat alias — returns analysis interval."""
+        return self.get_analysis_interval_seconds()
+
+    def _parse_interval(self, key: str, default: int) -> int:
+        raw = self.get_raw(key)
         try:
-            return int(settings.get("analysis_interval", 86400))
+            value = int(raw) if raw is not None else default
+            return max(60, value)
         except (TypeError, ValueError):
-            return 86400
+            return default

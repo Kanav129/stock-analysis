@@ -2,30 +2,37 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 import pytest
 
-from rest_api.main import run_pipeline, pipeline_in_interval
+from rest_api.main import run_pipeline, run_sync_job, sync_in_interval
 
 
 @patch("rest_api.main.analysis_service.run")
-@patch("rag_graphs.news_rag_graph.ingestion.DocumentSyncManager.sync_documents")
-@patch("scraper.scraper_factory.NewsScraperFactory.create_scraper")
-@patch("scraper.scraper_factory.StockScraperFactory.create_scraper")
-@patch("rest_api.main.get_scrape_tickers", return_value=["AAPL"])
+@patch("rest_api.main.sync_service.sync_data", new_callable=AsyncMock)
 @pytest.mark.asyncio
-async def test_run_pipeline(mock_tickers, mock_stock_factory, mock_news_factory, mock_sync, mock_analysis):
-    mock_news_factory.return_value.scrape_all_tickers = lambda x: None
-    mock_stock_factory.return_value.scrape_all_tickers = lambda x: None
+async def test_run_pipeline(mock_sync, mock_analysis):
+    mock_sync.return_value = {"started": True, "tickers": ["AAPL"], "message": "ok"}
+    mock_analysis.return_value = {"status": "completed"}
 
-    await run_pipeline()
+    with patch("rest_api.main.get_scrape_tickers", return_value=["AAPL"]):
+        await run_pipeline()
+
     mock_sync.assert_called_once()
-    mock_analysis.assert_called_once()
+    mock_analysis.assert_called_once_with(["AAPL"])
+
+
+@patch("rest_api.main.sync_service.sync_data", new_callable=AsyncMock)
+@pytest.mark.asyncio
+async def test_run_sync_job(mock_sync):
+    mock_sync.return_value = {"started": True, "tickers": ["AAPL"], "message": "ok"}
+    await run_sync_job()
+    mock_sync.assert_called_once()
 
 
 @patch("rest_api.main.asyncio.sleep", new_callable=AsyncMock)
-@patch("rest_api.main.run_pipeline")
+@patch("rest_api.main.run_sync_job", new_callable=AsyncMock)
 @pytest.mark.asyncio
-async def test_pipeline_in_interval(mock_run_pipeline, mock_sleep):
-    mock_run_pipeline.return_value = None
+async def test_sync_in_interval(mock_run_sync, mock_sleep):
+    mock_run_sync.return_value = None
     mock_sleep.side_effect = [None, asyncio.CancelledError()]
     with pytest.raises(asyncio.CancelledError):
-        await pipeline_in_interval()
-    mock_run_pipeline.assert_called_once()
+        await sync_in_interval()
+    mock_run_sync.assert_called_once()

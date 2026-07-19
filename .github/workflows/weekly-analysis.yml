@@ -1,0 +1,67 @@
+# Weekly core-report analysis. Wakes the Render free dyno via HTTP.
+#
+# Repo secrets (Settings → Secrets and variables → Actions):
+#   API_BASE_URL  — https://your-service.onrender.com  (no trailing slash)
+#   ADMIN_KEY     — same as Render ADMIN_KEY
+
+name: Weekly analysis
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"   # Mondays 14:00 UTC
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Wake dyno
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 30 "${API_BASE_URL}/health"; then
+              echo "API awake"
+              exit 0
+            fi
+            echo "Waiting for cold start ($i)…"
+            sleep 20
+          done
+          echo "Health check failed after retries" >&2
+          exit 1
+
+      - name: Start analysis
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 120 \
+            -X POST "${API_BASE_URL}/cron/analyze" \
+            -H "Authorization: Bearer ${ADMIN_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+
+      - name: Wait until analysis finishes
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 100); do
+            body=$(curl -fsS --max-time 60 \
+              "${API_BASE_URL}/analysis/status" \
+              -H "Authorization: Bearer ${ADMIN_KEY}")
+            echo "$body"
+            running=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running', False))")
+            status=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+            if [ "$running" != "True" ] && [ "$status" != "running" ]; then
+              echo "Analysis finished with status=${status}"
+              exit 0
+            fi
+            sleep 60
+          done
+          echo "Timed out waiting for analysis" >&2
+          exit 1

@@ -17,6 +17,10 @@ services:
     envVars:
       - key: AUTO_PIPELINE_ENABLED
         value: "false"
+      - key: SYNC_INTERVAL
+        value: "86400"
+      - key: ANALYSIS_INTERVAL
+        value: "604800"
       - key: VECTOR_DB_DIRECTORY
         value: /app/chroma_db
       - key: CORS_ORIGINS

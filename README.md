@@ -67,6 +67,25 @@ Notes:
 
 - Free dynos **spin down** after idle; the first request can take ~30–60s.
 - Chroma data under `/app/chroma_db` is **ephemeral** on free tier (lost on redeploy/sleep). Re-run sync after wake if needed. Postgres/Mongo should be managed (Supabase / Atlas).
+- Keep `AUTO_PIPELINE_ENABLED=false` on free tier. Scheduling is done by **GitHub Actions** (below), which also wakes the dyno.
+
+### Scheduled jobs (GitHub Actions → wakes Render)
+
+Workflows in `.github/workflows/`:
+
+| Workflow | When (UTC) | Endpoint |
+|----------|------------|----------|
+| `daily-sync.yml` | Every day 13:00 | `POST /cron/sync` |
+| `weekly-analysis.yml` | Mondays 14:00 | `POST /cron/analyze` |
+
+After the API is live, add these **GitHub repo secrets** (Settings → Secrets → Actions):
+
+| Secret | Value |
+|--------|--------|
+| `API_BASE_URL` | `https://<your-service>.onrender.com` (no trailing slash) |
+| `ADMIN_KEY` | Same as Render `ADMIN_KEY` |
+
+You can also run them manually: Actions → workflow → **Run workflow**.
 
 ### Frontend → Vercel
 
@@ -100,11 +119,14 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 | Variable | Where | Purpose |
 |----------|--------|---------|
 | `CORS_ORIGINS` | Render | Allowed browser origins (comma-separated) |
-| `ADMIN_KEY` | Render | Access key for login + API Bearer auth |
+| `ADMIN_KEY` | Render (+ GitHub Actions) | Access key for login + cron Bearer auth |
 | `VITE_API_BASE_URL` | Vercel | Render API origin for the SPA |
 | `PORT` | Render | Injected automatically |
 | `AUTO_PIPELINE_ENABLED` | Render | Prefer `false` on free tier |
+| `SYNC_INTERVAL` | Render | Seconds between in-process syncs (default 86400) |
+| `ANALYSIS_INTERVAL` | Render | Seconds between in-process analyses (default 604800) |
 | `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | OpenRouter models |
+| `API_BASE_URL` | GitHub Actions | Render origin for scheduled cron |
 
 ## Testing
 

@@ -11,6 +11,7 @@ from rest_api.routes import (
     settings_routes,
     sync_routes,
     research_routes,
+    cron_routes,
 )
 from db.bootstrap import bootstrap_schema
 from services.analysis_service import analysis_service
@@ -62,16 +63,32 @@ def get_scrape_tickers() -> list[str]:
     return fallback or []
 
 
-async def run_pipeline():
-    """Scrape news/prices for universe, sync vectors, then generate core reports + ratings."""
+async def run_sync_job():
+    """Scrape news + prices for the universe and sync vectors."""
     result = await sync_service.sync_data()
     if not result.get("started") and not result.get("tickers"):
         logger.warning("No tickers to scrape.")
-        return
-    tickers = result.get("tickers") or get_scrape_tickers()
-    if tickers:
-        analysis_service.run(tickers)
-    logger.info("Pipeline completed.")
+    else:
+        logger.info(f"Sync job finished: {result.get('message')}")
+    return result
+
+
+async def run_analysis_job():
+    """Generate core reports + ratings for the universe (blocking until done)."""
+    tickers = get_scrape_tickers()
+    if not tickers:
+        logger.warning("No tickers to analyze.")
+        return {"started": False, "message": "No tickers"}
+    result = await asyncio.to_thread(analysis_service.run, tickers)
+    logger.info(f"Analysis job finished: {result.get('message') or result.get('status')}")
+    return result
+
+
+async def run_pipeline():
+    """Back-compat: sync then analyze (used by older tests / manual full runs)."""
+    await run_sync_job()
+    await run_analysis_job()
+    logger.info("Full pipeline completed.")
 
 
 @app.on_event("startup")
@@ -85,26 +102,49 @@ async def startup():
     except Exception as exc:
         logger.error(f"Schema bootstrap skipped or failed: {exc}")
     if AUTO_PIPELINE_ENABLED:
-        asyncio.create_task(pipeline_in_interval())
+        asyncio.create_task(sync_in_interval())
+        asyncio.create_task(analysis_in_interval())
+        logger.info(
+            "In-process schedulers enabled (sync + analysis). "
+            "On Render free tier prefer GitHub Actions cron instead."
+        )
     else:
-        logger.info("Auto pipeline disabled (AUTO_PIPELINE_ENABLED=false). Use /sync/data and /analysis/run manually.")
+        logger.info(
+            "In-process schedulers disabled (AUTO_PIPELINE_ENABLED=false). "
+            "Use UI buttons or POST /cron/sync and /cron/analyze."
+        )
 
 
-async def pipeline_in_interval():
+async def sync_in_interval():
     while True:
-        interval = settings_service.get_interval_seconds()
-        hours = interval / 3600
-        logger.info(f"Scheduled pipeline: next run in {hours:.2f} hours.")
+        interval = settings_service.get_sync_interval_seconds()
+        logger.info(f"Scheduled sync: next run in {interval / 3600:.2f} hours.")
         await asyncio.sleep(interval)
-        logger.info(f"Starting scheduled pipeline at {datetime.now()}")
+        logger.info(f"Starting scheduled sync at {datetime.now()}")
         try:
-            await run_pipeline()
+            await run_sync_job()
         except Exception as exc:
-            logger.error(f"Pipeline failed: {exc}")
-        logger.info("Scheduled pipeline completed.")
+            logger.error(f"Scheduled sync failed: {exc}")
+
+
+async def analysis_in_interval():
+    while True:
+        interval = settings_service.get_analysis_interval_seconds()
+        logger.info(f"Scheduled analysis: next run in {interval / 3600:.2f} hours.")
+        await asyncio.sleep(interval)
+        logger.info(f"Starting scheduled analysis at {datetime.now()}")
+        try:
+            await run_analysis_job()
+        except Exception as exc:
+            logger.error(f"Scheduled analysis failed: {exc}")
+
+
+# Back-compat name for tests
+pipeline_in_interval = sync_in_interval
 
 
 app.include_router(auth_router)
+app.include_router(cron_routes.router)
 app.include_router(stock_routes.router, prefix="/stock", tags=["Stock Data"])
 app.include_router(news_routes.router, prefix="/news", tags=["News Articles"])
 app.include_router(watchlist_routes.router, tags=["Watchlist"])

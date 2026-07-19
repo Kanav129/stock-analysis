@@ -28,7 +28,8 @@ export function SettingsPage() {
   });
   const [analysisModel, setAnalysisModel] = useState('');
   const [researchModel, setResearchModel] = useState('');
-  const [interval, setIntervalSec] = useState('86400');
+  const [syncInterval, setSyncInterval] = useState('86400');
+  const [analysisInterval, setAnalysisInterval] = useState('604800');
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
 
@@ -36,7 +37,8 @@ export function SettingsPage() {
     if (settingsQ.data) {
       setAnalysisModel(settingsQ.data.analysis_model ?? '');
       setResearchModel(settingsQ.data.research_model ?? '');
-      setIntervalSec(settingsQ.data.analysis_interval ?? '86400');
+      setSyncInterval(settingsQ.data.sync_interval ?? '86400');
+      setAnalysisInterval(settingsQ.data.analysis_interval ?? '604800');
       setApiKey('');
     }
   }, [settingsQ.data]);
@@ -46,7 +48,8 @@ export function SettingsPage() {
       const payload: Record<string, string | number> = {
         analysis_model: analysisModel.trim(),
         research_model: researchModel.trim(),
-        analysis_interval: Number(interval),
+        sync_interval: Number(syncInterval),
+        analysis_interval: Number(analysisInterval),
       };
       if (apiKey.trim()) {
         payload.openrouter_api_key = apiKey.trim();
@@ -259,15 +262,35 @@ export function SettingsPage() {
           </label>
 
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-[var(--color-text-secondary)]">Auto-pipeline interval (seconds)</span>
+            <span className="text-[var(--color-text-secondary)]">
+              Sync interval (seconds){' '}
+              <span className="text-[var(--color-text-muted)]">prices + news · default 86400 = daily</span>
+            </span>
             <input
-              value={interval}
-              onChange={(e) => setIntervalSec(e.target.value)}
+              value={syncInterval}
+              onChange={(e) => setSyncInterval(e.target.value)}
               type="number"
               min={60}
               className="rounded-md bg-[var(--color-surface-2)] px-3 py-2 font-mono text-sm outline-none ring-[var(--color-accent)] focus:ring-2"
             />
           </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-[var(--color-text-secondary)]">
+              Analysis interval (seconds){' '}
+              <span className="text-[var(--color-text-muted)]">reports · default 604800 = weekly</span>
+            </span>
+            <input
+              value={analysisInterval}
+              onChange={(e) => setAnalysisInterval(e.target.value)}
+              type="number"
+              min={60}
+              className="rounded-md bg-[var(--color-surface-2)] px-3 py-2 font-mono text-sm outline-none ring-[var(--color-accent)] focus:ring-2"
+            />
+          </label>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            On Render free tier, keep in-process auto off and use GitHub Actions cron (see README) to wake the dyno.
+          </p>
 
           <div className="flex flex-wrap items-center gap-2">
             <button
