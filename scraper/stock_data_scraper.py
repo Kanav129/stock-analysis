@@ -1,10 +1,22 @@
-import asyncio
+import os
+
+import yfinance as yf
+from dotenv import load_dotenv
 
 from db.postgres_db import PostgresDBClient
 from utils.logger import logger
-import yfinance as yf
-from dotenv import load_dotenv
-import os
+
+
+def _to_python(value):
+    """Convert numpy/pandas scalars to native Python types for PostgreSQL."""
+    if value is None:
+        return None
+    if hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, float) and value != value:  # NaN
+        return None
+    return value
+
 
 class StockDataScraper:
     def __init__(self):
@@ -46,13 +58,13 @@ class StockDataScraper:
                 data = {
                     "ticker": ticker,
                     "date": date.date(),
-                    "open": row["Open"],
-                    "high": row["High"],
-                    "low": row["Low"],
-                    "close": row["Close"],
-                    "volume": row["Volume"],
+                    "open": _to_python(row["Open"]),
+                    "high": _to_python(row["High"]),
+                    "low": _to_python(row["Low"]),
+                    "close": _to_python(row["Close"]),
+                    "volume": int(_to_python(row["Volume"]) or 0),
                 }
-                self.db_client.create("stock_data", data)  # Assuming table is named `stock_data`
+                self.db_client.create("stock_data", data)
             logger.info(f"Data for {ticker} successfully inserted into the database.")
         except Exception as e:
             logger.error(f"Error inserting data for {ticker}: {e}")

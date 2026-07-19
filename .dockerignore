@@ -1,0 +1,32 @@
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+.cursor
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+chroma_db
+.av_cache
+logs
+*.log
+.DS_Store
+
+# Frontend is deployed on Vercel — keep out of the API image
+frontend/
+documentation/
+images/
+docs/
+
+# Local / editor
+.idea
+.vscode
+*.md
+!README.md

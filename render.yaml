@@ -1,0 +1,57 @@
+# Render Blueprint — API only (Docker).
+# https://render.com/docs/blueprint-spec
+#
+# After first deploy:
+# 1. Set all secrets in the Render dashboard (from .env.example).
+# 2. Set CORS_ORIGINS to your Vercel URL, e.g. https://your-app.vercel.app
+# 3. Point Vercel VITE_API_BASE_URL at this service's URL.
+
+services:
+  - type: web
+    name: stocks-insights-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: AUTO_PIPELINE_ENABLED
+        value: "false"
+      - key: VECTOR_DB_DIRECTORY
+        value: /app/chroma_db
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ADMIN_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: POSTGRES_HOST
+        sync: false
+      - key: POSTGRES_PORT
+        value: "5432"
+      - key: POSTGRES_DB
+        sync: false
+      - key: POSTGRES_USERNAME
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_SSLMODE
+        value: require
+      - key: MONGO_URI
+        sync: false
+      - key: DATABASE_NAME
+        value: stocks_insights
+      - key: COLLECTION_NAME
+        value: news_articles
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: ANALYSIS_MODEL
+        sync: false
+      - key: RESEARCH_MODEL
+        sync: false

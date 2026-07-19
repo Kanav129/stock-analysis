@@ -1,0 +1,61 @@
+# Secrets / local env (keep .env.example committed)
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Local runtime / caches
+chroma_db/
+.av_cache/
+logs/
+*.log
+.DS_Store
+Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.impeccable/
+
+# Cursor / local agent tooling (not part of the app)
+.cursor/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*~
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Misc local artifacts
+*.sqlite
+*.sqlite3
+.cache/
+tmp/
+temp/
+
+# Frontend local env (also covered by frontend/.gitignore)
+frontend/.env
+frontend/.env.*
+!frontend/.env.example

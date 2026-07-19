@@ -1,0 +1,1 @@
+"""Kronos forecast wrapper — lazy-loaded ML model for price forecasting."""

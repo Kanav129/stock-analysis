@@ -1,0 +1,1 @@
+"""Shared node definitions for the research graph."""

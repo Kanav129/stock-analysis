@@ -38,4 +38,6 @@ graph_builder.add_edge(GENERATE_RESULT, END)
 graph_builder.set_entry_point(RETRIEVE_NEWS)
 
 app = graph_builder.compile()
-app.get_graph().draw_mermaid_png(output_file_path="news-rag-graph.png")
+
+if __name__ == "__main__":
+    app.get_graph().draw_mermaid_png(output_file_path="news-rag-graph.png")

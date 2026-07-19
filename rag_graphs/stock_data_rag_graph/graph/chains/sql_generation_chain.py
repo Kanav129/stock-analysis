@@ -1,11 +1,11 @@
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
+from config.llm_config import get_chat_llm
 from utils.logger import logger
 
 load_dotenv()
-llm = ChatOpenAI(temperature=0)
+llm = get_chat_llm(temperature=0)
 
 system = """
 You are an AI assistant that converts natural language queries into SQL queries.

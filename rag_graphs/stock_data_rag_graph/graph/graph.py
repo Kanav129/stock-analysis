@@ -23,4 +23,6 @@ graph_builder.add_edge(GENERATE_RESULTS, END)
 
 
 app = graph_builder.compile()
-app.get_graph().draw_mermaid_png(output_file_path="stock-data-rag-graph.png")
+
+if __name__ == "__main__":
+    app.get_graph().draw_mermaid_png(output_file_path="stock-data-rag-graph.png")

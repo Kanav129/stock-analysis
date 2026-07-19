@@ -1,6 +1,23 @@
 from fastapi import APIRouter, HTTPException, Query
 from rag_graphs.news_rag_graph.graph.graph import app
+from services.news_service import NewsService
+
 router = APIRouter()
+news_service = NewsService()
+
+
+@router.get("/{ticker}/articles")
+def recent_articles(
+    ticker: str,
+    limit: int = Query(10, ge=1, le=50, description="Max articles to return"),
+):
+    """Recent scraped news headlines for a ticker from MongoDB."""
+    try:
+        articles = news_service.get_recent_articles(ticker, limit=limit)
+        return {"ticker": ticker.upper(), "articles": articles}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @router.get("/{ticker}")
 def news_by_topic(

@@ -1,10 +1,10 @@
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from pydantic.v1 import BaseModel, Field
+from config.llm_config import get_chat_llm
 
 load_dotenv()
-llm = ChatOpenAI(temperature=0)
+llm = get_chat_llm(temperature=0)
 
 class GradeDocuments(BaseModel):
     """Binary score for relevance check on retrieved documents"""

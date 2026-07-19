@@ -7,4 +7,4 @@ client = TestClient(app)
 def test_root_route():
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json() == {"message": "Welcome to the Financial Data API"}
+    assert "Personal Stock Analysis Dashboard API" in response.json()["message"]

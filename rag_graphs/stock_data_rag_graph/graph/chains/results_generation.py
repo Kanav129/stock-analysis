@@ -1,11 +1,11 @@
 from dotenv import load_dotenv
 from langchain_core.output_parsers import StrOutputParser
-from langchain_openai import ChatOpenAI
-from langchain import hub
 from langchain_core.prompts import ChatPromptTemplate
+from config.llm_config import get_chat_llm
+
 load_dotenv()
 
-llm                 = ChatOpenAI(temperature=0)
+llm                 = get_chat_llm(temperature=0)
 
 system = """You are a helpful AI assistant which specializes in reading stock data provided in pandas.Dataframe format and answering relevant queries.
             Answer the question user asks. Be polite.

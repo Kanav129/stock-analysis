@@ -24,4 +24,6 @@ graph_builder.add_edge(EXECUTE_SQL, END)
 
 
 app = graph_builder.compile()
-app.get_graph().draw_mermaid_png(output_file_path="stock-charts-rag-graph.png")
+
+if __name__ == "__main__":
+    app.get_graph().draw_mermaid_png(output_file_path="stock-charts-rag-graph.png")

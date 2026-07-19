@@ -1,0 +1,26 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      PORT: "8001"
+      VECTOR_DB_DIRECTORY: /app/chroma_db
+      # Allow local Vite + optional preview; override in .env for production origins
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      AUTO_PIPELINE_ENABLED: ${AUTO_PIPELINE_ENABLED:-false}
+    volumes:
+      - chroma_data:/app/chroma_db
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  chroma_data:

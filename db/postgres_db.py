@@ -1,3 +1,4 @@
+import os
 import psycopg2
 from psycopg2 import sql, OperationalError
 from utils.logger import logger
@@ -10,13 +11,14 @@ class PostgresDBClient:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, host, database, user, password, port=5432):
+    def __init__(self, host, database, user, password, port=5432, sslmode=None):
         if not hasattr(self, "_initialized"):
             self.host = host
             self.database = database
             self.user = user
             self.password = password
             self.port = port
+            self.sslmode = sslmode or os.getenv("POSTGRES_SSLMODE")
             self.connection = None
             self._initialized = True
 
@@ -24,13 +26,16 @@ class PostgresDBClient:
         """Establish a database connection."""
         if not self.connection:
             try:
-                self.connection = psycopg2.connect(
-                    host=self.host,
-                    database=self.database,
-                    user=self.user,
-                    password=self.password,
-                    port=self.port,
-                )
+                connect_kwargs = {
+                    "host": self.host,
+                    "database": self.database,
+                    "user": self.user,
+                    "password": self.password,
+                    "port": self.port,
+                }
+                if self.sslmode:
+                    connect_kwargs["sslmode"] = self.sslmode
+                self.connection = psycopg2.connect(**connect_kwargs)
                 logger.info("PostgreSQL connection established.")
             except OperationalError as e:
                 logger.error(f"Error connecting to PostgreSQL: {e}")

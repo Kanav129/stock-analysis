@@ -1,158 +1,117 @@
-   <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-sa/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/">Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License</a>.
-   
-
 # Stock Data Insights Application
 
-This project demonstrates the use of Agentic Retrieval-Augmented Generation (RAG) workflows to extract insights from news and financial data pertaining to specific companies and the broader stock market. It leverages Large Language Models (LLMs), ChromaDB as a vector database, LangChain, LangChain Expression Language (LCEL), and LangGraph to provide comprehensive analyses.
+Agentic RAG workflows for news and financial data, with a **Personal Stock Analysis Dashboard** — React frontend, watchlist management, and AI buy/hold/sell ratings.
 
 ## Features
 
-- **Stock Performance Visualization**: Displays graphs and charts illustrating the historical performance of selected stocks.
-- **Attribute-Specific Data Retrieval**: Fetches detailed information related to specific attributes of a particular stock.
-- **News Aggregation**: Presents general news or topic-specific articles related to a particular stock or company.
+- **Dashboard**: Portfolio summary, holdings (from DB snapshots), AI ratings (score + tag)
+- **Watchlist**: Add/remove tickers; drives daily scraping and analysis
+- **Stock detail**: Price charts, rating history, AI reasoning and supporting headlines
+- **Research reports**: Multi-section core reports (technicals, fundamentals, news, sentiment, decision)
+- **Analysis pipeline**: Manual or scheduled sync → scrape → vector sync → LLM rating
+- **Existing RAG APIs**: News RAG, stock price stats, chart data
 
-## High Level Architecture
-![High Level Design](documentation/high_level_design.png)
+## Architecture
 
-## Approach
+```
+Vercel (frontend/)  →  Render Docker (FastAPI)  →  Supabase Postgres / MongoDB Atlas / Chroma
+                              ↓
+                    LangGraph (news, stock, research)
+```
 
-### Asynchronous Scraping
+Locally you can run the same API image with Docker Compose and the Vite app separately.
 
-1. **News Data**: Asynchronously scrapes news data for a predefined set of stocks at regular intervals, storing the information in MongoDB. The documents are synchronized with ChromaDB to enable LLMs to perform semantic searches, facilitating the retrieval of relevant information specific to a particular stock or company.
-2. **Financial Data**: Asynchronously scrapes financial data for selected stocks at regular intervals, storing the information in PostgreSQL.
+## Quick start (local)
 
-### LangGraph Workflows
+### 1. Backend
 
-#### News Data RAG Graph
-An Agentic RAG Graph designed to search news data for a stock either in the vector database (synced documents from MongoDB) or perform a web search if relevant documents are not found.
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # fill in credentials
+uvicorn rest_api.main:app --reload --host 0.0.0.0 --port 8001
+```
 
-![News RAG Graph](images/news-rag-graph.png)
+Or with Docker (API only):
 
-This graph comprises the following nodes:
+```bash
+docker compose up --build
+```
 
-- **Retrieve News from DB (`retrieve_news`)**: Utilizes LLMs, LangChain, and a Retriever Tool to perform semantic searches in the vector database for documents related to a specific stock topic.
-- **Grade Documents (`grade_documents`)**: Evaluates the quality of documents retrieved in the previous step, assigning a score to determine their relevance. A conditional edge decides whether to generate results or perform an additional web search if the documents are not pertinent.
-- **Web Search (`web_search`)**: Conducts a web search using TavilySearch tooling integrated with LangChain and LLM calls.
-- **Generate Results (`generate_results`)**: Produces results based on the user query and the documents retrieved in prior steps.
+### 2. Frontend
 
-#### Stock Data RAG Graph
+```bash
+cd frontend
+cp .env.example .env   # leave VITE_API_BASE_URL empty to use the Vite `/api` proxy
+npm install
+npm run dev
+```
 
-![News RAG Graph](images/stock-data-rag-graph.png)
+Open http://localhost:5173
 
-An Agentic RAG Graph that searches financial data for a stock in the SQL database (PostgreSQL).
+## Deploy
 
-This graph includes the following nodes:
+### Backend → Render (Docker, free tier)
 
-- **Generate SQL (`generate_sql`)**: Employs LLMs and LangChain to generate an SQL query based on user input.
-- **Execute SQL (`execute_sql`)**: Executes the SQL query generated in the previous step to fetch data from the database.
-- **Generate Results (`generate_results`)**: Utilizes LLMs to generate results according to the user query and the data retrieved in the preceding step.
+1. Push this repo to GitHub.
+2. In [Render](https://render.com): **New → Blueprint** and select the repo (`render.yaml`),  
+   or **New → Web Service** → connect repo → **Docker** runtime → root `Dockerfile`.
+3. Set environment variables from `.env.example` (at minimum Postgres, Mongo, OpenRouter, and API keys you use).
+4. Set `CORS_ORIGINS` to your Vercel URL, e.g. `https://your-app.vercel.app`  
+   (keep local origins too if you still develop against the hosted API).
+5. Keep `AUTO_PIPELINE_ENABLED=false` on free tier.
+6. After deploy, confirm `https://<your-service>.onrender.com/health` returns `{"status":"ok"}`.
 
-#### Stock Data Charts RAG Graph
+Notes:
 
-![News RAG Graph](images/stock-charts-rag-graph.png)
+- Free dynos **spin down** after idle; the first request can take ~30–60s.
+- Chroma data under `/app/chroma_db` is **ephemeral** on free tier (lost on redeploy/sleep). Re-run sync after wake if needed. Postgres/Mongo should be managed (Supabase / Atlas).
 
-An Agentic RAG Graph that retrieves financial data for a stock from the SQL database (PostgreSQL) and generates visual charts.
+### Frontend → Vercel
 
-This graph consists of the following nodes:
+1. In [Vercel](https://vercel.com): **Add New Project** → import the repo.
+2. Set **Root Directory** to `frontend`.
+3. Framework preset: Vite (or leave defaults; `vercel.json` sets build/output).
+4. Add env var:
+   - `VITE_API_BASE_URL` = `https://<your-service>.onrender.com` (no trailing slash)
+5. Deploy. Update Render `CORS_ORIGINS` if the Vercel URL differs from what you set earlier.
 
-- **Generate SQL (`generate_sql`)**: Uses LLMs and LangChain to create an SQL query based on user input.
-- **Execute SQL (`execute_sql`)**: Runs the SQL query generated earlier to fetch data from the database.
+## API endpoints
 
-## APIs
-For detailed API specifications, refer to the attached `openapi.json` file.
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | API info |
+| GET | `/health` | Health check (Render) |
+| GET | `/universe` | Holdings + watchlist tickers |
+| GET/POST/DELETE | `/watchlist` | Manage watchlist |
+| GET | `/holdings` | Current holdings snapshot |
+| GET | `/ratings` | Latest rating per ticker |
+| GET | `/ratings/{ticker}` | Rating history |
+| POST | `/analysis/run` | Trigger analysis |
+| GET/PUT | `/settings` | App settings |
+| GET | `/stock/{ticker}/chart` | Price chart data |
+| GET | `/news/{ticker}` | News RAG |
 
+## Environment variables
 
-### Price Stats (GET `/stock/{ticker}/price-stats`)
+See `.env.example` (API) and `frontend/.env.example` (Vite).
 
-Get stock price statistics for a specific ticker.
+| Variable | Where | Purpose |
+|----------|--------|---------|
+| `CORS_ORIGINS` | Render | Allowed browser origins (comma-separated) |
+| `ADMIN_KEY` | Render | Access key for login + API Bearer auth |
+| `VITE_API_BASE_URL` | Vercel | Render API origin for the SPA |
+| `PORT` | Render | Injected automatically |
+| `AUTO_PIPELINE_ENABLED` | Render | Prefer `false` on free tier |
+| `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | OpenRouter models |
 
-Args:
-    ticker (str): Stock ticker symbol.
-    operation (str): Operation to perform (e.g., 'highest', 'lowest', 'average').
-    price_type (str): Type of price (e.g., 'open', 'close', 'low', 'high').
-    duration (int): Number of days
+## Testing
 
-Returns:
-    dict: Stock data with the requested statistics.
-
-#### Parameters:
-- `ticker`: string - Stock ticker symbol
-- `operation`: string - Operation to perform: 'highest', 'lowest', 'average'
-- `price_type`: string - Price type: 'open', 'close', 'low', 'high'
-- `duration`: string - Duration (days): '1', '7', '14', '30'
-
-### Chart (GET `/stock/{ticker}/chart`)
-
-Get stock price statistics and return a histogram/chart for a specific ticker.
-
-Args:
-    ticker (str): Stock ticker symbol.
-    price_type (str): Type of price (e.g., 'open', 'close', 'low', 'high').
-    duration (int): Number of days
-
-Returns:
-    dict: Stock data with the requested statistics.
-
-#### Parameters:
-- `ticker`: string - Stock ticker symbol
-- `price_type`: string - Price type: 'open', 'close', 'low', 'high'
-- `duration`: string - Duration (days): '1', '7', '14', '30'
-
-### News By Topic (GET `/news/{ticker}`)
-
-Get news a specific ticker.
-
-Args:
-    ticker (str): Stock ticker symbol.
-    topic (str): Topic to fetch news for a specific stock.
-
-Returns:
-    dict: Relevant news for a speicific ticker.
-
-#### Parameters:
-- `ticker`: string - Stock ticker symbol
-- `topic`: string - Topic
-
-### Root (GET `/`)
-
-Root/home page of the application
-
-#### Parameters:
-No parameters
-
-
-## Class Diagrams
-
-![Class Diagram](images/classes_stock_proj.png)
-## Images
-
-For visual representations, refer to the images in the `images/` directory.
-
-## Testing Framework
-The project employs the pytest framework for automated testing. This ensures that all modules are thoroughly tested to maintain reliability and robustness. Key features of the testing setup include:
-
-Comprehensive Test Cases: Test cases are written for every module, ensuring complete coverage of the application.
-Ease of Use: Simply run the following command to execute all tests:
 ```bash
 pytest
 ```
-Test Reports: The framework generates detailed reports for each test run, highlighting successes and failures.
-This testing setup ensures that the application remains stable and functional as new features are added or existing features are updated.
 
-## Observability and Tracing
-To monitor the application's performance and debug LLM-related processes, the project integrates LangSmith tracing. This enables detailed tracing of all LLM calls, providing insights into the application's execution flow.
+## Design
 
-Key Features:
-LLM Call Tracing: Tracks all interactions with Large Language Models, including inputs, outputs, and execution times.
-Debugging Assistance: Helps in identifying bottlenecks or errors in LLM workflows.
-LangSmith Dashboard: Offers a user-friendly interface to visualize and analyze traces.
-How It Works:
-LangSmith tracing is seamlessly integrated into the application. All RAG workflows, including News RAG Graph, Stock Data RAG Graph, and Stock Data Charts RAG Graph, utilize LangSmith to provide actionable observability insights.
-
-
-## References
-
-- **LangGraph**: A library for building stateful, multi-actor applications with LLMs, facilitating the creation of agent and multi-agent workflows.
-- **LangChain Expression Language (LCEL)**: A declarative approach to composing chains, enabling seamless integration and optimization of complex workflows.
-
-This project exemplifies the integration of advanced AI workflows to provide insightful analyses of financial and news data, offering users a comprehensive tool for stock market evaluation.
+See `.impeccable.md` for UI design context (dark trading-desk aesthetic).

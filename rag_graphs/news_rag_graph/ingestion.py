@@ -1,9 +1,9 @@
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from db.mongo_db import MongoDBClient
+from config.llm_config import get_embeddings
 import os
 from typing import List
 from utils.logger import logger
@@ -14,7 +14,7 @@ load_dotenv()
 news_articles_retriever = Chroma(
     collection_name=os.getenv('VECTOR_DB_COLLECTION'),
     persist_directory=os.getenv("VECTOR_DB_DIRECTORY"),
-    embedding_function=OpenAIEmbeddings()
+    embedding_function=get_embeddings()
 ).as_retriever()
 
 class DocumentSyncManager:
@@ -57,7 +57,7 @@ class DocumentSyncManager:
         vectorstore = Chroma.from_documents(
             documents=doc_splits,
             collection_name=self.vector_db_collection,
-            embedding=OpenAIEmbeddings(),
+            embedding=get_embeddings(),
             persist_directory=self.vector_db_directory
         )
         logger.info("Documents stored in Chroma.")
