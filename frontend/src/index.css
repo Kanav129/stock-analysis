@@ -164,11 +164,12 @@ body {
 
 .terminal-panel__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
   border-bottom: 1px solid var(--gridline);
+  flex-wrap: wrap;
 }
 
 .terminal-panel__title {
@@ -190,8 +191,106 @@ body {
 .terminal-panel__actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-sm);
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+.chart-range {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--panel-radius);
+  background: var(--color-surface-2);
+  border: 1px solid var(--gridline);
+}
+
+.chart-range__btn {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: color 160ms ease-out, background-color 160ms ease-out;
+}
+
+.chart-range__btn:hover {
+  color: var(--color-text-primary);
+}
+
+.chart-range__btn[aria-pressed='true'] {
+  color: var(--color-text-primary);
+  background: var(--color-surface-3);
+}
+
+.chart-range__btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-range__btn {
+    transition: none;
+  }
+}
+
+.price-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.price-chart__delta {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.price-chart__delta--up {
+  color: var(--color-up);
+}
+
+.price-chart__delta--down {
+  color: var(--color-down);
+}
+
+.price-chart__canvas {
+  height: 280px;
+  width: 100%;
+  min-width: 0;
+}
+
+.price-chart__tooltip {
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--panel-radius);
+  border: 1px solid var(--gridline);
+  background: var(--color-surface-1);
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--color-surface-0) 55%, transparent);
+}
+
+.price-chart__tooltip-date {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.price-chart__tooltip-price {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-accent);
 }
 
 .terminal-panel__body {

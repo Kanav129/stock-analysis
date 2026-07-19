@@ -22,51 +22,90 @@ def _safe_float(v: Any, default: float | None = None) -> float | None:
 
 class QuotesService:
     def get_quotes(self, tickers: list[str], spark_days: int = 30) -> dict[str, dict[str, Any]]:
-        """Return latest/prior close, day change %, and sparkline series per ticker."""
+        """Latest price (any bar), prior daily close, and daily sparkline."""
         tickers = [t.upper() for t in tickers if t]
         if not tickers:
             return {}
 
         db = get_db_client()
-        rows, _ = db.fetch_query(
+
+        # Sparkline: one close per day (prefer 1d bars; fall back to last bar of day)
+        daily_rows, _ = db.fetch_query(
             """
-            SELECT ticker, date, close
-            FROM stock_data
-            WHERE ticker IN %s
-              AND close IS NOT NULL
-              AND date >= CURRENT_DATE - %s * INTERVAL '1 day'
-            ORDER BY ticker, date ASC
+            SELECT ticker, trade_date, close
+            FROM (
+                SELECT DISTINCT ON (ticker, date)
+                    ticker,
+                    date AS trade_date,
+                    close,
+                    CASE WHEN bar_interval = '1d' THEN 0 ELSE 1 END AS pref
+                FROM stock_data
+                WHERE ticker IN %s
+                  AND close IS NOT NULL
+                  AND date >= CURRENT_DATE - %s * INTERVAL '1 day'
+                ORDER BY ticker, date, pref ASC, bar_ts DESC
+            ) d
+            ORDER BY ticker, trade_date ASC
             """,
             (tuple(tickers), max(spark_days + 5, 40)),
         )
 
         by_ticker: dict[str, list[tuple[Any, float]]] = {t: [] for t in tickers}
-        for ticker, date, close in rows:
-            by_ticker.setdefault(ticker, []).append((date, float(close)))
+        for ticker, trade_date, close in daily_rows:
+            by_ticker.setdefault(ticker, []).append((trade_date, float(close)))
+
+        latest_rows, _ = db.fetch_query(
+            """
+            SELECT DISTINCT ON (ticker) ticker, close, bar_ts, bar_interval
+            FROM stock_data
+            WHERE ticker IN %s AND close IS NOT NULL
+            ORDER BY ticker, bar_ts DESC
+            """,
+            (tuple(tickers),),
+        )
+        latest_map = {
+            row[0]: {
+                "close": float(row[1]) if row[1] is not None else None,
+                "as_of": row[2].isoformat() if hasattr(row[2], "isoformat") else str(row[2]),
+                "interval": row[3],
+            }
+            for row in latest_rows
+        }
 
         result: dict[str, dict[str, Any]] = {}
         for ticker in tickers:
             series = by_ticker.get(ticker) or []
             spark = [c for _, c in series][-spark_days:]
-            latest = spark[-1] if spark else None
-            prior = spark[-2] if len(spark) >= 2 else None
+            prior_daily = spark[-2] if len(spark) >= 2 else (spark[-1] if spark else None)
+            latest_info = latest_map.get(ticker) or {}
+            latest = latest_info.get("close")
+            if latest is None and spark:
+                latest = spark[-1]
             change_pct = None
-            if latest is not None and prior is not None and prior != 0:
-                change_pct = round((latest - prior) / prior * 100, 2)
+            if latest is not None and prior_daily is not None and prior_daily != 0:
+                # Intraday change vs prior daily close when possible
+                change_pct = round((latest - prior_daily) / prior_daily * 100, 2)
+            elif len(spark) >= 2 and spark[-2] != 0:
+                change_pct = round((spark[-1] - spark[-2]) / spark[-2] * 100, 2)
+
             result[ticker] = {
                 "ticker": ticker,
                 "latest_close": latest,
-                "prior_close": prior,
+                "prior_close": prior_daily,
                 "change_pct": change_pct,
                 "spark": spark,
-                "as_of": series[-1][0].isoformat() if series and hasattr(series[-1][0], "isoformat") else (
-                    str(series[-1][0]) if series else None
+                "as_of": latest_info.get("as_of")
+                or (
+                    series[-1][0].isoformat()
+                    if series and hasattr(series[-1][0], "isoformat")
+                    else (str(series[-1][0]) if series else None)
                 ),
+                "bar_interval": latest_info.get("interval"),
             }
         return result
 
     def get_technicals(self, ticker: str) -> dict[str, Any]:
-        """Compute RSI, MACD, MAs, 52w range, ATR from local stock_data."""
+        """Compute RSI, MACD, MAs, 52w range, ATR from daily bars only."""
         ticker = ticker.upper()
         db = get_db_client()
         rows, _ = db.fetch_query(
@@ -74,11 +113,25 @@ class QuotesService:
             SELECT date, open, high, low, close, volume
             FROM stock_data
             WHERE ticker = %s
+              AND bar_interval = '1d'
               AND date >= CURRENT_DATE - INTERVAL '400 days'
             ORDER BY date ASC
             """,
             (ticker,),
         )
+        if not rows:
+            # Fallback: synthesize daily from any bars
+            rows, _ = db.fetch_query(
+                """
+                SELECT DISTINCT ON (date)
+                    date, open, high, low, close, volume
+                FROM stock_data
+                WHERE ticker = %s
+                  AND date >= CURRENT_DATE - INTERVAL '400 days'
+                ORDER BY date ASC, bar_ts DESC
+                """,
+                (ticker,),
+            )
         if not rows:
             return {"ticker": ticker, "available": False}
 
@@ -113,7 +166,9 @@ class QuotesService:
             "low_52w": low_52w,
             "atr_14": atr["atr"],
             "atr_pct": atr["atr_pct"],
-            "as_of": df["date"].iloc[-1].isoformat() if hasattr(df["date"].iloc[-1], "isoformat") else str(df["date"].iloc[-1]),
+            "as_of": df["date"].iloc[-1].isoformat()
+            if hasattr(df["date"].iloc[-1], "isoformat")
+            else str(df["date"].iloc[-1]),
         }
 
     @staticmethod
@@ -150,14 +205,22 @@ class QuotesService:
         }
 
     @staticmethod
-    def _calc_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> dict[str, float | None]:
+    def _calc_atr(
+        high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
+    ) -> dict[str, float | None]:
         if len(close) < period + 1:
             return {"atr": None, "atr_pct": None}
-        tr = pd.concat([
-            high - low,
-            (high - close.shift()).abs(),
-            (low - close.shift()).abs(),
-        ], axis=1).max(axis=1)
+        tr = pd.concat(
+            [
+                high - low,
+                (high - close.shift()).abs(),
+                (low - close.shift()).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
         atr = float(tr.rolling(period).mean().iloc[-1])
         price = float(close.iloc[-1]) if len(close) > 0 else 1.0
-        return {"atr": round(atr, 4), "atr_pct": round(atr / price * 100, 2) if price > 0 else 0.0}
+        return {
+            "atr": round(atr, 4),
+            "atr_pct": round(atr / price * 100, 2) if price > 0 else 0.0,
+        }

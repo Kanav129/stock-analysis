@@ -51,10 +51,10 @@ class HoldingsService:
         db = get_db_client()
         rows, _ = db.fetch_query(
             """
-            SELECT DISTINCT ON (ticker) ticker, close, date
+            SELECT DISTINCT ON (ticker) ticker, close, bar_ts
             FROM stock_data
             WHERE ticker IN %s AND close IS NOT NULL
-            ORDER BY ticker, date DESC
+            ORDER BY ticker, bar_ts DESC
             """,
             (tuple(tickers),),
         )

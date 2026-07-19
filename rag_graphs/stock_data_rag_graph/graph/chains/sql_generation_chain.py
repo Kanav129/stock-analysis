@@ -9,7 +9,10 @@ llm = get_chat_llm(temperature=0)
 
 system = """
 You are an AI assistant that converts natural language queries into SQL queries.
-The table name is stock_data and the schema is id(integer), ticker(character),date(date) ,open(double) ,high(double) ,low(double) ,close(double) ,volume(bigint),
+The table name is stock_data and the schema is:
+id(integer), ticker(varchar), date(date), bar_ts(timestamptz), bar_interval(varchar: '1d' or '5m'),
+open(double), high(double), low(double), close(double), volume(bigint).
+Unique on (ticker, bar_ts, bar_interval). Prefer bar_interval='1d' for multi-day stats.
 Convert the user question into a valid SQL query.
 """
 

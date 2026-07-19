@@ -9,6 +9,7 @@ Agentic RAG workflows for news and financial data, with a **Personal Stock Analy
 - **Stock detail**: Price charts, rating history, AI reasoning and supporting headlines
 - **Research reports**: Multi-section core reports (technicals, fundamentals, news, sentiment, decision)
 - **Analysis pipeline**: Manual or scheduled sync → scrape → vector sync → LLM rating
+- **Price storage**: Daily closes retained long-term; last 30 days also keep 5‑minute bars (upsert, no duplicates)
 - **Existing RAG APIs**: News RAG, stock price stats, chart data
 
 ## Architecture

@@ -1,23 +1,32 @@
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Date, Float, BigInteger
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.ext.declarative import declarative_base
-import os
 
 load_dotenv()
 
-# Define the base class for declarative models
 Base = declarative_base()
 
 
-# Define the StockData model
 class StockData(Base):
-    __tablename__ = "stock_data"  # Replace with a static name
-
-    # __tablename__ = os.getenv('STOCK_TABLE')
+    __tablename__ = "stock_data"
+    __table_args__ = (
+        UniqueConstraint("ticker", "bar_ts", "bar_interval", name="uq_stock_data_ticker_ts_interval"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     ticker = Column(String(10), nullable=False)
     date = Column(Date, nullable=False)
+    bar_ts = Column(DateTime(timezone=True), nullable=False)
+    bar_interval = Column(String(8), nullable=False, default="1d")  # '1d' | '5m'
     open = Column(Float)
     high = Column(Float)
     low = Column(Float)

@@ -61,10 +61,10 @@ class WatchlistService:
         db = get_db_client()
         rows, cols = db.fetch_query(
             """
-            SELECT DISTINCT ON (ticker) ticker, close, date
+            SELECT DISTINCT ON (ticker) ticker, close, bar_ts AS date
             FROM stock_data
             WHERE ticker = ANY(%s)
-            ORDER BY ticker, date DESC
+            ORDER BY ticker, bar_ts DESC
             """,
             (tickers,),
         )

@@ -13,6 +13,11 @@ import { SectionAccordion } from '../components/SectionAccordion';
 import { DecisionBrief } from '../components/DecisionBrief';
 import { DecisionSnapshot } from '../components/DecisionSnapshot';
 import { Skeleton } from '../components/Skeleton';
+import {
+  ChartRangeToggle,
+  chartRangeHint,
+  type ChartRangeId,
+} from '../components/ChartRangeToggle';
 
 const PriceChart = lazy(() =>
   import('../components/PriceChart').then((m) => ({ default: m.PriceChart })),
@@ -112,6 +117,8 @@ export function StockDetailPage() {
     }
   }, [location.hash, location.pathname, t]);
 
+  const [chartRange, setChartRange] = useState<ChartRangeId>('90');
+
   const quoteQ = useQuery({
     queryKey: ['quotes', t],
     queryFn: () => api.getQuotes([t]),
@@ -120,8 +127,8 @@ export function StockDetailPage() {
     staleTime: 30_000,
   });
   const chartQ = useQuery({
-    queryKey: ['chart', t],
-    queryFn: () => api.getChart(t, 'close', '90'),
+    queryKey: ['chart', t, chartRange],
+    queryFn: () => api.getChart(t, 'close', chartRange),
     enabled: !!t,
     staleTime: 60_000,
   });
@@ -353,12 +360,22 @@ export function StockDetailPage() {
       <div className="terminal-grid">
         {/* Main column */}
         <div className="col-span-12 flex flex-col gap-3 lg:col-span-8">
-          <Panel title="Price" subtitle="90-day close">
+          <Panel
+            title="Price"
+            subtitle={chartRangeHint(chartRange)}
+            actions={
+              <ChartRangeToggle value={chartRange} onChange={setChartRange} />
+            }
+          >
             {chartQ.isLoading ? (
               <p className="text-xs text-[var(--color-text-muted)]">Loading chart…</p>
+            ) : chartQ.isError ? (
+              <p className="text-xs text-[var(--color-down)]">
+                {chartQ.error instanceof Error ? chartQ.error.message : 'Failed to load chart'}
+              </p>
             ) : (
               <Suspense fallback={<ChartFallback />}>
-                <PriceChart data={chartQ.data?.result ?? []} />
+                <PriceChart data={chartQ.data?.result ?? []} range={chartRange} />
               </Suspense>
             )}
           </Panel>
