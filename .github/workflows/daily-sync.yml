@@ -8,7 +8,8 @@ name: Daily sync
 
 on:
   schedule:
-    - cron: "0 13 * * *"   # 13:00 UTC daily
+    # 09:00 HKT daily (HKT = UTC+8)
+    - cron: "0 1 * * *"
   workflow_dispatch:
 
 jobs:

@@ -32,9 +32,10 @@ _DEFAULT_CORS = "http://localhost:5173,http://127.0.0.1:5173"
 
 
 def _cors_origins() -> list[str]:
-    raw = os.getenv("CORS_ORIGINS", _DEFAULT_CORS)
-    origins = [o.strip() for o in raw.split(",") if o.strip()]
-    return origins or _DEFAULT_CORS.split(",")
+    # Prefer CORS_ORIGINS; accept common typo CORS_ORIGIN
+    raw = os.getenv("CORS_ORIGINS") or os.getenv("CORS_ORIGIN") or _DEFAULT_CORS
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    return origins or [o.strip() for o in _DEFAULT_CORS.split(",")]
 
 
 app = FastAPI(title="Personal Stock Analysis Dashboard")

@@ -8,9 +8,7 @@ import secrets
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 load_dotenv()
 
@@ -42,6 +40,9 @@ def key_matches(provided: str | None) -> bool:
         return True
     if not provided:
         return False
+    # compare_digest requires equal-length strings
+    if len(provided) != len(expected):
+        return False
     return secrets.compare_digest(provided, expected)
 
 
@@ -63,24 +64,51 @@ def login(body: LoginBody):
     return {"ok": True, "auth_required": True}
 
 
-class AdminKeyMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next) -> Response:
+class AdminKeyMiddleware:
+    """Pure ASGI middleware — avoids BaseHTTPMiddleware eating POST bodies."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         if not auth_required():
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        if request.method == "OPTIONS":
-            return await call_next(request)
+        method = scope.get("method", "GET")
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
 
-        path = request.url.path.rstrip("/") or "/"
+        path = scope.get("path", "").rstrip("/") or "/"
         if path in PUBLIC_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        auth_header = request.headers.get("Authorization", "")
+        headers = {
+            k.decode("latin-1").lower(): v.decode("latin-1")
+            for k, v in scope.get("headers", [])
+        }
+        auth_header = headers.get("authorization", "")
         token = ""
         if auth_header.lower().startswith("bearer "):
             token = auth_header[7:].strip()
 
         if key_matches(token):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        body = b'{"detail":"Unauthorized"}'
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("latin-1")),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})

@@ -24,14 +24,35 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       window.location.assign('/login');
     }
     const err = await res.json().catch(() => ({ detail: 'Unauthorized' }));
-    throw new Error(err.detail || 'Unauthorized');
+    throw new Error(formatApiError(err, 'Unauthorized'));
   }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || 'Request failed');
+    throw new Error(formatApiError(err, `${res.status} ${res.statusText}`));
   }
   return res.json();
+}
+
+function formatApiError(err: { detail?: unknown }, fallback: string): string {
+  const detail = err?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object' && 'msg' in item) {
+        const loc = Array.isArray((item as { loc?: unknown }).loc)
+          ? (item as { loc: unknown[] }).loc.join('.')
+          : '';
+        const msg = String((item as { msg: unknown }).msg);
+        return loc ? `${loc}: ${msg}` : msg;
+      }
+      return JSON.stringify(item);
+    });
+    return parts.filter(Boolean).join('; ') || fallback;
+  }
+  if (detail && typeof detail === 'object') return JSON.stringify(detail);
+  return fallback;
 }
 
 export const api = {
