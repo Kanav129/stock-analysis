@@ -46,6 +46,24 @@ def key_matches(provided: str | None) -> bool:
     return secrets.compare_digest(provided, expected)
 
 
+def _normalize_path(path: str) -> str:
+    # Collapse duplicate slashes and trailing slash
+    cleaned = "/" + "/".join(p for p in path.split("/") if p)
+    return cleaned or "/"
+
+
+def _is_public_path(path: str) -> bool:
+    normalized = _normalize_path(path)
+    if normalized in PUBLIC_PATHS:
+        return True
+    if normalized.startswith("/docs") or normalized.startswith("/redoc"):
+        return True
+    # Tolerate accidental /api prefix from mis-set API_BASE_URL
+    if normalized.startswith("/api/"):
+        return _is_public_path(normalized[4:])
+    return False
+
+
 class LoginBody(BaseModel):
     key: str = Field(..., min_length=1)
 
@@ -84,8 +102,8 @@ class AdminKeyMiddleware:
             await self.app(scope, receive, send)
             return
 
-        path = scope.get("path", "").rstrip("/") or "/"
-        if path in PUBLIC_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
+        path = scope.get("path", "") or "/"
+        if _is_public_path(path):
             await self.app(scope, receive, send)
             return
 
