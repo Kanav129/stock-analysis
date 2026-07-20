@@ -15,7 +15,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Wake dyno
         env:
@@ -39,7 +39,7 @@ jobs:
           echo "Check API_BASE_URL secret is your Render URL (not Vercel), e.g. https://xxx.onrender.com" >&2
           exit 1
 
-      - name: Run sync
+      - name: Start sync
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
@@ -47,8 +47,37 @@ jobs:
           set -euo pipefail
           BASE="${API_BASE_URL%/}"
           BASE="${BASE%/api}"
-          curl -fsS --max-time 1800 \
+          curl -fsS --max-time 120 \
             -X POST "${BASE}/cron/sync" \
             -H "Authorization: Bearer ${ADMIN_KEY}" \
             -H "Content-Type: application/json" \
             -d '{}'
+
+      - name: Wait until sync finishes
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          BASE="${API_BASE_URL%/}"
+          BASE="${BASE%/api}"
+          # Poll keeps the free dyno awake while the background job runs.
+          for i in $(seq 1 120); do
+            body=$(curl -fsS --max-time 60 \
+              "${BASE}/sync/status" \
+              -H "Authorization: Bearer ${ADMIN_KEY}")
+            echo "$body"
+            running=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running', False))")
+            status=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+            if [ "$running" != "True" ] && [ "$status" != "running" ]; then
+              if [ "$status" = "error" ]; then
+                echo "Sync failed" >&2
+                exit 1
+              fi
+              echo "Sync finished with status=${status}"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "Timed out waiting for sync" >&2
+          exit 1

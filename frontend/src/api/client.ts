@@ -80,7 +80,17 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ tickers: tickers ?? null }),
   }),
-  getSyncStatus: () => request<{ last_sync: string | null; running: boolean }>('/sync/status'),
+  getSyncStatus: () =>
+    request<{
+      last_sync: string | null;
+      running: boolean;
+      status?: string;
+      message?: string | null;
+      tickers?: string[];
+      errors?: { stage: string; error: string }[];
+      started_at?: string | null;
+      finished_at?: string | null;
+    }>('/sync/status'),
   getAnalysisStatus: () => request<import('./types').AnalysisProgress>('/analysis/status'),
   getWatchlist: () => request<{ items: import('./types').WatchlistItem[] }>('/watchlist'),
   addWatchlist: (ticker: string, notes?: string) => request<import('./types').WatchlistItem>('/watchlist', {

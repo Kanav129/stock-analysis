@@ -14,16 +14,16 @@ router = APIRouter(prefix="/cron", tags=["Cron"])
 
 @router.post("/sync")
 async def cron_sync():
-    """Scrape prices + news for the universe (daily job)."""
+    """Start daily price+news sync in the background; poll GET /sync/status."""
     try:
-        return await sync_service.sync_data()
+        return sync_service.start()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/analyze")
 def cron_analyze():
-    """Start weekly core-report analysis in the background; poll /analysis/status."""
+    """Start weekly core-report analysis in the background; poll GET /analysis/status."""
     try:
         return analysis_service.start()
     except Exception as exc:

@@ -14,17 +14,14 @@ class SyncDataRequest(BaseModel):
 
 @router.post("/sync/data")
 async def sync_data(body: Optional[SyncDataRequest] = None):
+    """Start sync in the background; poll GET /sync/status until running=false."""
     tickers = body.tickers if body else None
     try:
-        return await sync_service.sync_data(tickers)
+        return sync_service.start(tickers)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/sync/status")
 def sync_status():
-    last = sync_service.last_sync
-    return {
-        "last_sync": last.isoformat() if last else None,
-        "running": sync_service.is_running,
-    }
+    return sync_service.get_status()

@@ -16,6 +16,17 @@ class SyncService:
         self.universe = UniverseService()
         self._last_sync: Optional[datetime] = None
         self._running = False
+        self._task: Optional[asyncio.Task] = None
+        self._status: dict[str, Any] = {
+            "status": "idle",
+            "running": False,
+            "message": None,
+            "tickers": [],
+            "errors": [],
+            "started_at": None,
+            "finished_at": None,
+            "last_sync": None,
+        }
 
     @property
     def last_sync(self) -> Optional[datetime]:
@@ -25,12 +36,24 @@ class SyncService:
     def is_running(self) -> bool:
         return self._running
 
-    async def sync_data(self, tickers: Optional[list[str]] = None) -> dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
+        return {
+            **self._status,
+            "running": self._running,
+            "last_sync": self._last_sync.isoformat() if self._last_sync else self._status.get("last_sync"),
+        }
+
+    def _update(self, **kwargs: Any) -> None:
+        self._status.update(kwargs)
+        self._status["running"] = self._running
+
+    def start(self, tickers: Optional[list[str]] = None) -> dict[str, Any]:
+        """Kick off sync in the background; poll GET /sync/status until done."""
         if self._running:
             return {
                 "started": False,
                 "message": "A sync is already in progress.",
-                "last_sync": self._last_sync.isoformat() if self._last_sync else None,
+                **self.get_status(),
             }
 
         target = [t.upper() for t in (tickers or self.universe.get_tickers())]
@@ -39,50 +62,96 @@ class SyncService:
                 "started": False,
                 "message": "No tickers to sync. Add tickers to your watchlist first.",
                 "tickers": [],
+                **self.get_status(),
             }
 
         self._running = True
-        errors: list[dict[str, str]] = []
+        self._update(
+            status="running",
+            message=f"Syncing news & prices for {len(target)} ticker(s)…",
+            tickers=target,
+            errors=[],
+            started_at=datetime.utcnow().isoformat(),
+            finished_at=None,
+        )
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._running = False
+            self._update(status="error", message="No event loop available to start sync")
+            return {"started": False, "message": "No event loop available", **self.get_status()}
+
+        self._task = loop.create_task(self._run_worker(target))
+        logger.info(f"Background sync started for {len(target)} tickers")
+        return {
+            "started": True,
+            "message": f"Sync started for {len(target)} ticker(s). Poll /sync/status for progress.",
+            **self.get_status(),
+        }
+
+    async def sync_data(self, tickers: Optional[list[str]] = None) -> dict[str, Any]:
+        """Start sync and wait until it finishes (used by in-process schedulers)."""
+        result = self.start(tickers)
+        if not result.get("started") and not self._running:
+            return result
+        while self._running:
+            await asyncio.sleep(1)
+        status = self.get_status()
+        return {
+            "started": status.get("status") == "completed",
+            "message": status.get("message"),
+            "tickers": status.get("tickers") or [],
+            "last_sync": status.get("last_sync"),
+            "errors": status.get("errors") or [],
+            **status,
+        }
+
+    async def _run_worker(self, target: list[str]) -> None:
+        errors: list[dict[str, str]] = []
+        try:
+            loop = asyncio.get_running_loop()
             stock_scraper = StockScraperFactory().create_scraper()
             news_scraper = NewsScraperFactory().create_scraper(
                 collection_name=os.getenv("COLLECTION_NAME"),
                 scrape_num_articles=int(os.getenv("SCRAPE_NUM_ARTICLES", 5)),
             )
 
-            logger.info(f"Manual data sync starting for {len(target)} tickers: {target}")
+            logger.info(f"Data sync running for {len(target)} tickers: {target}")
+            self._update(message=f"Scraping news & prices ({len(target)} tickers)…")
 
             await asyncio.gather(
                 loop.run_in_executor(None, news_scraper.scrape_all_tickers, target),
                 loop.run_in_executor(None, stock_scraper.scrape_all_tickers, target),
             )
 
+            self._update(message="Syncing news vectors…")
             try:
-                DocumentSyncManager().sync_documents()
+                await loop.run_in_executor(None, DocumentSyncManager().sync_documents)
             except Exception as exc:
                 logger.error(f"Chroma sync failed: {exc}")
                 errors.append({"stage": "chroma_sync", "error": str(exc)})
 
             self._last_sync = datetime.utcnow()
-            return {
-                "started": True,
-                "message": f"Synced news and price data for {len(target)} ticker(s).",
-                "tickers": target,
-                "last_sync": self._last_sync.isoformat(),
-                "errors": errors,
-            }
+            self._update(
+                status="completed",
+                message=f"Synced news and price data for {len(target)} ticker(s).",
+                errors=errors,
+                finished_at=datetime.utcnow().isoformat(),
+                last_sync=self._last_sync.isoformat(),
+            )
+            logger.info(f"Background sync completed for {len(target)} tickers")
         except Exception as exc:
-            logger.error(f"Manual data sync failed: {exc}")
-            return {
-                "started": False,
-                "message": str(exc),
-                "tickers": target,
-                "errors": [{"stage": "sync", "error": str(exc)}],
-            }
+            logger.error(f"Background sync failed: {exc}")
+            self._update(
+                status="error",
+                message=str(exc),
+                errors=[{"stage": "sync", "error": str(exc)}],
+                finished_at=datetime.utcnow().isoformat(),
+            )
         finally:
             self._running = False
+            self._status["running"] = False
 
 
 sync_service = SyncService()
