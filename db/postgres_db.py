@@ -1,12 +1,21 @@
 import os
 import threading
+from contextlib import contextmanager
+from typing import Iterator, Optional
 
-import psycopg2
 from psycopg2 import OperationalError, sql
+from psycopg2.pool import ThreadedConnectionPool
 from utils.logger import logger
 
 
 class PostgresDBClient:
+    """Thread-safe Postgres client backed by a small connection pool.
+
+    Sync scrapers used to serialize the whole API behind one locked connection;
+    desk reads hung for minutes while prices/news wrote. Pooling lets reads
+    proceed on other connections while a scraper holds one.
+    """
+
     _instance = None  # Singleton instance
 
     def __new__(cls, *args, **kwargs):
@@ -22,62 +31,109 @@ class PostgresDBClient:
             self.password = password
             self.port = port
             self.sslmode = sslmode or os.getenv("POSTGRES_SSLMODE")
+            self._pool: Optional[ThreadedConnectionPool] = None
+            self._pool_lock = threading.Lock()
+            # Legacy attribute used by migration scripts via connect()/close()
             self.connection = None
-            self._lock = threading.RLock()
             self._initialized = True
 
-    def connect(self):
-        """Establish a database connection."""
-        if not self.connection or self.connection.closed:
+    def _connect_kwargs(self) -> dict:
+        timeout_ms = os.getenv("POSTGRES_STATEMENT_TIMEOUT", "120000")
+        kwargs = {
+            "host": self.host,
+            "database": self.database,
+            "user": self.user,
+            "password": self.password,
+            "port": self.port,
+            "connect_timeout": int(os.getenv("POSTGRES_CONNECT_TIMEOUT", "30")),
+            "options": f"-c statement_timeout={timeout_ms}",
+        }
+        if self.sslmode:
+            kwargs["sslmode"] = self.sslmode
+        return kwargs
+
+    def _ensure_pool(self) -> ThreadedConnectionPool:
+        with self._pool_lock:
+            if self._pool is not None and not self._pool.closed:
+                return self._pool
+            minconn = max(1, int(os.getenv("POSTGRES_POOL_MIN", "2")))
+            maxconn = max(minconn, int(os.getenv("POSTGRES_POOL_MAX", "8")))
+            self._pool = ThreadedConnectionPool(minconn, maxconn, **self._connect_kwargs())
+            logger.info(f"PostgreSQL pool ready (min={minconn}, max={maxconn}).")
+            return self._pool
+
+    def _putconn(self, conn, *, close: bool = False) -> None:
+        pool = self._pool
+        if pool is None:
             try:
-                connect_kwargs = {
-                    "host": self.host,
-                    "database": self.database,
-                    "user": self.user,
-                    "password": self.password,
-                    "port": self.port,
-                    "connect_timeout": int(os.getenv("POSTGRES_CONNECT_TIMEOUT", "30")),
-                }
-                if self.sslmode:
-                    connect_kwargs["sslmode"] = self.sslmode
-                self.connection = psycopg2.connect(**connect_kwargs)
-                # Bound stuck queries so scrapers cannot hang a free dyno forever.
-                self.connection.set_session(autocommit=False)
-                timeout_ms = os.getenv("POSTGRES_STATEMENT_TIMEOUT", "120000")
-                try:
-                    with self.connection.cursor() as cursor:
-                        cursor.execute("SET statement_timeout = %s", (timeout_ms,))
-                    self.connection.commit()
-                except Exception as exc:
-                    logger.warning(f"Could not set statement_timeout={timeout_ms}: {exc}")
-                    if self.connection:
-                        self.connection.rollback()
-                logger.info("PostgreSQL connection established.")
-            except OperationalError as e:
-                logger.error(f"Error connecting to PostgreSQL: {e}")
-                raise
+                conn.close()
+            except Exception:
+                pass
+            return
+        try:
+            pool.putconn(conn, close=close)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    @contextmanager
+    def checkout(self) -> Iterator:
+        """Borrow a connection from the pool for the duration of the block."""
+        pool = self._ensure_pool()
+        conn = pool.getconn()
+        if conn.closed:
+            self._putconn(conn, close=True)
+            conn = pool.getconn()
+        discard = False
+        try:
+            yield conn
+        except OperationalError:
+            discard = True
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            self._putconn(conn, close=discard)
+
+    def connect(self):
+        """Borrow one connection onto self.connection for migration scripts."""
+        if self.connection and not getattr(self.connection, "closed", True):
+            return
+        pool = self._ensure_pool()
+        self.connection = pool.getconn()
+        logger.info("PostgreSQL connection established.")
 
     def close(self):
-        """Close the database connection."""
-        with self._lock:
-            if self.connection:
-                self.connection.close()
+        """Return the migration connection (if any) and close the pool."""
+        with self._pool_lock:
+            if self.connection is not None:
+                self._putconn(self.connection)
                 self.connection = None
-                logger.info("PostgreSQL connection closed.")
+            if self._pool is not None and not self._pool.closed:
+                self._pool.closeall()
+                self._pool = None
+                logger.info("PostgreSQL connection pool closed.")
 
     def execute_query(self, query, params=None):
         """Execute a query (INSERT, UPDATE, DELETE)."""
-        with self._lock:
+        with self.checkout() as conn:
             try:
-                self.connect()
-                cursor = self.connection.cursor()
+                cursor = conn.cursor()
                 cursor.execute(query, params)
-                self.connection.commit()
+                conn.commit()
                 cursor.close()
             except Exception as e:
                 logger.error(f"Error executing query: {e}")
-                if self.connection:
-                    self.connection.rollback()
                 raise
 
     def execute_many(self, query, params_seq):
@@ -85,30 +141,27 @@ class PostgresDBClient:
         rows = list(params_seq or [])
         if not rows:
             return 0
-        with self._lock:
+        with self.checkout() as conn:
             try:
-                self.connect()
-                cursor = self.connection.cursor()
+                cursor = conn.cursor()
                 cursor.executemany(query, rows)
-                self.connection.commit()
+                conn.commit()
                 cursor.close()
                 return len(rows)
             except Exception as e:
                 logger.error(f"Error executing batch query: {e}")
-                if self.connection:
-                    self.connection.rollback()
                 raise
 
     def fetch_query(self, query, params=None):
         """Execute a SELECT query and fetch results."""
-        with self._lock:
+        with self.checkout() as conn:
             try:
-                self.connect()
-                cursor = self.connection.cursor()
+                cursor = conn.cursor()
                 cursor.execute(query, params)
                 results = cursor.fetchall()
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
                 cursor.close()
+                conn.commit()
                 return results, columns
             except Exception as e:
                 logger.error(f"Error fetching data: {e}")

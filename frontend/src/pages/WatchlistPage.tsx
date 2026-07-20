@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { SyncDataButton } from '../components/SyncDataButton';
+import { SyncProgressTracker } from '../components/SyncProgressTracker';
 import { WatchlistList } from '../components/WatchlistList';
 
 export function WatchlistPage() {
@@ -33,6 +34,8 @@ export function WatchlistPage() {
         </div>
         <SyncDataButton />
       </div>
+
+      <SyncProgressTracker />
 
       <form
         className="flex flex-wrap gap-3 rounded-lg bg-[var(--color-surface-1)] p-6"

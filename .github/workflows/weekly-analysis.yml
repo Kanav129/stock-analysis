@@ -8,8 +8,8 @@ name: Weekly analysis
 
 on:
   schedule:
-    # Saturday 09:30 HKT (HKT = UTC+8) → 01:30 UTC Saturday
-    - cron: "30 1 * * 6"
+    # Saturday 10:00 HKT (HKT = UTC+8) → 02:00 UTC Saturday
+    - cron: "0 2 * * 6"
   workflow_dispatch:
 
 jobs:

@@ -77,7 +77,7 @@ Workflows in `.github/workflows/`:
 | Workflow | When (HKT) | Cron (UTC) | Endpoint |
 |----------|------------|------------|----------|
 | `daily-sync.yml` | Every day 09:00 | `0 1 * * *` | `POST /cron/sync` |
-| `weekly-analysis.yml` | Saturdays 09:30 | `30 1 * * 6` | `POST /cron/analyze` |
+| `weekly-analysis.yml` | Saturdays 10:00 | `0 2 * * 6` | `POST /cron/analyze` |
 
 After the API is live, add these **GitHub repo secrets** (Settings → Secrets → Actions):
 

@@ -6,40 +6,61 @@ import { PortfolioSummaryCard } from '../components/PortfolioSummary';
 import { HoldingsTable } from '../components/HoldingsTable';
 import { RunAnalysisButton } from '../components/RunAnalysisButton';
 import { SyncDataButton } from '../components/SyncDataButton';
+import { SyncProgressTracker } from '../components/SyncProgressTracker';
 import { AnalysisProgressTracker } from '../components/AnalysisProgressTracker';
 import { Panel } from '../components/Panel';
 import { HeatTile } from '../components/HeatTile';
 import { DeltaValue } from '../components/DeltaValue';
 import { Sparkline } from '../components/Sparkline';
 import { RatingBadge } from '../components/RatingBadge';
-import { DeskSkeleton, Skeleton } from '../components/Skeleton';
-import type { Rating } from '../api/types';
+import { Skeleton } from '../components/Skeleton';
+import type { Rating, SyncProgress } from '../api/types';
 
 const MARKET_TICKERS = ['SPY', 'QQQ', 'IWM', 'DIA'];
+
+/** Keep last successful payload visible while a slow refetch waits on the API. */
+function keepPrevious<T>(previousData: T | undefined) {
+  return previousData;
+}
 
 export function DashboardPage() {
   const qc = useQueryClient();
 
-  // Critical path — paint desk as soon as holdings + ratings arrive
+  // Lightweight — in-memory on the API; safe to poll even during sync
+  const syncQ = useQuery({
+    queryKey: ['sync-status'],
+    queryFn: api.getSyncStatus,
+    refetchInterval: (q) => {
+      const d = q.state.data as SyncProgress | undefined;
+      return d?.running || d?.status === 'running' ? 1500 : 30_000;
+    },
+    staleTime: 1_000,
+  });
+  const syncing = Boolean(syncQ.data?.running) || syncQ.data?.status === 'running';
+
+  // Critical path — paint desk shell immediately; sections skeleton independently.
+  // During sync, pause heavy quote refetches so we don't pile onto a busy DB.
   const holdingsQ = useQuery({
     queryKey: ['holdings'],
     queryFn: api.getHoldings,
-    refetchInterval: 60_000,
+    refetchInterval: syncing ? false : 60_000,
     staleTime: 30_000,
+    placeholderData: keepPrevious,
   });
   const ratingsQ = useQuery({
     queryKey: ['ratings'],
     queryFn: api.getRatings,
-    refetchInterval: 60_000,
+    refetchInterval: syncing ? false : 60_000,
     staleTime: 30_000,
+    placeholderData: keepPrevious,
   });
   const watchlistQ = useQuery({
     queryKey: ['watchlist'],
     queryFn: api.getWatchlist,
     staleTime: 60_000,
+    placeholderData: keepPrevious,
   });
 
-  // Non-blocking status (don't gate first paint)
   const analysisQ = useQuery({
     queryKey: ['analysis-status'],
     queryFn: api.getAnalysisStatus,
@@ -58,19 +79,18 @@ export function DashboardPage() {
     wasRunning.current = running;
   }, [analysisQ.data?.running, qc]);
 
-  // Quotes for market + holdings + watchlist only (skip full universe — was delaying first paint)
   const quoteTickers = useMemo(() => {
     const fromHoldings = (holdingsQ.data?.holdings ?? []).map((h) => h.ticker);
     const fromWatch = (watchlistQ.data?.items ?? []).map((i) => i.ticker);
     return [...new Set([...MARKET_TICKERS, ...fromHoldings, ...fromWatch])];
   }, [holdingsQ.data, watchlistQ.data]);
 
-  // Market strip can load immediately with just index tickers
   const marketQuotesQ = useQuery({
     queryKey: ['quotes', 'market', MARKET_TICKERS.join(',')],
     queryFn: () => api.getQuotes(MARKET_TICKERS, 30),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: syncing ? false : 60_000,
+    placeholderData: keepPrevious,
   });
 
   const deskQuotesQ = useQuery({
@@ -78,7 +98,8 @@ export function DashboardPage() {
     queryFn: () => api.getQuotes(quoteTickers, 30),
     enabled: quoteTickers.length > MARKET_TICKERS.length,
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: syncing ? false : 60_000,
+    placeholderData: keepPrevious,
   });
 
   const quotes = useMemo(
@@ -105,11 +126,8 @@ export function DashboardPage() {
     return [...new Set([...holdingsTickers, ...wl])].slice(0, 24);
   }, [watchlistQ.data, holdingsTickers]);
 
-  const bootLoading = holdingsQ.isLoading && ratingsQ.isLoading && !holdingsQ.data && !ratingsQ.data;
-
-  if (bootLoading) {
-    return <DeskSkeleton />;
-  }
+  const holdingsPending = holdingsQ.isLoading && !holdingsQ.data;
+  const ratingsPending = ratingsQ.isLoading && !ratingsQ.data;
 
   return (
     <div className="flex flex-col gap-3 animate-fade-up">
@@ -130,6 +148,7 @@ export function DashboardPage() {
         </div>
       </div>
 
+      <SyncProgressTracker />
       <AnalysisProgressTracker />
 
       <Panel title="Market overview" dense>
@@ -161,16 +180,24 @@ export function DashboardPage() {
         </div>
       </Panel>
 
-      <PortfolioSummaryCard
-        summary={summary}
-        quotes={quotes}
-        holdingsTickers={holdingsTickers}
-      />
+      {holdingsPending ? (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-16 w-full rounded" />
+          ))}
+        </div>
+      ) : (
+        <PortfolioSummaryCard
+          summary={summary}
+          quotes={quotes}
+          holdingsTickers={holdingsTickers}
+        />
+      )}
 
       <div className="terminal-grid">
         <div className="col-span-12 lg:col-span-8">
           <Panel title="Holdings" subtitle={`${holdingsTickers.length} positions · prices from latest sync`}>
-            {holdingsQ.isLoading ? (
+            {holdingsPending ? (
               <div className="flex flex-col gap-2">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <Skeleton key={i} className="h-8 w-full" />
@@ -222,8 +249,8 @@ export function DashboardPage() {
           </Panel>
 
           <Panel title="Latest ratings" dense>
-            <div className="flex flex-col gap-0 max-h-[280px] overflow-auto">
-              {ratingsQ.isLoading && !ratings.length ? (
+            <div className="flex max-h-[280px] flex-col gap-0 overflow-auto">
+              {ratingsPending ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <Skeleton key={i} className="mb-1.5 h-7 w-full" />
                 ))

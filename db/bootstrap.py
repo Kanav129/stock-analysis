@@ -10,18 +10,18 @@ def bootstrap_schema() -> None:
     schema_path = Path(__file__).parent / "schema.sql"
     sql = schema_path.read_text()
     db = get_db_client()
-    db.connect()
-    cursor = db.connection.cursor()
-    try:
-        cursor.execute(sql)
-        db.connection.commit()
-        logger.info("Database schema bootstrap completed.")
-    except Exception as exc:
-        db.connection.rollback()
-        logger.error(f"Schema bootstrap failed: {exc}")
-        raise
-    finally:
-        cursor.close()
+    with db.checkout() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql)
+            conn.commit()
+            logger.info("Database schema bootstrap completed.")
+        except Exception as exc:
+            conn.rollback()
+            logger.error(f"Schema bootstrap failed: {exc}")
+            raise
+        finally:
+            cursor.close()
 
     try:
         migrate_stock_ratings_schema()

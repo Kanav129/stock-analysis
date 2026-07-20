@@ -174,3 +174,22 @@ export interface AnalysisProgress {
   last_run: string | null;
   started?: boolean;
 }
+
+export interface SyncProgress {
+  running: boolean;
+  status: 'idle' | 'running' | 'completed' | 'error' | string;
+  tickers: string[];
+  total: number;
+  current_index: number;
+  current_ticker: string | null;
+  stage: string | null;
+  stage_label: string | null;
+  completed: string[];
+  errors: { ticker: string; error: string }[];
+  percent: number;
+  message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  last_sync: string | null;
+  started?: boolean;
+}
