@@ -120,9 +120,24 @@ class SyncService:
             logger.info(f"Data sync running for {len(target)} tickers: {target}")
             self._update(message=f"Scraping news & prices ({len(target)} tickers)…")
 
-            await asyncio.gather(
-                loop.run_in_executor(None, news_scraper.scrape_all_tickers, target),
-                loop.run_in_executor(None, stock_scraper.scrape_all_tickers, target),
+            def _price_progress(ticker: str, index: int, total: int) -> None:
+                self._update(
+                    message=f"Syncing prices {index}/{total}: {ticker} (news in parallel)…"
+                )
+
+            # Bound scrape phase so a stuck yfinance/DB call cannot leave running=true forever.
+            scrape_timeout_s = int(os.getenv("SYNC_SCRAPE_TIMEOUT_SECONDS", str(50 * 60)))
+            await asyncio.wait_for(
+                asyncio.gather(
+                    loop.run_in_executor(None, news_scraper.scrape_all_tickers, target),
+                    loop.run_in_executor(
+                        None,
+                        lambda: stock_scraper.scrape_all_tickers(
+                            target, on_progress=_price_progress
+                        ),
+                    ),
+                ),
+                timeout=scrape_timeout_s,
             )
 
             self._update(message="Syncing news vectors…")
