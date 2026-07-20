@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import pandas as pd
 import yfinance as yf
@@ -14,6 +14,8 @@ from db.postgres_db import PostgresDBClient
 from utils.logger import logger
 
 DETAILED_WINDOW_DAYS = 30
+# If we already have 5m bars newer than this, only fetch a short window.
+INCREMENTAL_MAX_AGE = timedelta(days=3)
 BAR_1D = "1d"
 BAR_5M = "5m"
 
@@ -75,15 +77,15 @@ class StockDataScraper:
         ticker_data = yf.Ticker(ticker)
         return ticker_data.history(period=period, interval=interval, auto_adjust=False)
 
-    def _upsert_row(
+    def _row_params(
         self,
         ticker: str,
         bar_ts: datetime,
         bar_interval: str,
         row: pd.Series,
-    ) -> None:
+    ) -> tuple:
         trade_date = bar_ts.astimezone(timezone.utc).date()
-        params = (
+        return (
             ticker,
             trade_date,
             bar_ts,
@@ -94,31 +96,40 @@ class StockDataScraper:
             _to_python(row.get("Close")),
             int(_to_python(row.get("Volume")) or 0),
         )
-        self.db_client.execute_query(UPSERT_SQL, params)
+
+    def _upsert_row(
+        self,
+        ticker: str,
+        bar_ts: datetime,
+        bar_interval: str,
+        row: pd.Series,
+    ) -> None:
+        self.db_client.execute_query(
+            UPSERT_SQL,
+            self._row_params(ticker, bar_ts, bar_interval, row),
+        )
 
     def upsert_daily_frame(self, ticker: str, frame: pd.DataFrame) -> int:
         if frame is None or frame.empty:
             return 0
-        count = 0
-        for idx, row in frame.iterrows():
-            bar_ts = _daily_bar_ts(idx)
-            self._upsert_row(ticker, bar_ts, BAR_1D, row)
-            count += 1
-        return count
+        rows = [
+            self._row_params(ticker, _daily_bar_ts(idx), BAR_1D, row)
+            for idx, row in frame.iterrows()
+        ]
+        return self.db_client.execute_many(UPSERT_SQL, rows)
 
     def upsert_intraday_frame(self, ticker: str, frame: pd.DataFrame) -> int:
         if frame is None or frame.empty:
             return 0
-        count = 0
+        rows = []
         for idx, row in frame.iterrows():
             bar_ts = _as_utc_ts(idx)
             # Snap to 5-minute grid to avoid near-duplicate timestamps
             epoch = int(bar_ts.timestamp())
             snapped = epoch - (epoch % 300)
             bar_ts = datetime.fromtimestamp(snapped, tz=timezone.utc)
-            self._upsert_row(ticker, bar_ts, BAR_5M, row)
-            count += 1
-        return count
+            rows.append(self._row_params(ticker, bar_ts, BAR_5M, row))
+        return self.db_client.execute_many(UPSERT_SQL, rows)
 
     def backfill_missing_daily(self, ticker: str) -> int:
         """Pull ~1 month of daily bars and upsert (fills any missing days)."""
@@ -127,17 +138,44 @@ class StockDataScraper:
         logger.info(f"{ticker}: upserted {n} daily bar(s) from 1mo history")
         return n
 
+    def _latest_intraday_ts(self, ticker: str) -> Optional[datetime]:
+        rows, _ = self.db_client.fetch_query(
+            """
+            SELECT MAX(bar_ts) AS latest
+            FROM stock_data
+            WHERE ticker = %s AND bar_interval = %s
+            """,
+            (ticker, BAR_5M),
+        )
+        if not rows or rows[0][0] is None:
+            return None
+        latest = rows[0][0]
+        if latest.tzinfo is None:
+            return latest.replace(tzinfo=timezone.utc)
+        return latest
+
+    def _intraday_fetch_period(self, ticker: str) -> str:
+        """Use a short window when we already have recent 5m data (daily cron)."""
+        latest = self._latest_intraday_ts(ticker)
+        if latest is None:
+            return "1mo"
+        age = datetime.now(timezone.utc) - latest
+        if age <= INCREMENTAL_MAX_AGE:
+            return "5d"
+        return "1mo"
+
     def sync_intraday_5m(self, ticker: str) -> int:
         """
-        Pull recent 5m bars (today + recent sessions) and upsert.
+        Pull recent 5m bars and upsert.
         yfinance allows ~60d of 5m; we keep only the last 30d after compaction.
+        Incremental runs fetch 5d when recent bars already exist.
         """
-        # 5d covers missed cron days; 1mo builds the detailed window on first runs
-        frame = self.fetch_history(ticker, period="1mo", interval="5m")
-        if frame is None or frame.empty:
+        period = self._intraday_fetch_period(ticker)
+        frame = self.fetch_history(ticker, period=period, interval="5m")
+        if (frame is None or frame.empty) and period != "5d":
             frame = self.fetch_history(ticker, period="5d", interval="5m")
         n = self.upsert_intraday_frame(ticker, frame)
-        logger.info(f"{ticker}: upserted {n} 5m bar(s)")
+        logger.info(f"{ticker}: upserted {n} 5m bar(s) (period={period})")
         return n
 
     def compact_old_intraday(self, ticker: str) -> dict[str, int]:
@@ -165,13 +203,12 @@ class StockDataScraper:
             (ticker, BAR_5M, cutoff),
         )
 
-        promoted = 0
+        promoted_rows = []
         for trade_date, open_, high, low, close, volume in rows:
             bar_ts = datetime(
                 trade_date.year, trade_date.month, trade_date.day, tzinfo=timezone.utc
             )
-            self.db_client.execute_query(
-                UPSERT_SQL,
+            promoted_rows.append(
                 (
                     ticker,
                     trade_date,
@@ -182,9 +219,11 @@ class StockDataScraper:
                     low,
                     close,
                     int(volume or 0),
-                ),
+                )
             )
-            promoted += 1
+        if promoted_rows:
+            self.db_client.execute_many(UPSERT_SQL, promoted_rows)
+        promoted = len(promoted_rows)
 
         self.db_client.execute_query(
             """
@@ -229,10 +268,17 @@ class StockDataScraper:
             **compact,
         }
 
-    def scrape_all_tickers(self, tickers: list[str]) -> None:
-        for ticker in tickers:
+    def scrape_all_tickers(
+        self,
+        tickers: list[str],
+        on_progress: Optional[Callable[[str, int, int], None]] = None,
+    ) -> None:
+        total = len(tickers)
+        for index, ticker in enumerate(tickers, start=1):
             try:
-                logger.info(f"Syncing prices for {ticker}...")
+                logger.info(f"Syncing prices for {ticker} ({index}/{total})...")
+                if on_progress:
+                    on_progress(ticker, index, total)
                 result = self.scrape_ticker(ticker)
                 logger.info(f"Price sync done for {ticker}: {result}")
             except Exception as exc:
