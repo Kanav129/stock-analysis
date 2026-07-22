@@ -3,19 +3,23 @@
 # Repo secrets (Settings → Secrets and variables → Actions):
 #   API_BASE_URL  — https://your-service.onrender.com  (no trailing slash, no /api)
 #   ADMIN_KEY     — same as Render ADMIN_KEY
+#
+# Wait timeout is derived from ticker count × measured avg core-report time (+20%),
+# matching services/analysis_service.compute_analysis_timeouts().
 
 name: Weekly analysis
 
 on:
   schedule:
-    # Saturday 10:00 HKT (HKT = UTC+8) → 02:00 UTC Saturday
-    - cron: "0 2 * * 6"
+    # Saturday 07:00 HKT (HKT = UTC+8) → 23:00 UTC Friday
+    - cron: "0 23 * * 5"
   workflow_dispatch:
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Ceiling for large universes; actual poll loop uses calculated timeout (~1.5h for 22 tickers).
+    timeout-minutes: 240
     steps:
       - name: Wake dyno
         env:
@@ -40,6 +44,7 @@ jobs:
           exit 1
 
       - name: Start analysis
+        id: start
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
@@ -47,32 +52,82 @@ jobs:
           set -euo pipefail
           BASE="${API_BASE_URL%/}"
           BASE="${BASE%/api}"
-          curl -fsS --max-time 120 \
+          body=$(curl -fsS --max-time 120 \
             -X POST "${BASE}/cron/analyze" \
             -H "Authorization: Bearer ${ADMIN_KEY}" \
             -H "Content-Type: application/json" \
-            -d '{}'
+            -d '{}')
+          echo "$body"
+
+          # Same formula as services/analysis_service.compute_analysis_timeouts (defaults):
+          # core=190s/ticker, buffer=1.2, min total=600s
+          ANALYSIS_START_BODY="$body" python3 <<'PY'
+          import json, math, os
+          body = json.loads(os.environ["ANALYSIS_START_BODY"])
+          if body.get("reason") == "already_completed_today" or (
+              body.get("started") is False and body.get("reason") == "already_completed_today"
+          ):
+              print(f"Already completed today ({body.get('date')}) — no-op success")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                  fh.write("skip_wait=true\n")
+                  fh.write("max_polls=0\n")
+                  fh.write("poll_seconds=30\n")
+                  fh.write("ticker_count=0\n")
+              raise SystemExit(0)
+          n = max(1, int(body.get("total") or len(body.get("tickers") or []) or 1))
+          timeouts = body.get("timeouts") or {}
+          if timeouts.get("total"):
+              total_s = int(timeouts["total"])
+              per_s = int(timeouts.get("per_ticker") or max(1, total_s // n))
+          else:
+              per_s = 190
+              total_s = max(600, int(math.ceil(n * per_s * 1.2)))
+          # Extra 10% on the Actions poll window beyond API timeout
+          wait_s = int(math.ceil(total_s * 1.1))
+          poll_s = 60
+          max_polls = max(1, int(math.ceil(wait_s / poll_s)))
+          print(f"Tickers={n} per_ticker≈{per_s}s API timeout={total_s}s ({total_s/60:.1f} min)")
+          print(f"Actions will poll up to {max_polls}×{poll_s}s ({wait_s}s)")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"max_polls={max_polls}\n")
+              fh.write(f"poll_seconds={poll_s}\n")
+              fh.write(f"ticker_count={n}\n")
+          PY
 
       - name: Wait until analysis finishes
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+          MAX_POLLS: ${{ steps.start.outputs.max_polls }}
+          POLL_SECONDS: ${{ steps.start.outputs.poll_seconds }}
         run: |
           set -euo pipefail
+          if [ "${{ steps.start.outputs.skip_wait }}" = "true" ]; then
+            echo "Skipping wait — already completed today"
+            exit 0
+          fi
           BASE="${API_BASE_URL%/}"
           BASE="${BASE%/api}"
-          for i in $(seq 1 100); do
+          MAX_POLLS="${MAX_POLLS:-150}"
+          POLL_SECONDS="${POLL_SECONDS:-60}"
+          echo "Polling /analysis/status up to ${MAX_POLLS} times every ${POLL_SECONDS}s"
+          # Poll keeps the free dyno awake while the background job runs.
+          for i in $(seq 1 "$MAX_POLLS"); do
             body=$(curl -fsS --max-time 60 \
               "${BASE}/analysis/status" \
               -H "Authorization: Bearer ${ADMIN_KEY}")
             echo "$body"
             running=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running', False))")
             status=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-            if [ "$running" != "True" ] && [ "$status" != "running" ]; then
+            if [ "$running" != "True" ] && [ "$status" != "running" ] && [ "$status" != "pending" ]; then
+              if [ "$status" = "failed" ]; then
+                echo "Analysis failed" >&2
+                exit 1
+              fi
               echo "Analysis finished with status=${status}"
               exit 0
             fi
-            sleep 60
+            sleep "$POLL_SECONDS"
           done
-          echo "Timed out waiting for analysis" >&2
+          echo "Timed out waiting for analysis after ${MAX_POLLS} polls" >&2
           exit 1
