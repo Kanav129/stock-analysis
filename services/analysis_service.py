@@ -159,9 +159,9 @@ class AnalysisService:
         )
         return snap
 
-    def _core_reports_done_today(self) -> set[str]:
+    def _core_reports_done_today(self, day: str | None = None) -> set[str]:
         """Core reports already persisted in today's HKT calendar window."""
-        start, end = rcs.day_bounds_utc()
+        start, end = rcs.day_bounds_utc(day)
         db = get_db_client()
         rows, _ = db.fetch_query(
             """
@@ -237,7 +237,7 @@ class AnalysisService:
         checkpoint_done = {
             str(item["ticker"]).upper() for item in checkpoint_completed
         }
-        db_done = set() if force else self._core_reports_done_today()
+        db_done = set() if force else self._core_reports_done_today(day)
         done = set() if force else checkpoint_done | db_done
         todo = [ticker for ticker in target if ticker not in done]
 
@@ -255,6 +255,8 @@ class AnalysisService:
                     if ticker in db_done and ticker not in checkpoint_done
                 ],
             )
+            rcs.save_analysis(summary_checkpoint, day=day)
+            rcs.mark_last_analysis_date(day)
             return {
                 **self.get_status(),
                 "started": False,
@@ -549,7 +551,6 @@ class AnalysisService:
             }
 
         started_at = datetime.utcnow()
-        timeouts = compute_analysis_timeouts(len(target), mode="rescore")
         self._update(
             running=True,
             status="pending",
@@ -567,12 +568,11 @@ class AnalysisService:
             started_at=started_at.isoformat(),
             finished_at=None,
             cancel_requested=False,
-            deadline_at=(started_at + timedelta(seconds=timeouts["total"])).isoformat(),
         )
 
         self._worker = threading.Thread(
             target=self._run_rescore_worker,
-            args=(target, by_ticker, timeouts),
+            args=(target, by_ticker),
             daemon=True,
             name="analysis-rescore-worker",
         )
@@ -580,7 +580,6 @@ class AnalysisService:
         return {
             "started": True,
             "message": f"Rescoring ratings for {len(target)} ticker(s) from saved reports.",
-            "timeouts": timeouts,
             **self.get_status(),
         }
 
@@ -588,34 +587,13 @@ class AnalysisService:
         self,
         target: list[str],
         by_ticker: dict[str, dict[str, Any]],
-        timeouts: dict[str, int] | None = None,
     ) -> None:
         self._update(status="running", message="Rescoring from saved reports…")
         completed: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
-        timeouts = timeouts or compute_analysis_timeouts(len(target), mode="rescore")
-        deadline = datetime.utcnow() + timedelta(seconds=timeouts["total"])
 
         try:
             for i, ticker in enumerate(target):
-                if datetime.utcnow() >= deadline:
-                    msg = (
-                        f"Rescore timed out after {timeouts['total']}s "
-                        f"({len(completed)}/{len(target)} done)."
-                    )
-                    logger.error(msg)
-                    self._update(
-                        running=False,
-                        status="failed",
-                        message=msg,
-                        errors=list(errors) + [{"ticker": "*", "error": "timeout"}],
-                        finished_at=datetime.utcnow().isoformat(),
-                        current_ticker=None,
-                        stage=None,
-                        stage_label=None,
-                    )
-                    return
-
                 if self._cancel_requested():
                     self._update(
                         status="cancelled",

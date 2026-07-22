@@ -9,7 +9,7 @@ def _service() -> AnalysisService:
     return AnalysisService()
 
 
-def test_core_reports_done_today_queries_hkt_utc_window():
+def test_core_reports_done_today_queries_pinned_hkt_utc_window():
     svc = _service()
     db = MagicMock()
     db.fetch_query.return_value = ([("aapl",), ("MSFT",)], ["ticker"])
@@ -21,11 +21,12 @@ def test_core_reports_done_today_queries_hkt_utc_window():
         patch(
             "services.analysis_service.rcs.day_bounds_utc",
             return_value=(start, end),
-        ),
+        ) as bounds,
     ):
-        result = svc._core_reports_done_today()
+        result = svc._core_reports_done_today("2026-07-22")
 
     assert result == {"AAPL", "MSFT"}
+    bounds.assert_called_once_with("2026-07-22")
     sql, params = db.fetch_query.call_args.args
     assert "report_type = 'core'" in sql
     assert "created_at >= %s" in sql
@@ -42,17 +43,33 @@ def test_start_returns_already_completed_today_from_hybrid_done_set():
         "finished_at": "2026-07-22T01:00:00+00:00",
     }
 
+    saved = []
+
     with (
         patch.object(svc.universe, "get_tickers", return_value=universe),
         patch("services.analysis_service.rcs.today_key", return_value="2026-07-22"),
         patch("services.analysis_service.rcs.load_analysis", return_value=checkpoint),
-        patch.object(svc, "_core_reports_done_today", return_value={"MSFT"}),
+        patch("services.analysis_service.rcs.save_analysis",
+              side_effect=lambda data, day=None: saved.append((dict(data), day))),
+        patch("services.analysis_service.rcs.mark_last_analysis_date") as mark_last,
+        patch.object(svc, "_core_reports_done_today", return_value={"MSFT"}) as done_today,
     ):
         result = svc.start(force=False)
 
     assert result["started"] is False
     assert result["reason"] == "already_completed_today"
     assert result["date"] == "2026-07-22"
+    done_today.assert_called_once_with("2026-07-22")
+    assert saved == [(
+        {
+            **checkpoint,
+            "status": "completed",
+            "tickers": universe,
+            "completed": [{"ticker": "AAPL"}, {"ticker": "MSFT"}],
+        },
+        "2026-07-22",
+    )]
+    mark_last.assert_called_once_with("2026-07-22")
 
 
 def test_start_resumes_only_todo_and_pins_day():
