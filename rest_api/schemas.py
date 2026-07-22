@@ -10,6 +10,7 @@ class WatchlistCreate(BaseModel):
 
 class AnalysisRunRequest(BaseModel):
     tickers: Optional[List[str]] = None
+    force: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -40,3 +41,4 @@ class ReportTaskStatus(BaseModel):
 
 class SyncDataRequest(BaseModel):
     tickers: Optional[List[str]] = None
+    force: bool = False

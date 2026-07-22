@@ -14,17 +14,23 @@ router = APIRouter(prefix="/cron", tags=["Cron"])
 
 @router.post("/sync")
 async def cron_sync():
-    """Start daily price+news sync in the background; poll GET /sync/status."""
+    """Start daily price+news sync in the background; poll GET /sync/status.
+
+    Uses force=False so a successful sync earlier today is a no-op (already_completed_today).
+    """
     try:
-        return sync_service.start()
+        return sync_service.start(force=False)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/analyze")
 def cron_analyze():
-    """Start weekly core-report analysis in the background; poll GET /analysis/status."""
+    """Start weekly core-report analysis in the background; poll GET /analysis/status.
+
+    Uses force=False so a successful run earlier today is a no-op (already_completed_today).
+    """
     try:
-        return analysis_service.start()
+        return analysis_service.start(force=False)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

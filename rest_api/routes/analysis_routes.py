@@ -26,7 +26,7 @@ def run_analysis(body: Optional[AnalysisRunRequest] = None):
     """Start universe analysis in the background; poll GET /analysis/status for progress."""
     tickers = body.tickers if body else None
     try:
-        return analysis_service.start(tickers)
+        return analysis_service.start(tickers, force=body.force if body else False)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
