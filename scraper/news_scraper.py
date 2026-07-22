@@ -87,6 +87,7 @@ class NewsScraper(GenericScraper):
                 self.scrape_articles(ticker)
             except Exception as e:
                 logger.error(f"Error while scraping news for {ticker}: {e}")
+                continue
             if on_ticker_done:
                 try:
                     on_ticker_done(ticker)

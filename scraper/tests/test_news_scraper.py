@@ -30,3 +30,15 @@ def test_scrape_articles(mock_ticker_cls, mock_mongo_cls):
     assert articles[0]["description"] == "Test Description"
     assert articles[0]["ticker"] == "AAPL"
     mock_mongo.insert_many.assert_called_once()
+
+
+@patch("scraper.news_scraper.MongoDBClient")
+@patch.object(NewsScraper, "scrape_articles")
+def test_on_ticker_done_skips_failed_news(mock_scrape, _mock_mongo):
+    done: list[str] = []
+    mock_scrape.side_effect = [[{"ok": True}], Exception("fail"), [{"ok": True}]]
+    NewsScraper(collection_name="test_collection", scrape_num_articles=5).scrape_all_tickers(
+        ["AAPL", "MSFT", "NVDA"],
+        on_ticker_done=lambda t: done.append(t),
+    )
+    assert done == ["AAPL", "NVDA"]
