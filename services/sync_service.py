@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 from datetime import datetime
 from typing import Any, Callable, Optional
 
 from rag_graphs.news_rag_graph.ingestion import DocumentSyncManager
 from scraper.scraper_factory import NewsScraperFactory, StockScraperFactory
+from services import run_checkpoint_service as rcs
 from services.universe_service import UniverseService
 from utils.logger import logger
 
@@ -22,6 +24,77 @@ STAGE_PRIOR = {
     "prices": 35,
     "vectors": 85,
 }
+
+# Empirically derived from GitHub daily-sync runs on 2026-07-21 and 2026-07-22
+# (22 tickers): news ≈ 665s total (~30s/ticker); prices ≈ 90–390s/ticker depending on
+# 5d vs 1mo yfinance window — mean of measured price syncs ≈ 200s/ticker.
+DEFAULT_NEWS_SECONDS_PER_TICKER = 30
+DEFAULT_PRICE_SECONDS_PER_TICKER = 200
+DEFAULT_TIMEOUT_BUFFER = 1.2  # +20% headroom
+MIN_STAGE_TIMEOUT_SECONDS = 5 * 60
+VECTORS_TIMEOUT_SECONDS = 10 * 60
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def compute_stage_timeouts(ticker_count: int) -> dict[str, int]:
+    """Per-stage scrape timeouts: avg_sec_per_ticker × n × buffer (+ floors)."""
+    n = max(1, int(ticker_count))
+    news_per = _env_float("SYNC_NEWS_SECONDS_PER_TICKER", DEFAULT_NEWS_SECONDS_PER_TICKER)
+    price_per = _env_float("SYNC_PRICE_SECONDS_PER_TICKER", DEFAULT_PRICE_SECONDS_PER_TICKER)
+    buffer = _env_float("SYNC_TIMEOUT_BUFFER", DEFAULT_TIMEOUT_BUFFER)
+    if buffer < 1.0:
+        buffer = DEFAULT_TIMEOUT_BUFFER
+
+    # Absolute override keeps older deployments working if set explicitly.
+    absolute = os.getenv("SYNC_SCRAPE_TIMEOUT_SECONDS")
+    if absolute and absolute.strip():
+        try:
+            total = max(MIN_STAGE_TIMEOUT_SECONDS * 2, int(absolute))
+            half = max(MIN_STAGE_TIMEOUT_SECONDS, total // 2)
+            return {
+                "news": half,
+                "prices": half,
+                "vectors": VECTORS_TIMEOUT_SECONDS,
+                "total": half * 2 + VECTORS_TIMEOUT_SECONDS,
+            }
+        except ValueError:
+            pass
+
+    news = max(MIN_STAGE_TIMEOUT_SECONDS, int(math.ceil(n * news_per * buffer)))
+    prices = max(MIN_STAGE_TIMEOUT_SECONDS, int(math.ceil(n * price_per * buffer)))
+    vectors = VECTORS_TIMEOUT_SECONDS
+    return {
+        "news": news,
+        "prices": prices,
+        "vectors": vectors,
+        "total": news + prices + vectors,
+    }
+
+
+def compute_resume_timeouts(
+    news_n: int,
+    prices_n: int,
+    need_vectors: bool,
+) -> dict[str, int]:
+    """Size each stage timeout from only the work remaining for that stage."""
+    news = compute_stage_timeouts(max(1, news_n))["news"] if news_n else 0
+    prices = compute_stage_timeouts(max(1, prices_n))["prices"] if prices_n else 0
+    vectors = VECTORS_TIMEOUT_SECONDS if need_vectors else 0
+    return {
+        "news": news,
+        "prices": prices,
+        "vectors": vectors,
+        "total": news + prices + vectors,
+    }
 
 
 class SyncService:
@@ -57,10 +130,15 @@ class SyncService:
         return self._running
 
     def get_status(self) -> dict[str, Any]:
+        checkpoint = rcs.load_sync()
         return {
             **self._status,
             "running": self._running,
             "last_sync": self._last_sync.isoformat() if self._last_sync else self._status.get("last_sync"),
+            "daily": rcs.daily_sync_summary(
+                checkpoint,
+                self._status.get("tickers") or None,
+            ),
         }
 
     def _update(self, **kwargs: Any) -> None:
@@ -96,7 +174,11 @@ class SyncService:
             percent=min(99.0, percent) if self._running and percent < 100 else percent,
         )
 
-    def start(self, tickers: Optional[list[str]] = None) -> dict[str, Any]:
+    def start(
+        self,
+        tickers: Optional[list[str]] = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
         """Kick off sync in the background; poll GET /sync/status until done."""
         if self._running:
             return {
@@ -114,7 +196,66 @@ class SyncService:
                 **self.get_status(),
             }
 
+        day = rcs.today_key()
+        checkpoint = rcs.load_sync()
+        if not force and rcs.is_sync_complete_for_universe(checkpoint, target):
+            daily = rcs.daily_sync_summary(checkpoint, target)
+            return {
+                **self.get_status(),
+                "started": False,
+                "reason": "already_completed_today",
+                "date": day,
+                "finished_at": (checkpoint or {}).get("finished_at"),
+                "message": "Sync already completed today.",
+                "daily": daily,
+            }
+
+        todos = rcs.sync_todos(checkpoint, target, force=force)
+        news_todo = list(todos["news_todo"])
+        prices_todo = list(todos["prices_todo"])
+        need_vectors = bool(todos["need_vectors"])
+
+        if not news_todo and not prices_todo and not need_vectors:
+            checkpoint = dict(checkpoint or rcs.empty_sync_checkpoint(target))
+            checkpoint.update(
+                status="completed",
+                tickers=target,
+                finished_at=checkpoint.get("finished_at") or datetime.utcnow().isoformat(),
+            )
+            rcs.save_sync(checkpoint)
+            daily = rcs.daily_sync_summary(checkpoint, target)
+            return {
+                **self.get_status(),
+                "started": False,
+                "reason": "already_completed_today",
+                "date": day,
+                "finished_at": checkpoint.get("finished_at"),
+                "message": "Sync already completed today.",
+                "daily": daily,
+            }
+
+        if force or not checkpoint:
+            checkpoint = rcs.empty_sync_checkpoint(target)
+        else:
+            checkpoint = dict(checkpoint)
+            checkpoint.update(
+                status="running",
+                tickers=target,
+                errors=[],
+                finished_at=None,
+            )
+            checkpoint.setdefault("news_done", [])
+            checkpoint.setdefault("prices_done", [])
+            checkpoint.setdefault("vectors_done", False)
+            checkpoint.setdefault("started_at", datetime.utcnow().isoformat())
+        rcs.save_sync(checkpoint)
+
         self._running = True
+        timeouts = compute_resume_timeouts(
+            len(news_todo),
+            len(prices_todo),
+            need_vectors,
+        )
         self._update(
             status="running",
             message=f"Starting sync for {len(target)} ticker(s)…",
@@ -122,8 +263,8 @@ class SyncService:
             total=len(target),
             current_index=0,
             current_ticker=None,
-            stage="news",
-            stage_label="News",
+            stage="news" if news_todo else ("prices" if prices_todo else "vectors"),
+            stage_label="News" if news_todo else ("Prices" if prices_todo else "Vectors"),
             completed=[],
             errors=[],
             percent=0,
@@ -136,13 +277,37 @@ class SyncService:
         except RuntimeError:
             self._running = False
             self._update(status="error", message="No event loop available to start sync", percent=0)
+            checkpoint["status"] = "error"
+            checkpoint["errors"] = [{"ticker": "*", "error": "No event loop available"}]
+            rcs.save_sync(checkpoint)
             return {"started": False, "message": "No event loop available", **self.get_status()}
 
-        self._task = loop.create_task(self._run_worker(target))
-        logger.info(f"Background sync started for {len(target)} tickers")
+        self._task = loop.create_task(
+            self._run_worker(
+                target,
+                news_todo,
+                prices_todo,
+                need_vectors,
+                checkpoint_seed=checkpoint,
+            )
+        )
+        logger.info(
+            "Background sync started for %s tickers (timeouts news=%ss prices=%ss)",
+            len(target),
+            timeouts["news"],
+            timeouts["prices"],
+        )
         return {
             "started": True,
             "message": f"Sync started for {len(target)} ticker(s).",
+            "resumed": bool(todos["resumed"]),
+            "skipped": {
+                "news": len(target) - len(news_todo),
+                "prices": len(target) - len(prices_todo),
+            },
+            "date": day,
+            "checkpoint": checkpoint,
+            "timeouts": timeouts,
             **self.get_status(),
         }
 
@@ -163,8 +328,17 @@ class SyncService:
             **status,
         }
 
-    async def _run_worker(self, target: list[str]) -> None:
-        errors: list[dict[str, str]] = []
+    async def _run_worker(
+        self,
+        target: list[str],
+        news_todo: list[str],
+        prices_todo: list[str],
+        need_vectors: bool,
+        *,
+        checkpoint_seed: dict[str, Any],
+    ) -> None:
+        checkpoint = dict(checkpoint_seed)
+        errors: list[dict[str, str]] = list(checkpoint.get("errors") or [])
         completed: list[str] = []
         total = len(target)
         try:
@@ -177,8 +351,15 @@ class SyncService:
 
             logger.info(f"Data sync running for {total} tickers: {target}")
 
+            def _checkpoint_ticker(field: str, ticker: str) -> None:
+                done = checkpoint.setdefault(field, [])
+                normalized = ticker.upper()
+                if normalized not in {str(item).upper() for item in done}:
+                    done.append(normalized)
+                rcs.save_sync(checkpoint)
+
             def _news_progress(ticker: str, index: int, total_n: int) -> None:
-                done = target[: max(0, index - 1)]
+                done = news_todo[: max(0, index - 1)]
                 self._update(completed=list(done))
                 self._set_stage_progress(
                     "news",
@@ -191,7 +372,7 @@ class SyncService:
 
             def _price_progress(ticker: str, index: int, total_n: int) -> None:
                 # index is 1-based "now working"; prior tickers are done for prices
-                done = target[: max(0, index - 1)]
+                done = prices_todo[: max(0, index - 1)]
                 completed.clear()
                 completed.extend(done)
                 self._update(completed=list(completed))
@@ -204,44 +385,115 @@ class SyncService:
                     f"Syncing prices · {ticker} ({index}/{total_n})",
                 )
 
-            scrape_timeout_s = int(os.getenv("SYNC_SCRAPE_TIMEOUT_SECONDS", str(50 * 60)))
+            timeouts = compute_resume_timeouts(
+                len(news_todo),
+                len(prices_todo),
+                need_vectors,
+            )
+            logger.info(
+                "Sync timeouts for %s tickers: news=%ss prices=%ss vectors=%ss (total=%ss)",
+                total,
+                timeouts["news"],
+                timeouts["prices"],
+                timeouts["vectors"],
+                timeouts["total"],
+            )
 
             # Sequential stages so the UI can show a clear stage pipeline
-            self._set_stage_progress("news", "News", 0, total, None, "Fetching news…")
-            await asyncio.wait_for(
-                loop.run_in_executor(
+            if news_todo:
+                self._set_stage_progress(
+                    "news",
+                    "News",
+                    0,
+                    len(news_todo),
                     None,
-                    lambda: news_scraper.scrape_all_tickers(target, on_progress=_news_progress),
-                ),
-                timeout=scrape_timeout_s // 2,
-            )
+                    "Fetching news…",
+                )
+                await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: news_scraper.scrape_all_tickers(
+                            news_todo,
+                            on_progress=_news_progress,
+                            on_ticker_done=lambda ticker: _checkpoint_ticker(
+                                "news_done",
+                                ticker,
+                            ),
+                        ),
+                    ),
+                    timeout=timeouts["news"],
+                )
 
-            self._set_stage_progress("prices", "Prices", 0, total, None, "Syncing prices…")
-            await asyncio.wait_for(
-                loop.run_in_executor(
+            if prices_todo:
+                self._set_stage_progress(
+                    "prices",
+                    "Prices",
+                    0,
+                    len(prices_todo),
                     None,
-                    lambda: stock_scraper.scrape_all_tickers(target, on_progress=_price_progress),
-                ),
-                timeout=scrape_timeout_s // 2,
-            )
+                    "Syncing prices…",
+                )
+                await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: stock_scraper.scrape_all_tickers(
+                            prices_todo,
+                            on_progress=_price_progress,
+                            on_ticker_done=lambda ticker: _checkpoint_ticker(
+                                "prices_done",
+                                ticker,
+                            ),
+                        ),
+                    ),
+                    timeout=timeouts["prices"],
+                )
 
             completed.clear()
             completed.extend(target)
-            self._update(
-                stage="vectors",
-                stage_label="Vectors",
-                current_ticker=None,
-                message="Indexing news vectors…",
-                percent=85.0,
-                completed=list(completed),
-            )
-            try:
-                await loop.run_in_executor(None, DocumentSyncManager().sync_documents)
-            except Exception as exc:
-                logger.error(f"Chroma sync failed: {exc}")
-                errors.append({"ticker": "*", "error": f"chroma_sync: {exc}"})
+            if need_vectors:
+                self._update(
+                    stage="vectors",
+                    stage_label="Vectors",
+                    current_ticker=None,
+                    message="Indexing news vectors…",
+                    percent=85.0,
+                    completed=list(completed),
+                )
+                try:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, DocumentSyncManager().sync_documents),
+                        timeout=timeouts["vectors"],
+                    )
+                    checkpoint["vectors_done"] = True
+                    rcs.save_sync(checkpoint)
+                except Exception as exc:
+                    logger.error(f"Chroma sync failed: {exc}")
+                    errors.append({"ticker": "*", "error": f"chroma_sync: {exc}"})
+                    checkpoint.update(status="partial", errors=errors, vectors_done=False)
+                    rcs.save_sync(checkpoint)
+                    self._update(
+                        status="partial",
+                        stage="vectors",
+                        stage_label="Vectors",
+                        message="News and prices synced, but vector indexing failed.",
+                        errors=errors,
+                        completed=list(completed),
+                        current_ticker=None,
+                        percent=85.0,
+                        finished_at=datetime.utcnow().isoformat(),
+                    )
+                    return
 
             self._last_sync = datetime.utcnow()
+            finished_at = self._last_sync.isoformat()
+            checkpoint.update(
+                status="completed",
+                errors=errors,
+                vectors_done=True,
+                finished_at=finished_at,
+            )
+            rcs.save_sync(checkpoint)
+            rcs.mark_last_sync_date()
             self._update(
                 status="completed",
                 stage="vectors",
@@ -251,24 +503,30 @@ class SyncService:
                 completed=list(completed) if completed else list(target),
                 current_ticker=None,
                 percent=100,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=finished_at,
                 last_sync=self._last_sync.isoformat(),
             )
             logger.info(f"Background sync completed for {total} tickers")
         except asyncio.TimeoutError:
             logger.error("Background sync timed out")
+            errors.append({"ticker": "*", "error": "timeout"})
+            checkpoint.update(status="partial", errors=errors)
+            rcs.save_sync(checkpoint)
             self._update(
-                status="error",
+                status="partial",
                 message="Sync timed out. Try fewer tickers or re-run.",
-                errors=[{"ticker": "*", "error": "timeout"}],
+                errors=errors,
                 finished_at=datetime.utcnow().isoformat(),
             )
         except Exception as exc:
             logger.error(f"Background sync failed: {exc}")
+            errors.append({"ticker": "*", "error": str(exc)})
+            checkpoint.update(status="error", errors=errors)
+            rcs.save_sync(checkpoint)
             self._update(
                 status="error",
                 message=str(exc),
-                errors=[{"ticker": "*", "error": str(exc)}],
+                errors=errors,
                 finished_at=datetime.utcnow().isoformat(),
             )
         finally:
