@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import math
+import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from rag_graphs.research_graph.graph import app as research_graph
 from rag_graphs.research_graph.nodes.persist_report import persist_report
 from rag_graphs.research_graph.nodes.synthesize_decision import synthesize_decision
+from db.db_factory import get_db_client
+from services import run_checkpoint_service as rcs
 from services.report_service import ReportService
 from services.universe_service import UniverseService
 from utils.logger import logger
@@ -36,6 +40,56 @@ RESCORE_STAGE_LABELS = {
     "synthesize_decision": "Re-scoring decision",
     "persist": "Saving score & rating",
 }
+
+# From Jul 19 full-universe core-report batch: consecutive report gaps averaged ~189s/ticker.
+DEFAULT_CORE_SECONDS_PER_TICKER = 190
+DEFAULT_RESCORE_SECONDS_PER_TICKER = 45
+DEFAULT_TIMEOUT_BUFFER = 1.2  # +20% headroom
+MIN_ANALYSIS_TIMEOUT_SECONDS = 10 * 60
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def compute_analysis_timeouts(ticker_count: int, *, mode: str = "core_report") -> dict[str, int]:
+    """Total analysis budget: avg_sec_per_ticker × n × buffer."""
+    n = max(1, int(ticker_count))
+    buffer = _env_float("ANALYSIS_TIMEOUT_BUFFER", DEFAULT_TIMEOUT_BUFFER)
+    if buffer < 1.0:
+        buffer = DEFAULT_TIMEOUT_BUFFER
+
+    absolute = os.getenv("ANALYSIS_TIMEOUT_SECONDS")
+    if absolute and absolute.strip():
+        try:
+            total = max(MIN_ANALYSIS_TIMEOUT_SECONDS, int(absolute))
+            return {"per_ticker": max(1, total // n), "total": total, "mode": mode}
+        except ValueError:
+            pass
+
+    if mode == "rescore":
+        per = _env_float(
+            "ANALYSIS_RESCORE_SECONDS_PER_TICKER",
+            DEFAULT_RESCORE_SECONDS_PER_TICKER,
+        )
+    else:
+        per = _env_float(
+            "ANALYSIS_CORE_SECONDS_PER_TICKER",
+            DEFAULT_CORE_SECONDS_PER_TICKER,
+        )
+
+    total = max(MIN_ANALYSIS_TIMEOUT_SECONDS, int(math.ceil(n * per * buffer)))
+    return {
+        "per_ticker": int(math.ceil(per)),
+        "total": total,
+        "mode": mode,
+    }
 
 
 class AnalysisService:
@@ -98,7 +152,28 @@ class AnalysisService:
                 self._last_run.isoformat() if self._last_run else snap.get("last_run")
             )
             snap.pop("cancel_requested", None)
-            return snap
+        checkpoint = rcs.load_analysis()
+        snap["daily"] = rcs.daily_analysis_summary(
+            checkpoint,
+            snap.get("tickers") or None,
+        )
+        return snap
+
+    def _core_reports_done_today(self) -> set[str]:
+        """Core reports already persisted in today's HKT calendar window."""
+        start, end = rcs.day_bounds_utc()
+        db = get_db_client()
+        rows, _ = db.fetch_query(
+            """
+            SELECT DISTINCT ticker
+            FROM stock_reports
+            WHERE report_type = 'core'
+              AND created_at >= %s
+              AND created_at < %s
+            """,
+            (start, end),
+        )
+        return {str(row[0]).upper() for row in rows if row and row[0]}
 
     def _update(self, **kwargs: Any) -> None:
         with self._state_lock:
@@ -129,7 +204,11 @@ class AnalysisService:
         with self._state_lock:
             return bool(self._progress.get("cancel_requested"))
 
-    def start(self, tickers: list[str] | None = None) -> dict[str, Any]:
+    def start(
+        self,
+        tickers: list[str] | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
         """Start core-report analysis for the universe in a background thread."""
         with self._state_lock:
             if self._progress.get("running"):
@@ -148,13 +227,72 @@ class AnalysisService:
                 "running": False,
             }
 
+        day = rcs.today_key()
+        checkpoint = rcs.load_analysis(day)
+        checkpoint_completed = [
+            dict(item)
+            for item in (checkpoint or {}).get("completed") or []
+            if isinstance(item, dict) and item.get("ticker")
+        ]
+        checkpoint_done = {
+            str(item["ticker"]).upper() for item in checkpoint_completed
+        }
+        db_done = set() if force else self._core_reports_done_today()
+        done = set() if force else checkpoint_done | db_done
+        todo = [ticker for ticker in target if ticker not in done]
+
+        if not force and not todo:
+            summary_checkpoint = dict(
+                checkpoint or rcs.empty_analysis_checkpoint(target)
+            )
+            summary_checkpoint.update(
+                status="completed",
+                tickers=target,
+                completed=checkpoint_completed
+                + [
+                    {"ticker": ticker}
+                    for ticker in target
+                    if ticker in db_done and ticker not in checkpoint_done
+                ],
+            )
+            return {
+                **self.get_status(),
+                "started": False,
+                "reason": "already_completed_today",
+                "date": day,
+                "finished_at": (checkpoint or {}).get("finished_at"),
+                "message": "Core analysis already completed today.",
+                "daily": rcs.daily_analysis_summary(summary_checkpoint, target),
+            }
+
+        if force:
+            checkpoint = rcs.empty_analysis_checkpoint(target)
+        else:
+            checkpoint = dict(
+                checkpoint or rcs.empty_analysis_checkpoint(target)
+            )
+            checkpoint.update(
+                status="running",
+                tickers=target,
+                errors=[],
+                finished_at=None,
+            )
+            checkpoint.setdefault("started_at", datetime.utcnow().isoformat())
+            checkpoint["completed"] = checkpoint_completed + [
+                {"ticker": ticker}
+                for ticker in target
+                if ticker in db_done and ticker not in checkpoint_done
+            ]
+        rcs.save_analysis(checkpoint, day=day)
+
         started_at = datetime.utcnow()
+        timeouts = compute_analysis_timeouts(len(todo), mode="core_report")
         self._update(
             running=True,
             status="pending",
             mode="core_report",
-            tickers=target,
-            total=len(target),
+            tickers=todo,
+            total=len(todo),
             current_index=0,
             current_ticker=None,
             stage=None,
@@ -162,22 +300,34 @@ class AnalysisService:
             completed=[],
             errors=[],
             percent=0,
-            message=f"Queued core reports for {len(target)} ticker(s)…",
+            message=f"Queued core reports for {len(todo)} ticker(s)…",
             started_at=started_at.isoformat(),
             finished_at=None,
             cancel_requested=False,
+            deadline_at=(started_at + timedelta(seconds=timeouts["total"])).isoformat(),
         )
 
         self._worker = threading.Thread(
             target=self._run_worker,
-            args=(target,),
+            args=(todo, timeouts, day, checkpoint),
             daemon=True,
             name="analysis-core-report-worker",
         )
         self._worker.start()
+        logger.info(
+            "Core-report analysis started for %s tickers (timeout=%ss ≈ %.1f min)",
+            len(todo),
+            timeouts["total"],
+            timeouts["total"] / 60,
+        )
         return {
             "started": True,
-            "message": f"Generating core reports + ratings for {len(target)} ticker(s).",
+            "message": f"Generating core reports + ratings for {len(todo)} ticker(s).",
+            "resumed": bool(done),
+            "skipped": len(target) - len(todo),
+            "date": day,
+            "checkpoint": checkpoint,
+            "timeouts": timeouts,
             **self.get_status(),
         }
 
@@ -198,17 +348,61 @@ class AnalysisService:
             "message": status.get("message"),
         }
 
-    def _run_worker(self, target: list[str]) -> None:
+    def _run_worker(
+        self,
+        target: list[str],
+        timeouts: dict[str, int] | None = None,
+        day: str | None = None,
+        checkpoint_seed: dict[str, Any] | None = None,
+    ) -> None:
         self._update(
             status="running",
             message="Generating core research reports…",
         )
         completed: list[dict[str, Any]] = []
-        errors: list[dict[str, str]] = []
+        checkpoint = dict(
+            checkpoint_seed or rcs.empty_analysis_checkpoint(target)
+        )
+        checkpoint_completed = list(checkpoint.get("completed") or [])
+        errors: list[dict[str, str]] = list(checkpoint.get("errors") or [])
+        timeouts = timeouts or compute_analysis_timeouts(len(target), mode="core_report")
+        started_at = datetime.utcnow()
+        deadline = started_at + timedelta(seconds=timeouts["total"])
+
+        def save_checkpoint(status: str | None = None, *, finished: bool = False) -> None:
+            if status:
+                checkpoint["status"] = status
+            checkpoint["completed"] = list(checkpoint_completed)
+            checkpoint["errors"] = list(errors)
+            if finished:
+                checkpoint["finished_at"] = datetime.utcnow().isoformat()
+            rcs.save_analysis(checkpoint, day=day)
 
         try:
             for i, ticker in enumerate(target):
+                if datetime.utcnow() >= deadline:
+                    msg = (
+                        f"Analysis timed out after {timeouts['total']}s "
+                        f"({len(completed)}/{len(target)} reports done). "
+                        "Try fewer tickers or raise ANALYSIS_CORE_SECONDS_PER_TICKER."
+                    )
+                    logger.error(msg)
+                    errors.append({"ticker": "*", "error": "timeout"})
+                    save_checkpoint("partial", finished=True)
+                    self._update(
+                        running=False,
+                        status="failed",
+                        message=msg,
+                        errors=list(errors),
+                        finished_at=datetime.utcnow().isoformat(),
+                        current_ticker=None,
+                        stage=None,
+                        stage_label=None,
+                    )
+                    return
+
                 if self._cancel_requested():
+                    save_checkpoint("cancelled", finished=True)
                     self._update(
                         status="cancelled",
                         running=False,
@@ -234,9 +428,12 @@ class AnalysisService:
                         "score": rating_result.get("score"),
                         "report_id": rating_result.get("report_id"),
                     })
+                    checkpoint_completed.append(dict(completed[-1]))
+                    save_checkpoint()
                     self._update(completed=list(completed))
                 except Exception as exc:
                     if self._cancel_requested() or "cancelled" in str(exc).lower():
+                        save_checkpoint("cancelled", finished=True)
                         self._update(
                             status="cancelled",
                             running=False,
@@ -251,29 +448,47 @@ class AnalysisService:
                         return
                     logger.error(f"Core report analysis failed for {ticker}: {exc}")
                     errors.append({"ticker": ticker, "error": str(exc)})
+                    save_checkpoint("partial" if checkpoint_completed else "failed")
                     self._update(errors=list(errors))
 
-            self._last_run = datetime.utcnow()
             failed = len(errors)
             msg = f"Done — {len(completed)} core report(s)"
             if failed:
                 msg += f", {failed} failed"
+            universe = [str(ticker).upper() for ticker in checkpoint.get("tickers") or target]
+            done = {
+                str(item.get("ticker", "")).upper()
+                for item in checkpoint_completed
+                if isinstance(item, dict)
+            }
+            complete = not failed and all(ticker in done for ticker in universe)
+            checkpoint_status = "completed" if complete else (
+                "partial" if checkpoint_completed else "failed"
+            )
+            save_checkpoint(checkpoint_status, finished=True)
+            if complete:
+                self._last_run = datetime.utcnow()
+                rcs.mark_last_analysis_date(day)
             self._update(
                 running=False,
-                status="done" if not failed or completed else "failed",
+                status="done" if complete else ("done" if completed else "failed"),
                 current_ticker=None,
                 stage=None,
                 stage_label=None,
                 message=msg,
-                finished_at=self._last_run.isoformat(),
-                last_run=self._last_run.isoformat(),
-                percent=100,
+                finished_at=checkpoint["finished_at"],
+                last_run=self._last_run.isoformat() if self._last_run else None,
+                percent=100 if complete else (
+                    round(len(completed) / len(target) * 100, 1) if target else 0
+                ),
                 completed=list(completed),
                 errors=list(errors),
             )
             logger.info(f"Core-report analysis finished: {msg}")
         except Exception as exc:
             logger.error(f"Analysis worker crashed: {exc}")
+            errors.append({"ticker": "*", "error": str(exc)})
+            save_checkpoint("failed", finished=True)
             self._update(
                 running=False,
                 status="failed",
@@ -334,6 +549,7 @@ class AnalysisService:
             }
 
         started_at = datetime.utcnow()
+        timeouts = compute_analysis_timeouts(len(target), mode="rescore")
         self._update(
             running=True,
             status="pending",
@@ -351,11 +567,12 @@ class AnalysisService:
             started_at=started_at.isoformat(),
             finished_at=None,
             cancel_requested=False,
+            deadline_at=(started_at + timedelta(seconds=timeouts["total"])).isoformat(),
         )
 
         self._worker = threading.Thread(
             target=self._run_rescore_worker,
-            args=(target, by_ticker),
+            args=(target, by_ticker, timeouts),
             daemon=True,
             name="analysis-rescore-worker",
         )
@@ -363,16 +580,42 @@ class AnalysisService:
         return {
             "started": True,
             "message": f"Rescoring ratings for {len(target)} ticker(s) from saved reports.",
+            "timeouts": timeouts,
             **self.get_status(),
         }
 
-    def _run_rescore_worker(self, target: list[str], by_ticker: dict[str, dict[str, Any]]) -> None:
+    def _run_rescore_worker(
+        self,
+        target: list[str],
+        by_ticker: dict[str, dict[str, Any]],
+        timeouts: dict[str, int] | None = None,
+    ) -> None:
         self._update(status="running", message="Rescoring from saved reports…")
         completed: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
+        timeouts = timeouts or compute_analysis_timeouts(len(target), mode="rescore")
+        deadline = datetime.utcnow() + timedelta(seconds=timeouts["total"])
 
         try:
             for i, ticker in enumerate(target):
+                if datetime.utcnow() >= deadline:
+                    msg = (
+                        f"Rescore timed out after {timeouts['total']}s "
+                        f"({len(completed)}/{len(target)} done)."
+                    )
+                    logger.error(msg)
+                    self._update(
+                        running=False,
+                        status="failed",
+                        message=msg,
+                        errors=list(errors) + [{"ticker": "*", "error": "timeout"}],
+                        finished_at=datetime.utcnow().isoformat(),
+                        current_ticker=None,
+                        stage=None,
+                        stage_label=None,
+                    )
+                    return
+
                 if self._cancel_requested():
                     self._update(
                         status="cancelled",
