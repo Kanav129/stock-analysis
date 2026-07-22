@@ -74,7 +74,7 @@ class NewsScraper(GenericScraper):
         logger.info(f"Inserted {len(articles)} articles for {ticker} into MongoDB.")
         return articles
 
-    def scrape_all_tickers(self, tickers, on_progress=None):
+    def scrape_all_tickers(self, tickers, on_progress=None, on_ticker_done=None):
         total = len(tickers)
         for index, ticker in enumerate(tickers, start=1):
             logger.info(f"Scraping news for ticker: {ticker} ({index}/{total})")
@@ -87,6 +87,11 @@ class NewsScraper(GenericScraper):
                 self.scrape_articles(ticker)
             except Exception as e:
                 logger.error(f"Error while scraping news for {ticker}: {e}")
+            if on_ticker_done:
+                try:
+                    on_ticker_done(ticker)
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":

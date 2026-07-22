@@ -29,6 +29,17 @@ def test_scrape_all_tickers(mock_scrape):
     assert mock_scrape.call_count == 2
 
 
+@patch.object(StockDataScraper, "scrape_ticker")
+def test_on_ticker_done_skips_failed_price(mock_scrape):
+    done: list[str] = []
+    mock_scrape.side_effect = [{"ok": True}, Exception("fail"), {"ok": True}]
+    StockDataScraper().scrape_all_tickers(
+        ["AAPL", "MSFT", "NVDA"],
+        on_ticker_done=lambda t: done.append(t),
+    )
+    assert done == ["AAPL", "NVDA"]
+
+
 def test_upsert_intraday_frame_uses_single_batch_execute():
     """Row-by-row upserts make daily sync hang on 22 tickers × ~1.7k 5m bars."""
     idx = pd.date_range("2024-01-15 14:30", periods=3, freq="5min", tz="UTC")

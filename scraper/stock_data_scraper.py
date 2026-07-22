@@ -272,6 +272,7 @@ class StockDataScraper:
         self,
         tickers: list[str],
         on_progress: Optional[Callable[[str, int, int], None]] = None,
+        on_ticker_done: Optional[Callable[[str], None]] = None,
     ) -> None:
         total = len(tickers)
         for index, ticker in enumerate(tickers, start=1):
@@ -281,6 +282,8 @@ class StockDataScraper:
                     on_progress(ticker, index, total)
                 result = self.scrape_ticker(ticker)
                 logger.info(f"Price sync done for {ticker}: {result}")
+                if on_ticker_done:
+                    on_ticker_done(ticker)
             except Exception as exc:
                 logger.error(f"Error syncing prices for {ticker}: {exc}")
 
