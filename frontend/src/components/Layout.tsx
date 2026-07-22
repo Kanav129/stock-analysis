@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { clearAuthToken } from '../auth';
+import { useSyncKeepAlive } from '../hooks/useSyncKeepAlive';
 
 const nav = [
   { to: '/', label: 'Desk' },
@@ -14,6 +15,7 @@ export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  useSyncKeepAlive();
 
   function logout() {
     clearAuthToken();

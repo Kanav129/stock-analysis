@@ -81,6 +81,8 @@ export const api = {
     body: JSON.stringify({ tickers: tickers ?? null, force: Boolean(opts?.force) }),
   }),
   getSyncStatus: () => request<import('./types').SyncProgress>('/sync/status'),
+  /** Unauthenticated; used to keep the Render free dyno awake during long syncs. */
+  health: () => request<{ status: string }>('/health'),
   getAnalysisStatus: () => request<import('./types').AnalysisProgress>('/analysis/status'),
   getWatchlist: () => request<{ items: import('./types').WatchlistItem[] }>('/watchlist'),
   addWatchlist: (ticker: string, notes?: string) => request<import('./types').WatchlistItem>('/watchlist', {

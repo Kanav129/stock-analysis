@@ -15,6 +15,7 @@ export function RunAnalysisButton() {
     queryKey: ['analysis-status'],
     queryFn: api.getAnalysisStatus,
     refetchInterval: (q) => (q.state.data?.running ? 800 : false),
+    refetchIntervalInBackground: true,
   });
 
   const mutation = useMutation({

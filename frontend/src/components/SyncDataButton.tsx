@@ -21,6 +21,7 @@ export function SyncDataButton({ className = '' }: { className?: string }) {
       const d = q.state.data as SyncProgress | undefined;
       return d?.running ? 2000 : 30_000;
     },
+    refetchIntervalInBackground: true,
   });
 
   const running = Boolean(statusQ.data?.running) || statusQ.data?.status === 'running';

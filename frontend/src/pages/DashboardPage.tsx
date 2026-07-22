@@ -34,6 +34,7 @@ export function DashboardPage() {
       const d = q.state.data as SyncProgress | undefined;
       return d?.running || d?.status === 'running' ? 1500 : 30_000;
     },
+    refetchIntervalInBackground: true,
     staleTime: 1_000,
   });
   const syncing = Boolean(syncQ.data?.running) || syncQ.data?.status === 'running';
@@ -65,6 +66,7 @@ export function DashboardPage() {
     queryKey: ['analysis-status'],
     queryFn: api.getAnalysisStatus,
     refetchInterval: (q) => (q.state.data?.running ? 800 : 30_000),
+    refetchIntervalInBackground: true,
     staleTime: 5_000,
   });
 

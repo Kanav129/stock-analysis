@@ -26,6 +26,7 @@ export function SyncProgressTracker() {
       const d = q.state.data as SyncProgress | undefined;
       return d?.running || d?.status === 'running' ? 1000 : 20_000;
     },
+    refetchIntervalInBackground: true,
   });
 
   const data = statusQ.data;

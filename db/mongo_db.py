@@ -1,5 +1,5 @@
 import os
-from pymongo import MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -21,12 +21,22 @@ class MongoDBClient:
             self.client = MongoClient(self.uri)
             self.db = self.client[self.database_name]
             self._initialized = True
+            self.ensure_indexes()
 
     def get_collection(self, collection_name=None):
         """Retrieve a collection."""
         # Load default collection name from environment variables if not provided
         collection_name = collection_name or os.getenv('COLLECTION_NAME', 'default_collection')
         return self.db[collection_name]
+
+    def ensure_indexes(self, collection_name=None) -> None:
+        """Create indexes used by news load and RAG sync paths."""
+        collection = self.get_collection(collection_name)
+        collection.create_index(
+            [("ticker", ASCENDING), ("posted", DESCENDING)],
+            name="ticker_posted",
+        )
+        collection.create_index([("synced", ASCENDING)], name="synced")
 
     def insert_one(self, collection_name, document):
         """Insert a single document into a collection."""

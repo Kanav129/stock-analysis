@@ -34,6 +34,7 @@ export function AnalysisProgressTracker() {
       const d = q.state.data as AnalysisProgress | undefined;
       return d?.running ? 800 : 15000;
     },
+    refetchIntervalInBackground: true,
   });
 
   const cancelMut = useMutation({

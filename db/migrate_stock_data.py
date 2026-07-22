@@ -95,6 +95,12 @@ def migrate_stock_data_schema() -> None:
                 ON stock_data (ticker, bar_interval, bar_ts DESC)
                 """
             )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_stock_data_ticker_date
+                ON stock_data (ticker, date DESC, bar_interval, bar_ts DESC)
+                """
+            )
 
             conn.commit()
             logger.info("stock_data schema migration completed (unique ticker/ts/interval).")
