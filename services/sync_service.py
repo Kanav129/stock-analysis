@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import threading
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -102,6 +103,8 @@ class SyncService:
         self.universe = UniverseService()
         self._last_sync: Optional[datetime] = None
         self._running = False
+        self._run_generation = 0
+        self._generation_lock = threading.Lock()
         self._task: Optional[asyncio.Task] = None
         self._status: dict[str, Any] = {
             "status": "idle",
@@ -131,13 +134,14 @@ class SyncService:
 
     def get_status(self) -> dict[str, Any]:
         checkpoint = rcs.load_sync()
+        universe = [str(ticker).upper() for ticker in self.universe.get_tickers()]
         return {
             **self._status,
             "running": self._running,
             "last_sync": self._last_sync.isoformat() if self._last_sync else self._status.get("last_sync"),
             "daily": rcs.daily_sync_summary(
                 checkpoint,
-                self._status.get("tickers") or None,
+                universe,
             ),
         }
 
@@ -297,6 +301,9 @@ class SyncService:
             rcs.save_sync(checkpoint, day=day)
             return {"started": False, "message": "No event loop available", **self.get_status()}
 
+        with self._generation_lock:
+            self._run_generation += 1
+            generation = self._run_generation
         self._task = loop.create_task(
             self._run_worker(
                 target,
@@ -305,6 +312,7 @@ class SyncService:
                 need_vectors,
                 checkpoint_seed=checkpoint,
                 day=day,
+                generation=generation,
             )
         )
         logger.info(
@@ -353,24 +361,53 @@ class SyncService:
         *,
         checkpoint_seed: dict[str, Any],
         day: str,
+        generation: int | None = None,
     ) -> None:
+        generation = self._run_generation if generation is None else generation
         checkpoint = dict(checkpoint_seed)
         errors: list[dict[str, str]] = list(checkpoint.get("errors") or [])
         completed: list[str] = []
         total = len(target)
+        abandoned_by_worker = False
+
+        def _is_current() -> bool:
+            with self._generation_lock:
+                return generation == self._run_generation
+
+        def _save_if_current(data: dict[str, Any]) -> bool:
+            with self._generation_lock:
+                if generation != self._run_generation:
+                    return False
+                rcs.save_sync(data, day=day)
+                return True
+
+        def _abandon_current() -> bool:
+            nonlocal abandoned_by_worker
+            with self._generation_lock:
+                if generation != self._run_generation:
+                    return False
+                self._run_generation += 1
+                abandoned_by_worker = True
+                return True
+
         try:
             loop = asyncio.get_running_loop()
 
             logger.info(f"Data sync running for {total} tickers: {target}")
 
             def _checkpoint_ticker(field: str, ticker: str) -> None:
-                done = checkpoint.setdefault(field, [])
-                normalized = ticker.upper()
-                if normalized not in {str(item).upper() for item in done}:
-                    done.append(normalized)
-                rcs.save_sync(checkpoint, day=day)
+                with self._generation_lock:
+                    if generation != self._run_generation:
+                        return
+                    done = checkpoint.setdefault(field, [])
+                    normalized = ticker.upper()
+                    if normalized not in {str(item).upper() for item in done}:
+                        done.append(normalized)
+                    rcs.save_sync(checkpoint, day=day)
 
             def _news_progress(ticker: str, index: int, total_n: int) -> None:
+                if not _is_current():
+                    return
                 done = news_todo[: max(0, index - 1)]
                 self._update(completed=list(done))
                 self._set_stage_progress(
@@ -383,6 +420,8 @@ class SyncService:
                 )
 
             def _price_progress(ticker: str, index: int, total_n: int) -> None:
+                if not _is_current():
+                    return
                 # index is 1-based "now working"; prior tickers are done for prices
                 done = prices_todo[: max(0, index - 1)]
                 completed.clear()
@@ -439,6 +478,8 @@ class SyncService:
                     ),
                     timeout=timeouts["news"],
                 )
+                if not _is_current():
+                    return
 
             if prices_todo:
                 stock_scraper = StockScraperFactory().create_scraper()
@@ -464,6 +505,8 @@ class SyncService:
                     ),
                     timeout=timeouts["prices"],
                 )
+                if not _is_current():
+                    return
 
             completed.clear()
             completed.extend(target)
@@ -481,13 +524,20 @@ class SyncService:
                         loop.run_in_executor(None, DocumentSyncManager().sync_documents),
                         timeout=timeouts["vectors"],
                     )
+                    if not _is_current():
+                        return
                     checkpoint["vectors_done"] = True
-                    rcs.save_sync(checkpoint, day=day)
+                    _save_if_current(checkpoint)
                 except Exception as exc:
+                    if not _is_current():
+                        return
                     logger.error(f"Chroma sync failed: {exc}")
                     errors.append({"ticker": "*", "error": f"chroma_sync: {exc}"})
                     checkpoint.update(status="partial", errors=errors, vectors_done=False)
-                    rcs.save_sync(checkpoint, day=day)
+                    terminal_checkpoint = dict(checkpoint)
+                    if not _abandon_current():
+                        return
+                    rcs.save_sync(terminal_checkpoint, day=day)
                     self._update(
                         status="partial",
                         stage="vectors",
@@ -508,7 +558,8 @@ class SyncService:
                     errors=errors,
                     finished_at=finished_at,
                 )
-                rcs.save_sync(checkpoint, day=day)
+                if not _save_if_current(checkpoint):
+                    return
                 self._update(
                     status="partial",
                     message="Sync finished, but some tickers are incomplete.",
@@ -528,8 +579,11 @@ class SyncService:
                 vectors_done=True,
                 finished_at=finished_at,
             )
-            rcs.save_sync(checkpoint, day=day)
+            if not _save_if_current(checkpoint):
+                return
             rcs.mark_last_sync_date(day)
+            if not _is_current():
+                return
             self._update(
                 status="completed",
                 stage="vectors",
@@ -544,10 +598,15 @@ class SyncService:
             )
             logger.info(f"Background sync completed for {total} tickers")
         except asyncio.TimeoutError:
+            if not _is_current():
+                return
             logger.error("Background sync timed out")
             errors.append({"ticker": "*", "error": "timeout"})
             checkpoint.update(status="partial", errors=errors)
-            rcs.save_sync(checkpoint, day=day)
+            terminal_checkpoint = dict(checkpoint)
+            if not _abandon_current():
+                return
+            rcs.save_sync(terminal_checkpoint, day=day)
             self._update(
                 status="partial",
                 message="Sync timed out. Try fewer tickers or re-run.",
@@ -555,10 +614,15 @@ class SyncService:
                 finished_at=datetime.utcnow().isoformat(),
             )
         except Exception as exc:
+            if not _is_current():
+                return
             logger.error(f"Background sync failed: {exc}")
             errors.append({"ticker": "*", "error": str(exc)})
             checkpoint.update(status="error", errors=errors)
-            rcs.save_sync(checkpoint, day=day)
+            terminal_checkpoint = dict(checkpoint)
+            if not _abandon_current():
+                return
+            rcs.save_sync(terminal_checkpoint, day=day)
             self._update(
                 status="error",
                 message=str(exc),
@@ -566,8 +630,9 @@ class SyncService:
                 finished_at=datetime.utcnow().isoformat(),
             )
         finally:
-            self._running = False
-            self._status["running"] = False
+            if _is_current() or abandoned_by_worker:
+                self._running = False
+                self._status["running"] = False
 
 
 sync_service = SyncService()

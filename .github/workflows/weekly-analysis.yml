@@ -119,13 +119,14 @@ jobs:
             echo "$body"
             running=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running', False))")
             status=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+            daily_status=$(echo "$body" | python3 -c "import sys,json; print((json.load(sys.stdin).get('daily') or {}).get('status',''))")
             if [ "$running" != "True" ] && [ "$status" != "running" ] && [ "$status" != "pending" ]; then
-              if [ "$status" = "failed" ]; then
-                echo "Analysis failed" >&2
-                exit 1
+              if { [ "$status" = "done" ] || [ "$status" = "completed" ]; } && [ "$daily_status" = "completed" ]; then
+                echo "Analysis finished successfully"
+                exit 0
               fi
-              echo "Analysis finished with status=${status}"
-              exit 0
+              echo "Analysis failed with status=${status}, daily.status=${daily_status}" >&2
+              exit 1
             fi
             sleep "$POLL_SECONDS"
           done

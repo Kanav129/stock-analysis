@@ -122,12 +122,12 @@ jobs:
             running=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running', False))")
             status=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
             if [ "$running" != "True" ] && [ "$status" != "running" ]; then
-              if [ "$status" = "error" ]; then
-                echo "Sync failed" >&2
-                exit 1
+              if [ "$status" = "completed" ]; then
+                echo "Sync finished successfully"
+                exit 0
               fi
-              echo "Sync finished with status=${status}"
-              exit 0
+              echo "Sync failed with status=${status}" >&2
+              exit 1
             fi
             sleep "$POLL_SECONDS"
           done

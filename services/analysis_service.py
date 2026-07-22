@@ -152,10 +152,32 @@ class AnalysisService:
                 self._last_run.isoformat() if self._last_run else snap.get("last_run")
             )
             snap.pop("cancel_requested", None)
-        checkpoint = rcs.load_analysis()
+        day = rcs.today_key()
+        checkpoint = rcs.load_analysis(day)
+        universe = [str(ticker).upper() for ticker in self.universe.get_tickers()]
+        completed = [
+            dict(item)
+            for item in (checkpoint or {}).get("completed") or []
+            if isinstance(item, dict) and item.get("ticker")
+        ]
+        checkpoint_done = {
+            str(item["ticker"]).upper()
+            for item in completed
+        }
+        try:
+            db_done = self._core_reports_done_today(day)
+        except Exception as exc:
+            logger.warning("Could not read today's core reports for status: %s", exc)
+            db_done = set()
+        effective_checkpoint = dict(checkpoint or {})
+        effective_checkpoint["completed"] = completed + [
+            {"ticker": ticker}
+            for ticker in sorted(db_done)
+            if ticker not in checkpoint_done
+        ]
         snap["daily"] = rcs.daily_analysis_summary(
-            checkpoint,
-            snap.get("tickers") or None,
+            effective_checkpoint,
+            universe,
         )
         return snap
 

@@ -59,7 +59,8 @@ def test_start_returns_already_completed_today_from_hybrid_done_set():
     assert result["started"] is False
     assert result["reason"] == "already_completed_today"
     assert result["date"] == "2026-07-22"
-    done_today.assert_called_once_with("2026-07-22")
+    assert done_today.call_count == 2
+    assert all(call.args == ("2026-07-22",) for call in done_today.call_args_list)
     assert saved == [(
         {
             **checkpoint,
@@ -157,11 +158,15 @@ def test_start_materializes_db_done_when_checkpoint_is_missing():
 def test_get_status_embeds_daily_analysis_summary():
     svc = _service()
     svc._progress["tickers"] = ["AAPL"]
+    universe = ["AAPL", "MSFT"]
     checkpoint = {"status": "partial", "completed": [{"ticker": "AAPL"}]}
     daily = {"status": "partial", "can_resume": True}
 
     with (
+        patch.object(svc.universe, "get_tickers", return_value=universe),
+        patch("services.analysis_service.rcs.today_key", return_value="2026-07-22"),
         patch("services.analysis_service.rcs.load_analysis", return_value=checkpoint),
+        patch.object(svc, "_core_reports_done_today", return_value=set()),
         patch(
             "services.analysis_service.rcs.daily_analysis_summary",
             return_value=daily,
@@ -170,7 +175,31 @@ def test_get_status_embeds_daily_analysis_summary():
         result = svc.get_status()
 
     assert result["daily"] == daily
-    summarize.assert_called_once_with(checkpoint, ["AAPL"])
+    summary_checkpoint, summary_universe = summarize.call_args.args
+    assert summary_checkpoint == checkpoint
+    assert summary_universe == universe
+
+
+def test_get_status_daily_summary_includes_core_reports_done_today():
+    svc = _service()
+    universe = ["AAPL", "MSFT"]
+    checkpoint = {"status": "partial", "completed": []}
+
+    with (
+        patch.object(svc.universe, "get_tickers", return_value=universe),
+        patch("services.analysis_service.rcs.today_key", return_value="2026-07-22"),
+        patch("services.analysis_service.rcs.load_analysis", return_value=checkpoint),
+        patch.object(
+            svc,
+            "_core_reports_done_today",
+            return_value={"AAPL", "MSFT"},
+        ) as done_today,
+    ):
+        result = svc.get_status()
+
+    assert result["daily"]["already_completed_today"] is True
+    assert result["daily"]["completed_count"] == 2
+    done_today.assert_called_once_with("2026-07-22")
 
 
 def test_worker_checkpoints_each_success_and_completes():
@@ -209,7 +238,7 @@ def test_worker_checkpoints_each_success_and_completes():
     assert snapshots[-1][0]["status"] == "completed"
     assert {day for _, day in snapshots} == {"2026-07-22"}
     mark_last.assert_called_once_with("2026-07-22")
-    assert svc.get_status()["status"] == "done"
+    assert svc._progress["status"] == "done"
 
 
 def test_worker_failure_persists_partial_checkpoint():

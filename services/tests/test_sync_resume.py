@@ -148,10 +148,12 @@ def test_start_resumes_todos_and_sizes_timeouts_from_remaining_counts():
 def test_get_status_embeds_daily_summary():
     svc = SyncService()
     svc._status["tickers"] = ["AAPL"]
+    universe = ["AAPL", "MSFT"]
     cp = {"status": "partial", "news_done": ["AAPL"]}
     daily = {"status": "partial", "can_resume": True}
 
     with (
+        patch.object(svc.universe, "get_tickers", return_value=universe),
         patch("services.sync_service.rcs.load_sync", return_value=cp),
         patch(
             "services.sync_service.rcs.daily_sync_summary",
@@ -161,7 +163,51 @@ def test_get_status_embeds_daily_summary():
         result = svc.get_status()
 
     assert result["daily"] == daily
-    summarize.assert_called_once_with(cp, ["AAPL"])
+    summarize.assert_called_once_with(cp, universe)
+
+
+def test_stale_worker_callback_does_not_save_after_generation_changes():
+    svc = SyncService()
+    svc._running = True
+    svc._run_generation = 1
+    cp = {
+        "status": "running",
+        "tickers": ["AAPL"],
+        "news_done": [],
+        "prices_done": ["AAPL"],
+        "vectors_done": True,
+        "errors": [],
+    }
+    news = MagicMock()
+
+    def abandon_then_callback(tickers, on_progress=None, on_ticker_done=None):
+        svc._run_generation += 1
+        on_ticker_done("AAPL")
+
+    news.scrape_all_tickers.side_effect = abandon_then_callback
+
+    with (
+        patch(
+            "services.sync_service.NewsScraperFactory.create_scraper",
+            return_value=news,
+        ),
+        patch("services.sync_service.rcs.save_sync") as save_sync,
+        patch("services.sync_service.rcs.mark_last_sync_date") as mark_last,
+    ):
+        asyncio.run(
+            svc._run_worker(
+                ["AAPL"],
+                ["AAPL"],
+                [],
+                False,
+                checkpoint_seed=cp,
+                day="2026-07-22",
+                generation=1,
+            )
+        )
+
+    save_sync.assert_not_called()
+    mark_last.assert_not_called()
 
 
 def test_worker_checkpoints_each_ticker_and_completes():
@@ -227,7 +273,7 @@ def test_worker_checkpoints_each_ticker_and_completes():
     assert snapshots[-1]["vectors_done"] is True
     assert saved_days and set(saved_days) == {"2026-07-22"}
     mark_last.assert_called_once_with("2026-07-22")
-    assert svc.get_status()["status"] == "completed"
+    assert svc._status["status"] == "completed"
 
 
 def test_worker_vector_failure_stays_partial_and_does_not_mark_last_sync():
@@ -268,8 +314,8 @@ def test_worker_vector_failure_stays_partial_and_does_not_mark_last_sync():
 
     assert snapshots[-1]["status"] == "partial"
     assert snapshots[-1]["vectors_done"] is False
-    assert svc.get_status()["status"] != "completed"
-    assert svc.get_status()["percent"] < 100
+    assert svc._status["status"] != "completed"
+    assert svc._status["percent"] < 100
     assert svc.last_sync is None
     mark_last.assert_not_called()
     news_factory.assert_not_called()
@@ -321,8 +367,8 @@ def test_worker_keeps_incomplete_coverage_partial():
     stock_factory.assert_not_called()
     assert snapshots[-1][0]["status"] == "partial"
     assert snapshots[-1][1] == "2026-07-22"
-    assert "some tickers" in svc.get_status()["message"].lower()
-    assert svc.get_status()["percent"] < 100
+    assert "some tickers" in svc._status["message"].lower()
+    assert svc._status["percent"] < 100
     assert svc.last_sync is None
     mark_last.assert_not_called()
 
