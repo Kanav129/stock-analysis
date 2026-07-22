@@ -65,10 +65,10 @@ export const api = {
   getHoldings: () => request<{ holdings: import('./types').Holding[]; summary: import('./types').PortfolioSummary }>('/holdings'),
   getRatings: () => request<{ ratings: import('./types').StockRating[] }>('/ratings'),
   getRatingHistory: (ticker: string) => request<{ ticker: string; history: import('./types').StockRating[] }>(`/ratings/${ticker}`),
-  runAnalysis: (tickers?: string[]) =>
+  runAnalysis: (tickers?: string[], opts?: { force?: boolean }) =>
     request<import('./types').AnalysisProgress>('/analysis/run', {
       method: 'POST',
-      body: JSON.stringify({ tickers: tickers ?? null }),
+      body: JSON.stringify({ tickers: tickers ?? null, force: Boolean(opts?.force) }),
     }),
   rescoreAnalysis: (tickers?: string[]) =>
     request<import('./types').AnalysisProgress>('/analysis/rescore', {
@@ -76,9 +76,9 @@ export const api = {
       body: JSON.stringify({ tickers: tickers ?? null }),
     }),
   cancelAnalysis: () => request<import('./types').AnalysisProgress>('/analysis/cancel', { method: 'POST' }),
-  syncData: (tickers?: string[]) => request<{ started: boolean; message: string; tickers: string[]; last_sync?: string; errors?: { stage: string; error: string }[] }>('/sync/data', {
+  syncData: (tickers?: string[], opts?: { force?: boolean }) => request<{ started: boolean; message: string; tickers: string[]; last_sync?: string; errors?: { stage: string; error: string }[] }>('/sync/data', {
     method: 'POST',
-    body: JSON.stringify({ tickers: tickers ?? null }),
+    body: JSON.stringify({ tickers: tickers ?? null, force: Boolean(opts?.force) }),
   }),
   getSyncStatus: () => request<import('./types').SyncProgress>('/sync/status'),
   getAnalysisStatus: () => request<import('./types').AnalysisProgress>('/analysis/status'),

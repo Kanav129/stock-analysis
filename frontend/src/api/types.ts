@@ -155,6 +155,18 @@ export interface ForecastPoint {
   volume: number;
 }
 
+export interface DailyRunSummary {
+  date: string;
+  timezone: string;
+  status: string;
+  can_resume: boolean;
+  already_completed_today: boolean;
+  news_done_count?: number;
+  prices_done_count?: number;
+  completed_count?: number;
+  finished_at: string | null;
+}
+
 export interface AnalysisProgress {
   running: boolean;
   status: 'idle' | 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
@@ -173,6 +185,7 @@ export interface AnalysisProgress {
   finished_at: string | null;
   last_run: string | null;
   started?: boolean;
+  daily?: DailyRunSummary;
 }
 
 export interface SyncProgress {
@@ -192,4 +205,5 @@ export interface SyncProgress {
   finished_at: string | null;
   last_sync: string | null;
   started?: boolean;
+  daily?: DailyRunSummary;
 }
