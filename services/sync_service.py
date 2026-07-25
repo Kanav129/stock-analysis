@@ -134,6 +134,15 @@ class SyncService:
 
     def get_status(self) -> dict[str, Any]:
         checkpoint = rcs.load_sync()
+        # After a Render recycle, RAM is idle but the checkpoint may still say
+        # "running". Heal to partial so UI/cron know they can resume.
+        if checkpoint and checkpoint.get("status") == "running" and not self._running:
+            checkpoint = dict(checkpoint)
+            checkpoint["status"] = "partial"
+            try:
+                rcs.save_sync(checkpoint)
+            except Exception as exc:
+                logger.warning("Could not heal stale sync checkpoint: %s", exc)
         universe = [str(ticker).upper() for ticker in self.universe.get_tickers()]
         return {
             **self._status,

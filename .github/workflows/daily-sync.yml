@@ -112,24 +112,54 @@ jobs:
           BASE="${BASE%/api}"
           MAX_POLLS="${MAX_POLLS:-240}"
           POLL_SECONDS="${POLL_SECONDS:-30}"
+          RESUMES=0
+          MAX_RESUMES=30
           echo "Polling /sync/status up to ${MAX_POLLS} times every ${POLL_SECONDS}s"
-          # Poll keeps the free dyno awake while the background job runs.
+          # If Render restarts mid-run, in-memory status becomes idle but the
+          # daily checkpoint still has remaining work — re-POST /cron/sync.
           for i in $(seq 1 "$MAX_POLLS"); do
             body=$(curl -fsS --max-time 60 \
               "${BASE}/sync/status" \
               -H "Authorization: Bearer ${ADMIN_KEY}")
             echo "$body"
-            running=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running', False))")
-            status=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-            if [ "$running" != "True" ] && [ "$status" != "running" ]; then
-              if [ "$status" = "completed" ]; then
-                echo "Sync finished successfully"
-                exit 0
-              fi
-              echo "Sync failed with status=${status}" >&2
-              exit 1
+            eval "$(SYNC_BODY="$body" python3 <<'PY'
+          import json, os
+          d = json.loads(os.environ["SYNC_BODY"])
+          daily = d.get("daily") or {}
+          def sh(name, value):
+              print(f'{name}={json.dumps(str(value))}')
+          sh("running", d.get("running", False))
+          sh("status", d.get("status", ""))
+          sh("daily_status", daily.get("status", ""))
+          sh("can_resume", bool(daily.get("can_resume")))
+          sh("already_done", bool(daily.get("already_completed_today")))
+          PY
+          )"
+            if [ "$running" = "True" ] || [ "$status" = "running" ]; then
+              sleep "$POLL_SECONDS"
+              continue
             fi
-            sleep "$POLL_SECONDS"
+            if [ "$already_done" = "True" ] || [ "$status" = "completed" ] || [ "$daily_status" = "completed" ]; then
+              echo "Sync finished successfully"
+              exit 0
+            fi
+            if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
+              if [ "$RESUMES" -ge "$MAX_RESUMES" ]; then
+                echo "Exceeded ${MAX_RESUMES} resume attempts (status=${status}, daily=${daily_status})" >&2
+                exit 1
+              fi
+              RESUMES=$((RESUMES + 1))
+              echo "Interrupted mid-sync — resume ${RESUMES}/${MAX_RESUMES}…"
+              curl -fsS --max-time 120 \
+                -X POST "${BASE}/cron/sync" \
+                -H "Authorization: Bearer ${ADMIN_KEY}" \
+                -H "Content-Type: application/json" \
+                -d '{}' || true
+              sleep "$POLL_SECONDS"
+              continue
+            fi
+            echo "Sync failed with status=${status}, daily.status=${daily_status}" >&2
+            exit 1
           done
           echo "Timed out waiting for sync after ${MAX_POLLS} polls" >&2
           exit 1

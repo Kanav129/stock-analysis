@@ -154,6 +154,19 @@ class AnalysisService:
             snap.pop("cancel_requested", None)
         day = rcs.today_key()
         checkpoint = rcs.load_analysis(day)
+        # After a Render recycle, RAM is idle but the checkpoint may still say
+        # "running". Heal to partial so UI/cron know they can resume.
+        if (
+            checkpoint
+            and checkpoint.get("status") == "running"
+            and not snap.get("running")
+        ):
+            checkpoint = dict(checkpoint)
+            checkpoint["status"] = "partial"
+            try:
+                rcs.save_analysis(checkpoint, day=day)
+            except Exception as exc:
+                logger.warning("Could not heal stale analysis checkpoint: %s", exc)
         universe = [str(ticker).upper() for ticker in self.universe.get_tickers()]
         completed = [
             dict(item)

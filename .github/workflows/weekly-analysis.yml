@@ -110,25 +110,61 @@ jobs:
           BASE="${BASE%/api}"
           MAX_POLLS="${MAX_POLLS:-150}"
           POLL_SECONDS="${POLL_SECONDS:-60}"
+          RESUMES=0
+          MAX_RESUMES=30
           echo "Polling /analysis/status up to ${MAX_POLLS} times every ${POLL_SECONDS}s"
           # Poll keeps the free dyno awake while the background job runs.
+          # If Render restarts mid-run, in-memory status becomes idle but the
+          # daily checkpoint still has remaining work — re-POST /cron/analyze.
           for i in $(seq 1 "$MAX_POLLS"); do
             body=$(curl -fsS --max-time 60 \
               "${BASE}/analysis/status" \
               -H "Authorization: Bearer ${ADMIN_KEY}")
             echo "$body"
-            running=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running', False))")
-            status=$(echo "$body" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-            daily_status=$(echo "$body" | python3 -c "import sys,json; print((json.load(sys.stdin).get('daily') or {}).get('status',''))")
-            if [ "$running" != "True" ] && [ "$status" != "running" ] && [ "$status" != "pending" ]; then
-              if { [ "$status" = "done" ] || [ "$status" = "completed" ]; } && [ "$daily_status" = "completed" ]; then
-                echo "Analysis finished successfully"
-                exit 0
-              fi
-              echo "Analysis failed with status=${status}, daily.status=${daily_status}" >&2
-              exit 1
+            eval "$(ANALYSIS_BODY="$body" python3 <<'PY'
+          import json, os
+          d = json.loads(os.environ["ANALYSIS_BODY"])
+          daily = d.get("daily") or {}
+          def sh(name, value):
+              print(f'{name}={json.dumps(str(value))}')
+          sh("running", d.get("running", False))
+          sh("status", d.get("status", ""))
+          sh("daily_status", daily.get("status", ""))
+          sh("can_resume", bool(daily.get("can_resume")))
+          sh("already_done", bool(daily.get("already_completed_today")))
+          sh("completed_count", daily.get("completed_count") or 0)
+          PY
+          )"
+            if [ "$running" = "True" ] || [ "$status" = "running" ] || [ "$status" = "pending" ]; then
+              sleep "$POLL_SECONDS"
+              continue
             fi
-            sleep "$POLL_SECONDS"
+            if [ "$already_done" = "True" ]; then
+              echo "Analysis finished successfully (already_completed_today)"
+              exit 0
+            fi
+            if { [ "$status" = "done" ] || [ "$status" = "completed" ]; } && [ "$daily_status" = "completed" ]; then
+              echo "Analysis finished successfully (completed_count=${completed_count})"
+              exit 0
+            fi
+            # Dyno recycle / crash: process idle but HKT checkpoint incomplete.
+            if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
+              if [ "$RESUMES" -ge "$MAX_RESUMES" ]; then
+                echo "Exceeded ${MAX_RESUMES} resume attempts (status=${status}, daily=${daily_status})" >&2
+                exit 1
+              fi
+              RESUMES=$((RESUMES + 1))
+              echo "Interrupted with ${completed_count} done — resume ${RESUMES}/${MAX_RESUMES}…"
+              curl -fsS --max-time 120 \
+                -X POST "${BASE}/cron/analyze" \
+                -H "Authorization: Bearer ${ADMIN_KEY}" \
+                -H "Content-Type: application/json" \
+                -d '{}' || true
+              sleep "$POLL_SECONDS"
+              continue
+            fi
+            echo "Analysis failed with status=${status}, daily.status=${daily_status}" >&2
+            exit 1
           done
           echo "Timed out waiting for analysis after ${MAX_POLLS} polls" >&2
           exit 1
