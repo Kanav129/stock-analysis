@@ -52,7 +52,7 @@ def test_on_ticker_done_skips_failed_price(mock_scrape):
     assert done == ["AAPL", "NVDA"]
 
 
-def test_upsert_interval_frame_uses_single_batch_execute():
+def test_upsert_interval_frame_uses_execute_values():
     idx = pd.date_range("2024-01-15 14:30", periods=3, freq="1min", tz="UTC")
     frame = pd.DataFrame(
         {
@@ -66,21 +66,22 @@ def test_upsert_interval_frame_uses_single_batch_execute():
     )
     scraper = StockDataScraper()
     scraper.db_client = MagicMock()
-    scraper.db_client.execute_many = MagicMock(side_effect=lambda sql, rows: len(rows))
+    scraper.db_client.execute_values = MagicMock(side_effect=lambda sql, rows, **kw: len(rows))
 
     count = scraper.upsert_interval_frame("AAPL", frame, BAR_1M)
 
     assert count == 3
-    scraper.db_client.execute_many.assert_called_once()
-    assert scraper.db_client.execute_query.call_count == 0
-    sql, rows = scraper.db_client.execute_many.call_args.args
+    scraper.db_client.execute_values.assert_called_once()
+    scraper.db_client.execute_many.assert_not_called()
+    sql, rows = scraper.db_client.execute_values.call_args.args
     assert "ON CONFLICT" in sql
+    assert "VALUES %s" in sql
     assert len(rows) == 3
     assert rows[0][0] == "AAPL"
     assert rows[0][3] == "1m"
 
 
-def test_upsert_daily_frame_uses_single_batch_execute():
+def test_upsert_daily_frame_uses_execute_values():
     idx = pd.to_datetime(["2024-01-15", "2024-01-16"], utc=True)
     frame = pd.DataFrame(
         {
@@ -94,15 +95,15 @@ def test_upsert_daily_frame_uses_single_batch_execute():
     )
     scraper = StockDataScraper()
     db = MagicMock()
-    db.execute_many.side_effect = lambda sql, rows: len(rows)
+    db.execute_values.side_effect = lambda sql, rows, **kw: len(rows)
     scraper.db_client = db
 
     count = scraper.upsert_daily_frame("MSFT", frame)
 
     assert count == 2
-    db.execute_many.assert_called_once()
-    assert db.execute_query.call_count == 0
-    _sql, rows = db.execute_many.call_args.args
+    db.execute_values.assert_called_once()
+    db.execute_many.assert_not_called()
+    _sql, rows = db.execute_values.call_args.args
     assert len(rows) == 2
     assert rows[0][0] == "MSFT"
     assert rows[0][3] == "1d"
@@ -121,7 +122,7 @@ def _sample_1m_frame() -> pd.DataFrame:
     )
 
 
-def test_sync_band_uses_short_period_when_recent_bars_exist():
+def test_sync_band_delta_fetches_from_latest_minus_overlap():
     scraper = StockDataScraper()
     scraper.db_client = MagicMock()
     recent = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -131,10 +132,14 @@ def test_sync_band_uses_short_period_when_recent_bars_exist():
 
     scraper.sync_band("AAPL", BAR_1M)
 
-    scraper.fetch_history.assert_called_once_with("AAPL", period="2d", interval="1m")
+    scraper.fetch_history.assert_called_once()
+    kwargs = scraper.fetch_history.call_args.kwargs
+    assert kwargs["interval"] == "1m"
+    assert "period" not in kwargs
+    assert kwargs["start"] == recent - timedelta(hours=2)
 
 
-def test_sync_band_uses_long_period_when_no_recent_bars():
+def test_sync_band_backfills_long_period_when_no_bars():
     scraper = StockDataScraper()
     scraper.db_client = MagicMock()
     scraper.db_client.fetch_query.return_value = ([], ["latest"])
@@ -144,6 +149,36 @@ def test_sync_band_uses_long_period_when_no_recent_bars():
     scraper.sync_band("AAPL", BAR_1M)
 
     scraper.fetch_history.assert_called_once_with("AAPL", period="7d", interval="1m")
+
+
+def test_sync_band_skips_when_latest_is_very_fresh():
+    scraper = StockDataScraper()
+    scraper.db_client = MagicMock()
+    recent = datetime.now(timezone.utc) - timedelta(minutes=1)
+    scraper.db_client.fetch_query.return_value = ([(recent,)], ["latest"])
+    scraper.fetch_history = MagicMock()
+    scraper.upsert_interval_frame = MagicMock()
+
+    n = scraper.sync_band("AAPL", BAR_1M)
+
+    assert n == 0
+    scraper.fetch_history.assert_not_called()
+    scraper.upsert_interval_frame.assert_not_called()
+
+
+def test_refresh_live_1m_uses_delta_when_recent_1m_exists():
+    scraper = StockDataScraper()
+    scraper.db_client = MagicMock()
+    recent = datetime.now(timezone.utc) - timedelta(minutes=10)
+    scraper.db_client.fetch_query.return_value = ([(recent,)], ["latest"])
+    scraper.fetch_history = MagicMock(return_value=_sample_1m_frame())
+    scraper.upsert_interval_frame = MagicMock(return_value=1)
+
+    assert scraper.refresh_live_1m("aapl") == 1
+    kwargs = scraper.fetch_history.call_args.kwargs
+    assert kwargs["interval"] == "1m"
+    assert kwargs["start"] == recent - timedelta(hours=2)
+    assert "period" not in kwargs
 
 
 def test_chart_interval_mapping():
@@ -168,8 +203,10 @@ def test_fetch_last_us_session_queries_ny_date():
     assert params == ("AAPL", "1m", "AAPL", "1m")
 
 
-def test_refresh_live_1m_uses_1d_then_2d_fallback():
+def test_refresh_live_1m_uses_1d_then_2d_fallback_when_no_local_bars():
     scraper = StockDataScraper()
+    scraper.db_client = MagicMock()
+    scraper.db_client.fetch_query.return_value = ([], ["latest"])
     scraper.fetch_history = MagicMock(side_effect=[pd.DataFrame(), _sample_1m_frame()])
     scraper.upsert_interval_frame = MagicMock(return_value=1)
 
@@ -183,6 +220,8 @@ def test_refresh_live_1m_uses_1d_then_2d_fallback():
 
 def test_refresh_live_1m_skips_fallback_when_1d_has_data():
     scraper = StockDataScraper()
+    scraper.db_client = MagicMock()
+    scraper.db_client.fetch_query.return_value = ([], ["latest"])
     scraper.fetch_history = MagicMock(return_value=_sample_1m_frame())
     scraper.upsert_interval_frame = MagicMock(return_value=3)
 

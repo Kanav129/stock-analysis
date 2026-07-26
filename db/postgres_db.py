@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from typing import Iterator, Optional
 
 from psycopg2 import OperationalError, sql
+from psycopg2.extras import execute_values
 from psycopg2.pool import ThreadedConnectionPool
 from utils.logger import logger
 
@@ -150,6 +151,25 @@ class PostgresDBClient:
                 return len(rows)
             except Exception as e:
                 logger.error(f"Error executing batch query: {e}")
+                raise
+
+    def execute_values(self, query, params_seq, *, page_size: int = 500):
+        """Bulk INSERT/UPSERT via psycopg2 execute_values (multi-row VALUES pages).
+
+        ``query`` must use a single ``VALUES %s`` placeholder (not per-column %s).
+        """
+        rows = list(params_seq or [])
+        if not rows:
+            return 0
+        with self.checkout() as conn:
+            try:
+                cursor = conn.cursor()
+                execute_values(cursor, query, rows, page_size=page_size)
+                conn.commit()
+                cursor.close()
+                return len(rows)
+            except Exception as e:
+                logger.error(f"Error executing values batch: {e}")
                 raise
 
     def fetch_query(self, query, params=None):

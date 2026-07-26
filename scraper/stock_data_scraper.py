@@ -7,13 +7,15 @@ Intervals kept (after compaction):
   1h  ~35d  → chart 1M
   1d  forever → chart 3M+
 
-Daily sync gap-fills each band from Yahoo, then compacts aged fine bars
-into coarser intervals. Legacy ``5m`` rows are migrated once then deleted.
+Daily sync delta-fetches each band from Yahoo (from last bar − overlap),
+bulk-upserts with execute_values, then compacts aged fine bars into coarser
+intervals. Legacy ``5m`` rows are migrated once then deleted.
 """
 
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
@@ -31,6 +33,8 @@ BAR_30M = "30m"
 BAR_1H = "1h"
 BAR_5M_LEGACY = "5m"
 
+UPSERT_PAGE_SIZE = 500
+
 # Snap bar timestamps to interval grids (seconds).
 SNAP_SEC = {
     BAR_1M: 60,
@@ -39,35 +43,46 @@ SNAP_SEC = {
     BAR_1H: 3600,
 }
 
-# Retention windows (calendar days) and Yahoo fetch policy per band.
+# Retention windows + Yahoo policy. Delta sync uses overlap/skip; long_period
+# is the cold-start / stale backfill window.
 BANDS: dict[str, dict[str, Any]] = {
     BAR_1M: {
         "keep_days": 2,
         "fresh_age": timedelta(hours=36),
+        "overlap": timedelta(hours=2),
+        "skip_age": timedelta(minutes=3),
         "short_period": "2d",
         "long_period": "7d",
     },
     BAR_15M: {
         "keep_days": 8,
         "fresh_age": timedelta(days=3),
+        "overlap": timedelta(days=1),
+        "skip_age": timedelta(minutes=12),
         "short_period": "5d",
         "long_period": "1mo",
     },
     BAR_30M: {
         "keep_days": 16,
         "fresh_age": timedelta(days=4),
+        "overlap": timedelta(days=1),
+        "skip_age": timedelta(minutes=25),
         "short_period": "5d",
         "long_period": "1mo",
     },
     BAR_1H: {
         "keep_days": 35,
         "fresh_age": timedelta(days=4),
+        "overlap": timedelta(days=1),
+        "skip_age": timedelta(minutes=50),
         "short_period": "5d",
         "long_period": "1mo",
     },
     BAR_1D: {
         "keep_days": None,
         "fresh_age": timedelta(days=4),
+        "overlap": timedelta(days=5),
+        "skip_age": timedelta(hours=12),
         "short_period": "5d",
         "long_period": "1mo",
     },
@@ -81,9 +96,10 @@ COMPACTION_STEPS: list[tuple[str, str]] = [
     (BAR_1H, BAR_1D),
 ]
 
+# Multi-row VALUES template for psycopg2.extras.execute_values.
 UPSERT_SQL = """
 INSERT INTO stock_data (ticker, date, bar_ts, bar_interval, open, high, low, close, volume)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES %s
 ON CONFLICT (ticker, bar_ts, bar_interval) DO UPDATE SET
     date = EXCLUDED.date,
     open = EXCLUDED.open,
@@ -102,6 +118,17 @@ def _to_python(value: Any) -> Any:
     if isinstance(value, float) and value != value:  # NaN
         return None
     return value
+
+
+def _fmt_age(age: timedelta) -> str:
+    secs = int(age.total_seconds())
+    if secs < 120:
+        return f"{secs}s"
+    mins = secs // 60
+    if mins < 120:
+        return f"{mins}m"
+    hours = mins // 60
+    return f"{hours}h"
 
 
 def _as_utc_ts(value: Any) -> datetime:
@@ -144,50 +171,76 @@ class StockDataScraper:
             port=os.getenv("POSTGRES_PORT", 5432),
         )
 
-    def fetch_history(self, ticker: str, period: str, interval: str) -> pd.DataFrame:
-        ticker_data = yf.Ticker(ticker)
-        return ticker_data.history(period=period, interval=interval, auto_adjust=False)
-
-    def _row_params(
+    def fetch_history(
         self,
         ticker: str,
-        bar_ts: datetime,
-        bar_interval: str,
-        row: pd.Series,
-    ) -> tuple:
-        trade_date = bar_ts.astimezone(timezone.utc).date()
-        return (
-            ticker,
-            trade_date,
-            bar_ts,
-            bar_interval,
-            _to_python(row.get("Open")),
-            _to_python(row.get("High")),
-            _to_python(row.get("Low")),
-            _to_python(row.get("Close")),
-            int(_to_python(row.get("Volume")) or 0),
-        )
+        interval: str,
+        *,
+        period: Optional[str] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> pd.DataFrame:
+        ticker_data = yf.Ticker(ticker)
+        kwargs: dict[str, Any] = {"interval": interval, "auto_adjust": False}
+        if start is not None:
+            kwargs["start"] = start
+            if end is not None:
+                kwargs["end"] = end
+        elif period is not None:
+            kwargs["period"] = period
+        else:
+            raise ValueError("fetch_history requires period= or start=")
+        return ticker_data.history(**kwargs)
+
+    def _frame_to_rows(self, ticker: str, frame: pd.DataFrame, interval: str) -> list[tuple]:
+        """Convert an OHLCV frame to upsert tuples (vectorized; no iterrows)."""
+        if frame is None or frame.empty:
+            return []
+        cols = {c.lower(): c for c in frame.columns}
+        for need in ("open", "high", "low", "close", "volume"):
+            if need not in cols:
+                return []
+        opens = frame[cols["open"]].to_numpy()
+        highs = frame[cols["high"]].to_numpy()
+        lows = frame[cols["low"]].to_numpy()
+        closes = frame[cols["close"]].to_numpy()
+        volumes = frame[cols["volume"]].to_numpy()
+        rows: list[tuple] = []
+        for i, idx in enumerate(frame.index):
+            if interval == BAR_1D:
+                bar_ts = _daily_bar_ts(idx)
+            else:
+                bar_ts = _snap_ts(_as_utc_ts(idx), interval)
+            trade_date = bar_ts.astimezone(timezone.utc).date()
+            rows.append(
+                (
+                    ticker,
+                    trade_date,
+                    bar_ts,
+                    interval,
+                    _to_python(opens[i]),
+                    _to_python(highs[i]),
+                    _to_python(lows[i]),
+                    _to_python(closes[i]),
+                    int(_to_python(volumes[i]) or 0),
+                )
+            )
+        return rows
 
     def upsert_daily_frame(self, ticker: str, frame: pd.DataFrame) -> int:
-        if frame is None or frame.empty:
+        rows = self._frame_to_rows(ticker, frame, BAR_1D)
+        if not rows:
             return 0
-        rows = [
-            self._row_params(ticker, _daily_bar_ts(idx), BAR_1D, row)
-            for idx, row in frame.iterrows()
-        ]
-        return self.db_client.execute_many(UPSERT_SQL, rows)
+        return self.db_client.execute_values(UPSERT_SQL, rows, page_size=UPSERT_PAGE_SIZE)
 
     def upsert_interval_frame(self, ticker: str, frame: pd.DataFrame, interval: str) -> int:
-        """Upsert OHLCV bars for a non-daily interval (snapped to grid)."""
-        if frame is None or frame.empty:
-            return 0
+        """Upsert OHLCV bars (bulk execute_values)."""
         if interval == BAR_1D:
             return self.upsert_daily_frame(ticker, frame)
-        rows = [
-            self._row_params(ticker, _snap_ts(_as_utc_ts(idx), interval), interval, row)
-            for idx, row in frame.iterrows()
-        ]
-        return self.db_client.execute_many(UPSERT_SQL, rows)
+        rows = self._frame_to_rows(ticker, frame, interval)
+        if not rows:
+            return 0
+        return self.db_client.execute_values(UPSERT_SQL, rows, page_size=UPSERT_PAGE_SIZE)
 
     # Back-compat name used by older tests / callers
     def upsert_intraday_frame(self, ticker: str, frame: pd.DataFrame, interval: str = BAR_1M) -> int:
@@ -207,9 +260,10 @@ class StockDataScraper:
         latest = rows[0][0]
         if latest.tzinfo is None:
             return latest.replace(tzinfo=timezone.utc)
-        return latest
+        return latest.astimezone(timezone.utc)
 
     def _fetch_period_for_band(self, ticker: str, interval: str) -> str:
+        """Cold/stale period choice (used when delta is not applicable)."""
         cfg = BANDS[interval]
         latest = self._latest_bar_ts(ticker, interval)
         if latest is None:
@@ -225,36 +279,100 @@ class StockDataScraper:
         interval: str,
         on_detail: Optional[Callable[[str], None]] = None,
     ) -> int:
-        """Gap-fill one resolution band from Yahoo."""
-        period = self._fetch_period_for_band(ticker, interval)
+        """Delta gap-fill one resolution band from Yahoo, then bulk upsert."""
         cfg = BANDS[interval]
-        mode = "refresh" if period == cfg["short_period"] else "backfill"
-        if on_detail:
-            on_detail(f"{ticker} · fetch {interval} · {mode} ({period})")
-        frame = self.fetch_history(ticker, period=period, interval=interval)
-        if (frame is None or frame.empty) and period != BANDS[interval]["short_period"]:
+        latest = self._latest_bar_ts(ticker, interval)
+        now = datetime.now(timezone.utc)
+
+        if latest is not None:
+            age = now - latest
+            if age <= cfg["skip_age"]:
+                if on_detail:
+                    on_detail(f"{ticker} · skip {interval} · fresh ({_fmt_age(age)})")
+                logger.info(f"{ticker}: skip {interval} (age={age})")
+                return 0
+
+        t0 = time.monotonic()
+        if latest is None:
+            period = cfg["long_period"]
+            mode = f"backfill ({period})"
             if on_detail:
-                on_detail(
-                    f"{ticker} · fetch {interval} · retry short window "
-                    f"({BANDS[interval]['short_period']})"
+                on_detail(f"{ticker} · fetch {interval} · {mode}")
+            frame = self.fetch_history(ticker, interval=interval, period=period)
+            if frame is None or frame.empty:
+                if on_detail:
+                    on_detail(
+                        f"{ticker} · fetch {interval} · retry short "
+                        f"({cfg['short_period']})"
+                    )
+                frame = self.fetch_history(
+                    ticker, interval=interval, period=cfg["short_period"]
                 )
-            frame = self.fetch_history(
-                ticker, period=BANDS[interval]["short_period"], interval=interval
+                mode = f"backfill ({cfg['short_period']})"
+        elif now - latest > cfg["fresh_age"]:
+            # Stale: full long window, then resume deltas next run.
+            period = cfg["long_period"]
+            mode = f"stale-backfill ({period})"
+            if on_detail:
+                on_detail(f"{ticker} · fetch {interval} · {mode}")
+            frame = self.fetch_history(ticker, interval=interval, period=period)
+            if frame is None or frame.empty:
+                start = latest - cfg["overlap"]
+                mode = f"delta since {start.isoformat()}"
+                if on_detail:
+                    on_detail(f"{ticker} · fetch {interval} · retry delta")
+                frame = self.fetch_history(ticker, interval=interval, start=start)
+        else:
+            start = latest - cfg["overlap"]
+            mode = f"delta since {start.strftime('%Y-%m-%d %H:%M')}Z"
+            if on_detail:
+                on_detail(f"{ticker} · fetch {interval} · {mode}")
+            frame = self.fetch_history(ticker, interval=interval, start=start)
+            if frame is None or frame.empty:
+                # Yahoo sometimes returns empty for start=; fall back to short period.
+                if on_detail:
+                    on_detail(
+                        f"{ticker} · fetch {interval} · retry short "
+                        f"({cfg['short_period']})"
+                    )
+                frame = self.fetch_history(
+                    ticker, interval=interval, period=cfg["short_period"]
+                )
+                mode = f"refresh ({cfg['short_period']})"
+
+        fetch_ms = int((time.monotonic() - t0) * 1000)
+        n_src = 0 if frame is None or frame.empty else len(frame)
+        if on_detail:
+            on_detail(
+                f"{ticker} · upsert {interval} · {n_src} bar(s) from Yahoo "
+                f"({fetch_ms}ms)…"
             )
-        if on_detail:
-            on_detail(f"{ticker} · upsert {interval} bars…")
+        t1 = time.monotonic()
         n = self.upsert_interval_frame(ticker, frame, interval)
-        logger.info(f"{ticker}: upserted {n} {interval} bar(s) (period={period})")
+        upsert_ms = int((time.monotonic() - t1) * 1000)
+        logger.info(
+            f"{ticker}: upserted {n} {interval} bar(s) ({mode}; "
+            f"fetch={fetch_ms}ms upsert={upsert_ms}ms)"
+        )
         if on_detail:
-            on_detail(f"{ticker} · {interval} done · {n} bar(s) · {mode} ({period})")
+            on_detail(
+                f"{ticker} · {interval} done · {n} bar(s) · {mode} "
+                f"(upsert {upsert_ms}ms)"
+            )
         return n
 
     def refresh_live_1m(self, ticker: str) -> int:
-        """Light intraday backfill: today's 1m bars (covers session + last few minutes)."""
+        """Light intraday backfill: delta from last 1m bar, else today/2d."""
         ticker = ticker.upper().strip()
-        frame = self.fetch_history(ticker, period="1d", interval=BAR_1M)
-        if frame is None or frame.empty:
-            frame = self.fetch_history(ticker, period="2d", interval=BAR_1M)
+        cfg = BANDS[BAR_1M]
+        latest = self._latest_bar_ts(ticker, BAR_1M)
+        if latest is not None:
+            start = latest - cfg["overlap"]
+            frame = self.fetch_history(ticker, interval=BAR_1M, start=start)
+        else:
+            frame = self.fetch_history(ticker, interval=BAR_1M, period="1d")
+            if frame is None or frame.empty:
+                frame = self.fetch_history(ticker, interval=BAR_1M, period="2d")
         n = self.upsert_interval_frame(ticker, frame, BAR_1M)
         logger.info(f"{ticker}: live-refresh upserted {n} 1m bar(s)")
         return n
@@ -303,7 +421,9 @@ class StockDataScraper:
                     )
                 )
             if upsert_rows:
-                self.db_client.execute_many(UPSERT_SQL, upsert_rows)
+                self.db_client.execute_values(
+                    UPSERT_SQL, upsert_rows, page_size=UPSERT_PAGE_SIZE
+                )
             return len(upsert_rows)
 
         step = SNAP_SEC[target_interval]
@@ -347,7 +467,9 @@ class StockDataScraper:
                 )
             )
         if upsert_rows:
-            self.db_client.execute_many(UPSERT_SQL, upsert_rows)
+            self.db_client.execute_values(
+                UPSERT_SQL, upsert_rows, page_size=UPSERT_PAGE_SIZE
+            )
         return len(upsert_rows)
 
     def compact_ladder(

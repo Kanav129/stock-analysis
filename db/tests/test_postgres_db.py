@@ -40,6 +40,37 @@ def test_execute_many_noop_on_empty():
     pool.getconn.assert_not_called()
 
 
+@patch("db.postgres_db.execute_values")
+def test_execute_values_batches_and_commits(mock_ev):
+    connection = MagicMock()
+    cursor = MagicMock()
+    connection.cursor.return_value = cursor
+    connection.closed = False
+    client, pool = _client_with_mock_conn(connection)
+
+    sql = "INSERT INTO t (a) VALUES %s ON CONFLICT DO NOTHING"
+    rows = [("a",), ("b",), ("c",)]
+    n = client.execute_values(sql, rows, page_size=500)
+
+    assert n == 3
+    mock_ev.assert_called_once()
+    assert mock_ev.call_args.args[0] is cursor
+    assert mock_ev.call_args.args[1] == sql
+    assert mock_ev.call_args.args[2] == rows
+    assert mock_ev.call_args.kwargs["page_size"] == 500
+    connection.commit.assert_called()
+    pool.putconn.assert_called()
+
+
+def test_execute_values_noop_on_empty():
+    connection = MagicMock()
+    connection.closed = False
+    client, _pool = _client_with_mock_conn(connection)
+
+    assert client.execute_values("INSERT INTO t VALUES %s", []) == 0
+    connection.cursor.assert_not_called()
+
+
 def test_fetch_query_returns_connection_to_pool():
     connection = MagicMock()
     cursor = MagicMock()
