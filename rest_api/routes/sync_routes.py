@@ -22,3 +22,9 @@ async def sync_data(body: Optional[SyncDataRequest] = None):
 @router.get("/sync/status")
 def sync_status():
     return sync_service.get_status()
+
+
+@router.post("/sync/cancel")
+def cancel_sync():
+    """Soft-cancel a running sync; completed tickers remain for resume."""
+    return sync_service.request_cancel()

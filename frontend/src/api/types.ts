@@ -66,6 +66,11 @@ export interface StockTechnicals {
 export interface PortfolioSummary {
   total_value: number;
   total_unrealized_pnl: number;
+  /** Weighted portfolio move vs prior daily closes. */
+  day_change_pct?: number | null;
+  day_change_value?: number | null;
+  /** Unrealized P&L as % of cost basis. */
+  overall_change_pct?: number | null;
   position_count: number;
   snapshot_at: string | null;
 }
@@ -164,6 +169,8 @@ export interface DailyRunSummary {
   news_done_count?: number;
   prices_done_count?: number;
   completed_count?: number;
+  /** Watchlist/holdings universe size for progress denominators. */
+  universe_count?: number;
   finished_at: string | null;
 }
 
@@ -201,6 +208,8 @@ export interface SyncProgress {
   errors: { ticker: string; error: string }[];
   percent: number;
   message: string | null;
+  /** Live sub-step (e.g. AAPL · fetch 1m · backfill (7d)). */
+  detail?: string | null;
   started_at: string | null;
   finished_at: string | null;
   last_sync: string | null;

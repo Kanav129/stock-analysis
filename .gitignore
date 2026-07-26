@@ -33,10 +33,16 @@ Thumbs.db
 frontend/node_modules/
 frontend/dist/
 frontend/dist-ssr/
+frontend/.vite/
 frontend/.impeccable/
+
+# Impeccable — keep design.json / live config; ignore ephemeral local output
+.impeccable/hook.cache.json
+.impeccable/critique/
 
 # Cursor / local agent tooling (not part of the app)
 .cursor/
+.superpowers/
 
 # Editor / OS
 .idea/
@@ -54,6 +60,10 @@ frontend/.impeccable/
 .cache/
 tmp/
 temp/
+*.pem
+*.key
+credentials.json
+secrets/
 
 # Frontend local env (also covered by frontend/.gitignore)
 frontend/.env

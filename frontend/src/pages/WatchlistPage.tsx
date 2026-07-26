@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { SyncDataButton } from '../components/SyncDataButton';
+import { DeskRunActions } from '../components/DeskRunActions';
 import { SyncProgressTracker } from '../components/SyncProgressTracker';
 import { WatchlistList } from '../components/WatchlistList';
 
@@ -25,14 +25,14 @@ export function WatchlistPage() {
 
   return (
     <div className="flex flex-col gap-8 animate-fade-up">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="font-display text-2xl font-semibold">Watchlist</h2>
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
             Add tickers you want to track. They will be included in daily scraping and AI analysis.
           </p>
         </div>
-        <SyncDataButton />
+        <DeskRunActions showAnalysis={false} />
       </div>
 
       <SyncProgressTracker />

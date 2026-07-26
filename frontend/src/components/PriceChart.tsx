@@ -13,7 +13,12 @@ import type { ChartRangeId } from './ChartRangeToggle';
 
 export type { ChartRangeId };
 
+/** US equity session timezone for intraday axis labels. */
+const US_TZ = 'America/New_York';
+
 type PlotPoint = {
+  /** Ordinal index — equal spacing removes closed-market gaps on the x-axis. */
+  i: number;
   ts: number;
   label: string;
   price: number;
@@ -32,13 +37,34 @@ function formatPrice(n: number): string {
   return n.toFixed(4);
 }
 
+function isIntradayRange(range: ChartRangeId): boolean {
+  return range === '1' || range === '7' || range === '14' || range === '30';
+}
+
 function formatTick(ts: number, range: ChartRangeId): string {
   const d = new Date(ts);
   if (range === '1') {
-    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleTimeString('en-US', {
+      timeZone: US_TZ,
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   }
-  if (range === '7' || range === '14' || range === '15') {
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (range === '7' || range === '14') {
+    return d.toLocaleString('en-US', {
+      timeZone: US_TZ,
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+    });
+  }
+  if (range === '30') {
+    return d.toLocaleString('en-US', {
+      timeZone: US_TZ,
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+    });
   }
   if (range === 'all' || range === '365' || range === '180') {
     return d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
@@ -49,11 +75,24 @@ function formatTick(ts: number, range: ChartRangeId): string {
 function formatTooltipDate(ts: number, range: ChartRangeId): string {
   const d = new Date(ts);
   if (range === '1') {
-    return d.toLocaleString(undefined, {
+    return d.toLocaleString('en-US', {
+      timeZone: US_TZ,
+      weekday: 'short',
       month: 'short',
       day: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
+      timeZoneName: 'short',
+    });
+  }
+  if (isIntradayRange(range)) {
+    return d.toLocaleString('en-US', {
+      timeZone: US_TZ,
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
     });
   }
   return d.toLocaleDateString(undefined, {
@@ -63,18 +102,19 @@ function formatTooltipDate(ts: number, range: ChartRangeId): string {
   });
 }
 
-/** Cap x-axis labels so long histories stay readable. */
-function buildTicks(points: PlotPoint[], range: ChartRangeId): number[] {
-  if (points.length === 0) return [];
+/** Evenly spaced ordinal tick indices (not calendar-even). */
+function buildOrdinalTicks(length: number, range: ChartRangeId): number[] {
+  if (length <= 0) return [];
   const maxTicks =
-    range === '1' ? 6 : range === '7' || range === '14' || range === '15' ? 7 : range === 'all' ? 6 : 8;
-  if (points.length <= maxTicks) return points.map((p) => p.ts);
+    range === '1' ? 6 : range === '7' || range === '14' || range === '30' ? 7 : range === 'all' ? 6 : 8;
+  if (length <= maxTicks) {
+    return Array.from({ length }, (_, i) => i);
+  }
   const ticks: number[] = [];
-  const last = points.length - 1;
-  for (let i = 0; i < maxTicks; i++) {
-    const idx = Math.round((i * last) / (maxTicks - 1));
-    const ts = points[idx].ts;
-    if (!ticks.includes(ts)) ticks.push(ts);
+  const last = length - 1;
+  for (let t = 0; t < maxTicks; t++) {
+    const idx = Math.round((t * last) / (maxTicks - 1));
+    if (!ticks.includes(idx)) ticks.push(idx);
   }
   return ticks;
 }
@@ -83,34 +123,42 @@ export function PriceChart({
   data,
   priceKey = 'close',
   range = '90',
+  interval,
+  sessionDate,
 }: {
   data: ChartPoint[];
   priceKey?: string;
   range?: ChartRangeId;
+  /** Ladder interval from API (`1m`, `15m`, …). */
+  interval?: string;
+  /** US session calendar date for 1D charts (YYYY-MM-DD). */
+  sessionDate?: string | null;
 }) {
   const chartData = useMemo(() => {
-    const mapped: PlotPoint[] = data
+    const mapped = data
       .map((d) => {
         const raw = String(d.date ?? d.Date ?? '');
         const ts = parseTs(raw);
         const price = Number(d[priceKey] ?? d.close ?? NaN);
-        return {
-          ts,
-          raw,
-          price,
-          label: formatTick(ts, range),
-        };
+        return { ts, raw, price };
       })
       .filter((d) => d.ts > 0 && Number.isFinite(d.price))
       .sort((a, b) => a.ts - b.ts);
 
     // Dedupe identical timestamps (keep last)
-    const byTs = new Map<number, PlotPoint>();
+    const byTs = new Map<number, { ts: number; raw: string; price: number }>();
     for (const p of mapped) byTs.set(p.ts, p);
-    return [...byTs.values()];
+
+    return [...byTs.values()].map((p, i) => ({
+      i,
+      ts: p.ts,
+      raw: p.raw,
+      price: p.price,
+      label: formatTick(p.ts, range),
+    }));
   }, [data, priceKey, range]);
 
-  const ticks = useMemo(() => buildTicks(chartData, range), [chartData, range]);
+  const ticks = useMemo(() => buildOrdinalTicks(chartData.length, range), [chartData.length, range]);
 
   const delta = useMemo(() => {
     if (chartData.length < 2) return null;
@@ -124,13 +172,22 @@ export function PriceChart({
   if (!chartData.length) {
     return (
       <p className="text-sm text-[var(--color-text-muted)]">
-        No price data for this range. Sync prices or pick a wider window.
+        {range === '1'
+          ? 'No session bars yet. Sync prices, or check after the next US trading day.'
+          : 'No price data for this range. Sync prices or pick a wider window.'}
       </p>
     );
   }
 
   const stroke = 'var(--color-accent)';
   const fillId = `price-fill-${range}`;
+  const deltaLabel =
+    range === '1'
+      ? sessionDate
+        ? `session ${sessionDate}`
+        : 'session'
+      : 'range';
+  const xMax = Math.max(0, chartData.length - 1);
 
   return (
     <div className="price-chart">
@@ -139,7 +196,10 @@ export function PriceChart({
           className={`price-chart__delta ${delta.up ? 'price-chart__delta--up' : 'price-chart__delta--down'}`}
         >
           {delta.up ? '+' : ''}
-          {delta.pct.toFixed(2)}% over range
+          {delta.pct.toFixed(2)}% over {deltaLabel}
+          {interval ? (
+            <span className="price-chart__interval"> · {interval} bars</span>
+          ) : null}
         </p>
       )}
       <div className="price-chart__canvas">
@@ -157,16 +217,21 @@ export function PriceChart({
               vertical={false}
             />
             <XAxis
-              dataKey="ts"
+              dataKey="i"
               type="number"
-              domain={['dataMin', 'dataMax']}
+              domain={[0, xMax]}
               ticks={ticks}
-              tickFormatter={(v) => formatTick(Number(v), range)}
+              tickFormatter={(v) => {
+                const idx = Number(v);
+                const pt = chartData[idx];
+                return pt ? formatTick(pt.ts, range) : '';
+              }}
               tick={{ fill: 'var(--color-text-muted)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
               axisLine={{ stroke: 'var(--gridline)' }}
               tickLine={false}
               minTickGap={36}
               height={28}
+              allowDecimals={false}
             />
             <YAxis
               tick={{ fill: 'var(--color-text-muted)', fontSize: 11, fontFamily: 'var(--font-mono)' }}

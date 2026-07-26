@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/Layout';
 import { RequireAuth } from './components/RequireAuth';
 import { PageFallback } from './components/Skeleton';
+import { PrivacyModeProvider } from './privacy';
 
 const DashboardPage = lazy(() =>
   import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })),
@@ -39,8 +40,9 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
+      <PrivacyModeProvider>
+        <BrowserRouter>
+          <Routes>
           <Route
             path="/login"
             element={
@@ -99,6 +101,7 @@ export default function App() {
           </Route>
         </Routes>
       </BrowserRouter>
+      </PrivacyModeProvider>
     </QueryClientProvider>
   );
 }

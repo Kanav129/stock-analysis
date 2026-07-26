@@ -106,10 +106,12 @@ class SyncService:
         self._run_generation = 0
         self._generation_lock = threading.Lock()
         self._task: Optional[asyncio.Task] = None
+        self._cancel_requested = False
         self._status: dict[str, Any] = {
             "status": "idle",
             "running": False,
             "message": None,
+            "detail": None,
             "tickers": [],
             "total": 0,
             "current_index": 0,
@@ -157,6 +159,17 @@ class SyncService:
     def _update(self, **kwargs: Any) -> None:
         self._status.update(kwargs)
         self._status["running"] = self._running
+
+    def request_cancel(self) -> dict[str, Any]:
+        """Soft-cancel: finish current ticker, keep checkpoint for resume."""
+        if not self._running:
+            return self.get_status()
+        self._cancel_requested = True
+        self._update(message="Cancel requested — finishing current ticker…")
+        return self.get_status()
+
+    def _cancel_flag(self) -> bool:
+        return bool(self._cancel_requested)
 
     def _set_stage_progress(
         self,
@@ -279,6 +292,7 @@ class SyncService:
         rcs.save_sync(checkpoint, day=day)
 
         self._running = True
+        self._cancel_requested = False
         timeouts = compute_resume_timeouts(
             len(news_todo),
             len(prices_todo),
@@ -399,6 +413,29 @@ class SyncService:
                 abandoned_by_worker = True
                 return True
 
+        def _should_continue() -> bool:
+            return _is_current() and not self._cancel_flag()
+
+        def _finalize_cancelled(message: str) -> None:
+            finished_at = datetime.utcnow().isoformat()
+            checkpoint.update(
+                status="cancelled",
+                errors=errors,
+                finished_at=finished_at,
+            )
+            if not _save_if_current(checkpoint):
+                return
+            self._update(
+                status="cancelled",
+                message=message,
+                detail=None,
+                errors=errors,
+                completed=list(completed),
+                current_ticker=None,
+                finished_at=finished_at,
+            )
+            logger.info("Background sync cancelled by user (checkpoint kept for resume)")
+
         try:
             loop = asyncio.get_running_loop()
 
@@ -419,13 +456,16 @@ class SyncService:
                     return
                 done = news_todo[: max(0, index - 1)]
                 self._update(completed=list(done))
+                msg = f"Fetching news · {ticker} ({index}/{total_n})"
+                if self._cancel_flag():
+                    msg = "Cancel requested — finishing current ticker…"
                 self._set_stage_progress(
                     "news",
                     "News",
                     index,
                     total_n,
                     ticker,
-                    f"Fetching news · {ticker} ({index}/{total_n})",
+                    msg,
                 )
 
             def _price_progress(ticker: str, index: int, total_n: int) -> None:
@@ -435,15 +475,26 @@ class SyncService:
                 done = prices_todo[: max(0, index - 1)]
                 completed.clear()
                 completed.extend(done)
-                self._update(completed=list(completed))
+                self._update(
+                    completed=list(completed),
+                    detail=f"{ticker} · starting price ladder…",
+                )
+                msg = f"Syncing prices · {ticker} ({index}/{total_n})"
+                if self._cancel_flag():
+                    msg = "Cancel requested — finishing current ticker…"
                 self._set_stage_progress(
                     "prices",
                     "Prices",
                     index,
                     total_n,
                     ticker,
-                    f"Syncing prices · {ticker} ({index}/{total_n})",
+                    msg,
                 )
+
+            def _price_detail(detail: str) -> None:
+                if not _is_current():
+                    return
+                self._update(detail=detail)
 
             timeouts = compute_resume_timeouts(
                 len(news_todo),
@@ -483,11 +534,15 @@ class SyncService:
                                 "news_done",
                                 ticker,
                             ),
+                            should_continue=_should_continue,
                         ),
                     ),
                     timeout=timeouts["news"],
                 )
                 if not _is_current():
+                    return
+                if self._cancel_flag():
+                    _finalize_cancelled("Sync cancelled. Progress saved — Sync again to resume.")
                     return
 
             if prices_todo:
@@ -500,25 +555,36 @@ class SyncService:
                     None,
                     "Syncing prices…",
                 )
+                self._update(detail="Preparing price sync…")
                 await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
                         lambda: stock_scraper.scrape_all_tickers(
                             prices_todo,
                             on_progress=_price_progress,
+                            on_detail=_price_detail,
                             on_ticker_done=lambda ticker: _checkpoint_ticker(
                                 "prices_done",
                                 ticker,
                             ),
+                            should_continue=_should_continue,
                         ),
                     ),
                     timeout=timeouts["prices"],
                 )
+                if _is_current():
+                    self._update(detail=None)
                 if not _is_current():
+                    return
+                if self._cancel_flag():
+                    _finalize_cancelled("Sync cancelled. Progress saved — Sync again to resume.")
                     return
 
             completed.clear()
             completed.extend(target)
+            if self._cancel_flag():
+                _finalize_cancelled("Sync cancelled. Progress saved — Sync again to resume.")
+                return
             if need_vectors:
                 self._update(
                     stage="vectors",
@@ -598,6 +664,7 @@ class SyncService:
                 stage="vectors",
                 stage_label="Vectors",
                 message=f"Synced news and prices for {total} ticker(s).",
+                detail=None,
                 errors=errors,
                 completed=list(completed) if completed else list(target),
                 current_ticker=None,

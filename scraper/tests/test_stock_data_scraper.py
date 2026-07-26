@@ -1,9 +1,15 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
-from scraper.stock_data_scraper import StockDataScraper, _daily_bar_ts
+from scraper.stock_data_scraper import (
+    BAR_1M,
+    BAR_15M,
+    StockDataScraper,
+    _daily_bar_ts,
+    _snap_ts,
+)
 
 
 @patch("scraper.stock_data_scraper.yf.Ticker")
@@ -18,6 +24,12 @@ def test_daily_bar_ts_normalizes_to_utc_midnight():
     ts = _daily_bar_ts("2024-01-15 16:00:00-05:00")
     assert ts.hour == 0 and ts.minute == 0
     assert str(ts.date()) == "2024-01-15"
+
+
+def test_snap_ts_1m_and_15m():
+    ts = datetime(2024, 1, 15, 14, 31, 40, tzinfo=timezone.utc)
+    assert _snap_ts(ts, BAR_1M) == datetime(2024, 1, 15, 14, 31, tzinfo=timezone.utc)
+    assert _snap_ts(ts, BAR_15M) == datetime(2024, 1, 15, 14, 30, tzinfo=timezone.utc)
 
 
 @patch.object(StockDataScraper, "scrape_ticker")
@@ -40,9 +52,8 @@ def test_on_ticker_done_skips_failed_price(mock_scrape):
     assert done == ["AAPL", "NVDA"]
 
 
-def test_upsert_intraday_frame_uses_single_batch_execute():
-    """Row-by-row upserts make daily sync hang on 22 tickers × ~1.7k 5m bars."""
-    idx = pd.date_range("2024-01-15 14:30", periods=3, freq="5min", tz="UTC")
+def test_upsert_interval_frame_uses_single_batch_execute():
+    idx = pd.date_range("2024-01-15 14:30", periods=3, freq="1min", tz="UTC")
     frame = pd.DataFrame(
         {
             "Open": [1.0, 2.0, 3.0],
@@ -57,7 +68,7 @@ def test_upsert_intraday_frame_uses_single_batch_execute():
     scraper.db_client = MagicMock()
     scraper.db_client.execute_many = MagicMock(side_effect=lambda sql, rows: len(rows))
 
-    count = scraper.upsert_intraday_frame("AAPL", frame)
+    count = scraper.upsert_interval_frame("AAPL", frame, BAR_1M)
 
     assert count == 3
     scraper.db_client.execute_many.assert_called_once()
@@ -66,7 +77,7 @@ def test_upsert_intraday_frame_uses_single_batch_execute():
     assert "ON CONFLICT" in sql
     assert len(rows) == 3
     assert rows[0][0] == "AAPL"
-    assert rows[0][3] == "5m"
+    assert rows[0][3] == "1m"
 
 
 def test_upsert_daily_frame_uses_single_batch_execute():
@@ -96,7 +107,8 @@ def test_upsert_daily_frame_uses_single_batch_execute():
     assert rows[0][0] == "MSFT"
     assert rows[0][3] == "1d"
 
-def _sample_5m_frame() -> pd.DataFrame:
+
+def _sample_1m_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Open": [1.0],
@@ -109,32 +121,81 @@ def _sample_5m_frame() -> pd.DataFrame:
     )
 
 
-def test_sync_intraday_uses_5d_when_recent_bars_exist():
-    """Daily cron should not re-download a full month of 5m bars every run."""
+def test_sync_band_uses_short_period_when_recent_bars_exist():
     scraper = StockDataScraper()
     scraper.db_client = MagicMock()
-    scraper.db_client.fetch_query.return_value = (
-        [(datetime(2024, 6, 1, 15, 0, tzinfo=timezone.utc),)],
-        ["latest"],
-    )
-    scraper.fetch_history = MagicMock(return_value=_sample_5m_frame())
-    scraper.upsert_intraday_frame = MagicMock(return_value=1)
+    recent = datetime.now(timezone.utc) - timedelta(hours=1)
+    scraper.db_client.fetch_query.return_value = ([(recent,)], ["latest"])
+    scraper.fetch_history = MagicMock(return_value=_sample_1m_frame())
+    scraper.upsert_interval_frame = MagicMock(return_value=1)
 
-    with patch("scraper.stock_data_scraper.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime(2024, 6, 2, 12, 0, tzinfo=timezone.utc)
-        mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
-        scraper.sync_intraday_5m("AAPL")
+    scraper.sync_band("AAPL", BAR_1M)
 
-    scraper.fetch_history.assert_called_once_with("AAPL", period="5d", interval="5m")
+    scraper.fetch_history.assert_called_once_with("AAPL", period="2d", interval="1m")
 
 
-def test_sync_intraday_uses_1mo_when_no_recent_bars():
+def test_sync_band_uses_long_period_when_no_recent_bars():
     scraper = StockDataScraper()
     scraper.db_client = MagicMock()
     scraper.db_client.fetch_query.return_value = ([], ["latest"])
-    scraper.fetch_history = MagicMock(return_value=_sample_5m_frame())
-    scraper.upsert_intraday_frame = MagicMock(return_value=1)
+    scraper.fetch_history = MagicMock(return_value=_sample_1m_frame())
+    scraper.upsert_interval_frame = MagicMock(return_value=1)
 
-    scraper.sync_intraday_5m("AAPL")
+    scraper.sync_band("AAPL", BAR_1M)
 
-    scraper.fetch_history.assert_called_once_with("AAPL", period="1mo", interval="5m")
+    scraper.fetch_history.assert_called_once_with("AAPL", period="7d", interval="1m")
+
+
+def test_chart_interval_mapping():
+    from rest_api.routes.stock_routes import _chart_interval_for_duration
+
+    assert _chart_interval_for_duration(1) == "1m"
+    assert _chart_interval_for_duration(7) == "15m"
+    assert _chart_interval_for_duration(14) == "30m"
+    assert _chart_interval_for_duration(30) == "1h"
+    assert _chart_interval_for_duration(90) == "1d"
+    assert _chart_interval_for_duration(None) == "1d"
+
+
+def test_fetch_last_us_session_queries_ny_date():
+    from rest_api.routes.stock_routes import _fetch_last_us_session
+
+    db = MagicMock()
+    db.fetch_query.return_value = ([], [])
+    _fetch_last_us_session(db, "AAPL", "1m", "close")
+    sql, params = db.fetch_query.call_args.args
+    assert "America/New_York" in sql
+    assert params == ("AAPL", "1m", "AAPL", "1m")
+
+
+def test_refresh_live_1m_uses_1d_then_2d_fallback():
+    scraper = StockDataScraper()
+    scraper.fetch_history = MagicMock(side_effect=[pd.DataFrame(), _sample_1m_frame()])
+    scraper.upsert_interval_frame = MagicMock(return_value=1)
+
+    assert scraper.refresh_live_1m("aapl") == 1
+    calls = scraper.fetch_history.call_args_list
+    assert calls[0].args == ("AAPL",)
+    assert calls[0].kwargs == {"period": "1d", "interval": "1m"}
+    assert calls[1].kwargs == {"period": "2d", "interval": "1m"}
+    scraper.upsert_interval_frame.assert_called_once()
+
+
+def test_refresh_live_1m_skips_fallback_when_1d_has_data():
+    scraper = StockDataScraper()
+    scraper.fetch_history = MagicMock(return_value=_sample_1m_frame())
+    scraper.upsert_interval_frame = MagicMock(return_value=3)
+
+    assert scraper.refresh_live_1m("MSFT") == 3
+    scraper.fetch_history.assert_called_once_with("MSFT", period="1d", interval="1m")
+
+
+@patch("rest_api.routes.stock_routes.sync_service")
+def test_live_price_refresh_skips_when_sync_running(mock_sync):
+    from rest_api.routes.stock_routes import live_price_refresh
+    from rest_api.schemas import LivePriceRefreshRequest
+
+    mock_sync.is_running.return_value = True
+    out = live_price_refresh(LivePriceRefreshRequest(tickers=["AAPL"]))
+    assert out["skipped"] is True
+    assert out["reason"] == "sync_running"

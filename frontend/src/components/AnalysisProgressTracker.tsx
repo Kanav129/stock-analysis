@@ -3,20 +3,25 @@ import { api } from '../api/client';
 import { Panel } from './Panel';
 import { RatingBadge } from './RatingBadge';
 import { ScoreMeter } from './ScoreMeter';
+import {
+  PipelineLiveBadge,
+  PipelineProgressMeter,
+  PipelineStageChip,
+} from './PipelineProgressMeter';
 import type { AnalysisProgress } from '../api/types';
 
 const CORE_STAGES = [
-  { id: 'gather_prices', label: 'Technicals' },
-  { id: 'gather_fundamentals', label: 'Fundamentals' },
-  { id: 'gather_news', label: 'News' },
-  { id: 'gather_sentiment', label: 'Sentiment' },
-  { id: 'synthesize_decision', label: 'Decision' },
-  { id: 'persist', label: 'Save' },
+  { id: 'gather_prices', label: 'Technicals', verb: 'Reading technicals' },
+  { id: 'gather_fundamentals', label: 'Fundamentals', verb: 'Reading fundamentals' },
+  { id: 'gather_news', label: 'News', verb: 'Reading news' },
+  { id: 'gather_sentiment', label: 'Sentiment', verb: 'Scoring sentiment' },
+  { id: 'synthesize_decision', label: 'Decision', verb: 'Synthesizing call' },
+  { id: 'persist', label: 'Save', verb: 'Saving report' },
 ];
 
 const RESCORE_STAGES = [
-  { id: 'synthesize_decision', label: 'Decision' },
-  { id: 'persist', label: 'Save' },
+  { id: 'synthesize_decision', label: 'Decision', verb: 'Rescoring' },
+  { id: 'persist', label: 'Save', verb: 'Saving scores' },
 ];
 
 function stageIndex(stages: { id: string }[], stage: string | null): number {
@@ -58,6 +63,11 @@ export function AnalysisProgressTracker() {
   const currentStageIdx = stageIndex(stages, data.stage);
   const doneCount = data.completed?.length ?? 0;
   const total = data.total || data.tickers?.length || 0;
+  const percent = Math.max(0, Math.min(100, Number(data.percent) || 0));
+  const verb =
+    stages.find((s) => s.id === data.stage)?.verb ?? (isRescore ? 'Rescoring' : 'Analyzing');
+  const meterTone =
+    data.status === 'failed' ? 'error' : !active && data.status === 'done' ? 'done' : 'accent';
 
   return (
     <Panel
@@ -84,34 +94,38 @@ export function AnalysisProgressTracker() {
     >
       <div className="mb-2">
         <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-muted)]">
-          <span className="font-mono">
-            {active
-              ? `${doneCount}/${total} ${isRescore ? 'scores' : 'reports'}`
-              : data.status === 'cancelled'
-                ? 'Cancelled'
-                : data.status === 'failed'
-                  ? 'Finished with errors'
-                  : 'Complete'}
+          <span className="inline-flex items-center gap-2 font-mono">
+            {active ? (
+              <>
+                <PipelineLiveBadge verb={verb} />
+                <span className="text-[var(--color-text-muted)]">
+                  {doneCount}/{total} {isRescore ? 'scores' : 'reports'}
+                </span>
+              </>
+            ) : data.status === 'cancelled' ? (
+              'Cancelled'
+            ) : data.status === 'failed' ? (
+              'Finished with errors'
+            ) : (
+              'Complete'
+            )}
           </span>
-          <span className="font-mono">{data.percent?.toFixed?.(0) ?? data.percent}%</span>
+          <span className="font-mono tabular-nums">{percent.toFixed(0)}%</span>
         </div>
-        <div
-          className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-3)]"
-          role="progressbar"
-          aria-valuenow={data.percent}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <div
-            className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-300"
-            style={{ width: `${Math.max(2, Math.min(100, data.percent || 0))}%` }}
-          />
-        </div>
+        <PipelineProgressMeter
+          percent={percent}
+          active={active}
+          tone={meterTone}
+          label={isRescore ? 'Rescore progress' : 'Analysis progress'}
+        />
       </div>
 
       {active && (
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="font-mono text-sm font-semibold text-[var(--color-text-primary)]">
+          <span
+            key={data.current_ticker || data.stage || 'idle'}
+            className="pipeline-ticker-swap font-mono text-sm font-semibold text-[var(--color-text-primary)]"
+          >
             {data.current_ticker || '…'}
           </span>
           <span className="text-[11px] text-[var(--color-text-muted)]">
@@ -127,28 +141,22 @@ export function AnalysisProgressTracker() {
           const done = active && currentStageIdx > i;
           const current = active && currentStageIdx === i;
           return (
-            <span
+            <PipelineStageChip
               key={s.id}
-              className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                current
-                  ? 'bg-[var(--color-accent)] text-[var(--color-surface-0)]'
-                  : done
-                    ? 'bg-[color-mix(in_oklch,var(--color-up)_22%,transparent)] text-[var(--color-up)]'
-                    : 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)]'
-              }`}
-            >
-              {s.label}
-            </span>
+              label={s.label}
+              state={current ? 'current' : done ? 'done' : 'idle'}
+            />
           );
         })}
       </div>
 
       {(data.completed?.length ?? 0) > 0 && (
         <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-auto">
-          {data.completed.slice(-8).map((c) => (
+          {data.completed.slice(-8).map((c, i) => (
             <span
-              key={c.ticker}
-              className="inline-flex items-center gap-1.5 rounded border border-[var(--color-surface-3)] px-1.5 py-0.5 text-[11px]"
+              key={`${c.ticker}-${c.report_id ?? i}`}
+              className="pipeline-done-chip inline-flex items-center gap-1.5 rounded border border-[var(--color-surface-3)] px-1.5 py-0.5 text-[11px]"
+              style={{ animationDelay: `${Math.min(i, 6) * 30}ms` }}
             >
               <span className="font-mono">{c.ticker}</span>
               {c.rating && <RatingBadge rating={c.rating} />}

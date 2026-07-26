@@ -1,4 +1,15 @@
-"""Price sync: daily closes forever + 5m bars for the last 30 days. Never duplicates."""
+"""Price sync: multi-resolution ladder for smooth charts.
+
+Intervals kept (after compaction):
+  1m  ~2d   → chart 1D
+  15m ~8d   → chart 7D
+  30m ~16d  → chart 2W
+  1h  ~35d  → chart 1M
+  1d  forever → chart 3M+
+
+Daily sync gap-fills each band from Yahoo, then compacts aged fine bars
+into coarser intervals. Legacy ``5m`` rows are migrated once then deleted.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +24,62 @@ from dotenv import load_dotenv
 from db.postgres_db import PostgresDBClient
 from utils.logger import logger
 
-DETAILED_WINDOW_DAYS = 30
-# If we already have 5m bars newer than this, only fetch a short window.
-INCREMENTAL_MAX_AGE = timedelta(days=3)
 BAR_1D = "1d"
-BAR_5M = "5m"
+BAR_1M = "1m"
+BAR_15M = "15m"
+BAR_30M = "30m"
+BAR_1H = "1h"
+BAR_5M_LEGACY = "5m"
+
+# Snap bar timestamps to interval grids (seconds).
+SNAP_SEC = {
+    BAR_1M: 60,
+    BAR_15M: 900,
+    BAR_30M: 1800,
+    BAR_1H: 3600,
+}
+
+# Retention windows (calendar days) and Yahoo fetch policy per band.
+BANDS: dict[str, dict[str, Any]] = {
+    BAR_1M: {
+        "keep_days": 2,
+        "fresh_age": timedelta(hours=36),
+        "short_period": "2d",
+        "long_period": "7d",
+    },
+    BAR_15M: {
+        "keep_days": 8,
+        "fresh_age": timedelta(days=3),
+        "short_period": "5d",
+        "long_period": "1mo",
+    },
+    BAR_30M: {
+        "keep_days": 16,
+        "fresh_age": timedelta(days=4),
+        "short_period": "5d",
+        "long_period": "1mo",
+    },
+    BAR_1H: {
+        "keep_days": 35,
+        "fresh_age": timedelta(days=4),
+        "short_period": "5d",
+        "long_period": "1mo",
+    },
+    BAR_1D: {
+        "keep_days": None,
+        "fresh_age": timedelta(days=4),
+        "short_period": "5d",
+        "long_period": "1mo",
+    },
+}
+
+# Compact fine → coarse when past fine retention.
+COMPACTION_STEPS: list[tuple[str, str]] = [
+    (BAR_1M, BAR_15M),
+    (BAR_15M, BAR_30M),
+    (BAR_30M, BAR_1H),
+    (BAR_1H, BAR_1D),
+]
 
 UPSERT_SQL = """
 INSERT INTO stock_data (ticker, date, bar_ts, bar_interval, open, high, low, close, volume)
@@ -56,6 +118,15 @@ def _daily_bar_ts(value: Any) -> datetime:
     ts = _as_utc_ts(value)
     day = ts.date()
     return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+
+
+def _snap_ts(ts: datetime, interval: str) -> datetime:
+    if interval == BAR_1D:
+        return _daily_bar_ts(ts)
+    step = SNAP_SEC[interval]
+    epoch = int(ts.timestamp())
+    snapped = epoch - (epoch % step)
+    return datetime.fromtimestamp(snapped, tz=timezone.utc)
 
 
 class StockDataScraper:
@@ -97,18 +168,6 @@ class StockDataScraper:
             int(_to_python(row.get("Volume")) or 0),
         )
 
-    def _upsert_row(
-        self,
-        ticker: str,
-        bar_ts: datetime,
-        bar_interval: str,
-        row: pd.Series,
-    ) -> None:
-        self.db_client.execute_query(
-            UPSERT_SQL,
-            self._row_params(ticker, bar_ts, bar_interval, row),
-        )
-
     def upsert_daily_frame(self, ticker: str, frame: pd.DataFrame) -> int:
         if frame is None or frame.empty:
             return 0
@@ -118,34 +177,30 @@ class StockDataScraper:
         ]
         return self.db_client.execute_many(UPSERT_SQL, rows)
 
-    def upsert_intraday_frame(self, ticker: str, frame: pd.DataFrame) -> int:
+    def upsert_interval_frame(self, ticker: str, frame: pd.DataFrame, interval: str) -> int:
+        """Upsert OHLCV bars for a non-daily interval (snapped to grid)."""
         if frame is None or frame.empty:
             return 0
-        rows = []
-        for idx, row in frame.iterrows():
-            bar_ts = _as_utc_ts(idx)
-            # Snap to 5-minute grid to avoid near-duplicate timestamps
-            epoch = int(bar_ts.timestamp())
-            snapped = epoch - (epoch % 300)
-            bar_ts = datetime.fromtimestamp(snapped, tz=timezone.utc)
-            rows.append(self._row_params(ticker, bar_ts, BAR_5M, row))
+        if interval == BAR_1D:
+            return self.upsert_daily_frame(ticker, frame)
+        rows = [
+            self._row_params(ticker, _snap_ts(_as_utc_ts(idx), interval), interval, row)
+            for idx, row in frame.iterrows()
+        ]
         return self.db_client.execute_many(UPSERT_SQL, rows)
 
-    def backfill_missing_daily(self, ticker: str) -> int:
-        """Pull ~1 month of daily bars and upsert (fills any missing days)."""
-        frame = self.fetch_history(ticker, period="1mo", interval="1d")
-        n = self.upsert_daily_frame(ticker, frame)
-        logger.info(f"{ticker}: upserted {n} daily bar(s) from 1mo history")
-        return n
+    # Back-compat name used by older tests / callers
+    def upsert_intraday_frame(self, ticker: str, frame: pd.DataFrame, interval: str = BAR_1M) -> int:
+        return self.upsert_interval_frame(ticker, frame, interval)
 
-    def _latest_intraday_ts(self, ticker: str) -> Optional[datetime]:
+    def _latest_bar_ts(self, ticker: str, interval: str) -> Optional[datetime]:
         rows, _ = self.db_client.fetch_query(
             """
             SELECT MAX(bar_ts) AS latest
             FROM stock_data
             WHERE ticker = %s AND bar_interval = %s
             """,
-            (ticker, BAR_5M),
+            (ticker, interval),
         )
         if not rows or rows[0][0] is None:
             return None
@@ -154,66 +209,136 @@ class StockDataScraper:
             return latest.replace(tzinfo=timezone.utc)
         return latest
 
-    def _intraday_fetch_period(self, ticker: str) -> str:
-        """Use a short window when we already have recent 5m data (daily cron)."""
-        latest = self._latest_intraday_ts(ticker)
+    def _fetch_period_for_band(self, ticker: str, interval: str) -> str:
+        cfg = BANDS[interval]
+        latest = self._latest_bar_ts(ticker, interval)
         if latest is None:
-            return "1mo"
+            return cfg["long_period"]
         age = datetime.now(timezone.utc) - latest
-        if age <= INCREMENTAL_MAX_AGE:
-            return "5d"
-        return "1mo"
+        if age <= cfg["fresh_age"]:
+            return cfg["short_period"]
+        return cfg["long_period"]
 
-    def sync_intraday_5m(self, ticker: str) -> int:
-        """
-        Pull recent 5m bars and upsert.
-        yfinance allows ~60d of 5m; we keep only the last 30d after compaction.
-        Incremental runs fetch 5d when recent bars already exist.
-        """
-        period = self._intraday_fetch_period(ticker)
-        frame = self.fetch_history(ticker, period=period, interval="5m")
-        if (frame is None or frame.empty) and period != "5d":
-            frame = self.fetch_history(ticker, period="5d", interval="5m")
-        n = self.upsert_intraday_frame(ticker, frame)
-        logger.info(f"{ticker}: upserted {n} 5m bar(s) (period={period})")
+    def sync_band(
+        self,
+        ticker: str,
+        interval: str,
+        on_detail: Optional[Callable[[str], None]] = None,
+    ) -> int:
+        """Gap-fill one resolution band from Yahoo."""
+        period = self._fetch_period_for_band(ticker, interval)
+        cfg = BANDS[interval]
+        mode = "refresh" if period == cfg["short_period"] else "backfill"
+        if on_detail:
+            on_detail(f"{ticker} · fetch {interval} · {mode} ({period})")
+        frame = self.fetch_history(ticker, period=period, interval=interval)
+        if (frame is None or frame.empty) and period != BANDS[interval]["short_period"]:
+            if on_detail:
+                on_detail(
+                    f"{ticker} · fetch {interval} · retry short window "
+                    f"({BANDS[interval]['short_period']})"
+                )
+            frame = self.fetch_history(
+                ticker, period=BANDS[interval]["short_period"], interval=interval
+            )
+        if on_detail:
+            on_detail(f"{ticker} · upsert {interval} bars…")
+        n = self.upsert_interval_frame(ticker, frame, interval)
+        logger.info(f"{ticker}: upserted {n} {interval} bar(s) (period={period})")
+        if on_detail:
+            on_detail(f"{ticker} · {interval} done · {n} bar(s) · {mode} ({period})")
         return n
 
-    def compact_old_intraday(self, ticker: str) -> dict[str, int]:
-        """
-        Older than 30 days: keep only one daily close; delete 5m bars.
-        Ensures a 1d row exists (from last 5m close of that day if needed).
-        """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=DETAILED_WINDOW_DAYS)
+    def refresh_live_1m(self, ticker: str) -> int:
+        """Light intraday backfill: today's 1m bars (covers session + last few minutes)."""
+        ticker = ticker.upper().strip()
+        frame = self.fetch_history(ticker, period="1d", interval=BAR_1M)
+        if frame is None or frame.empty:
+            frame = self.fetch_history(ticker, period="2d", interval=BAR_1M)
+        n = self.upsert_interval_frame(ticker, frame, BAR_1M)
+        logger.info(f"{ticker}: live-refresh upserted {n} 1m bar(s)")
+        return n
 
-        # Materialize daily closes from aging 5m bars before deleting them
+    def _aggregate_aged_bars(
+        self,
+        ticker: str,
+        source_interval: str,
+        target_interval: str,
+        cutoff: datetime,
+    ) -> int:
+        """Aggregate source bars older than cutoff into target interval buckets."""
+        if target_interval == BAR_1D:
+            rows, _ = self.db_client.fetch_query(
+                """
+                SELECT trade_date, open, high, low, close, volume
+                FROM (
+                    SELECT DISTINCT ON (((bar_ts AT TIME ZONE 'UTC')::date))
+                        (bar_ts AT TIME ZONE 'UTC')::date AS trade_date,
+                        open, high, low, close, volume
+                    FROM stock_data
+                    WHERE ticker = %s
+                      AND bar_interval = %s
+                      AND bar_ts < %s
+                    ORDER BY (bar_ts AT TIME ZONE 'UTC')::date, bar_ts DESC
+                ) aged
+                """,
+                (ticker, source_interval, cutoff),
+            )
+            upsert_rows = []
+            for trade_date, open_, high, low, close, volume in rows or []:
+                bar_ts = datetime(
+                    trade_date.year, trade_date.month, trade_date.day, tzinfo=timezone.utc
+                )
+                upsert_rows.append(
+                    (
+                        ticker,
+                        trade_date,
+                        bar_ts,
+                        BAR_1D,
+                        open_,
+                        high,
+                        low,
+                        close,
+                        int(volume or 0),
+                    )
+                )
+            if upsert_rows:
+                self.db_client.execute_many(UPSERT_SQL, upsert_rows)
+            return len(upsert_rows)
+
+        step = SNAP_SEC[target_interval]
         rows, _ = self.db_client.fetch_query(
             """
-            SELECT trade_date, open, high, low, close, volume
-            FROM (
-                SELECT DISTINCT ON (((bar_ts AT TIME ZONE 'UTC')::date))
-                    (bar_ts AT TIME ZONE 'UTC')::date AS trade_date,
-                    open, high, low, close, volume
-                FROM stock_data
-                WHERE ticker = %s
-                  AND bar_interval = %s
-                  AND bar_ts < %s
-                ORDER BY (bar_ts AT TIME ZONE 'UTC')::date, bar_ts DESC
-            ) aged
+            SELECT
+                to_timestamp(floor(extract(epoch FROM bar_ts) / %s) * %s) AS bucket,
+                (array_agg(open ORDER BY bar_ts ASC))[1] AS open,
+                MAX(high) AS high,
+                MIN(low) AS low,
+                (array_agg(close ORDER BY bar_ts DESC))[1] AS close,
+                COALESCE(SUM(volume), 0) AS volume
+            FROM stock_data
+            WHERE ticker = %s
+              AND bar_interval = %s
+              AND bar_ts < %s
+            GROUP BY 1
+            ORDER BY 1
             """,
-            (ticker, BAR_5M, cutoff),
+            (step, step, ticker, source_interval, cutoff),
         )
-
-        promoted_rows = []
-        for trade_date, open_, high, low, close, volume in rows:
-            bar_ts = datetime(
-                trade_date.year, trade_date.month, trade_date.day, tzinfo=timezone.utc
-            )
-            promoted_rows.append(
+        upsert_rows = []
+        for bucket, open_, high, low, close, volume in rows or []:
+            bar_ts = bucket
+            if getattr(bar_ts, "tzinfo", None) is None:
+                bar_ts = bar_ts.replace(tzinfo=timezone.utc)
+            else:
+                bar_ts = bar_ts.astimezone(timezone.utc)
+            trade_date = bar_ts.date()
+            upsert_rows.append(
                 (
                     ticker,
                     trade_date,
                     bar_ts,
-                    BAR_1D,
+                    target_interval,
                     open_,
                     high,
                     low,
@@ -221,21 +346,40 @@ class StockDataScraper:
                     int(volume or 0),
                 )
             )
-        if promoted_rows:
-            self.db_client.execute_many(UPSERT_SQL, promoted_rows)
-        promoted = len(promoted_rows)
+        if upsert_rows:
+            self.db_client.execute_many(UPSERT_SQL, upsert_rows)
+        return len(upsert_rows)
 
-        self.db_client.execute_query(
-            """
-            DELETE FROM stock_data
-            WHERE ticker = %s
-              AND bar_interval = %s
-              AND bar_ts < %s
-            """,
-            (ticker, BAR_5M, cutoff),
-        )
+    def compact_ladder(
+        self,
+        ticker: str,
+        on_detail: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, int]:
+        """Promote aged fine bars into coarser intervals, then delete expired fines."""
+        stats: dict[str, int] = {}
+        now = datetime.now(timezone.utc)
+        for source, target in COMPACTION_STEPS:
+            keep_days = BANDS[source]["keep_days"]
+            if keep_days is None:
+                continue
+            if on_detail:
+                on_detail(f"{ticker} · compact aged {source} → {target}")
+            cutoff = now - timedelta(days=keep_days)
+            promoted = self._aggregate_aged_bars(ticker, source, target, cutoff)
+            self.db_client.execute_query(
+                """
+                DELETE FROM stock_data
+                WHERE ticker = %s
+                  AND bar_interval = %s
+                  AND bar_ts < %s
+                """,
+                (ticker, source, cutoff),
+            )
+            stats[f"promoted_{source}_to_{target}"] = promoted
 
-        # Safety: remove any accidental duplicate 1d rows for same calendar day
+        if on_detail:
+            on_detail(f"{ticker} · compact cleanup (dedupe daily)")
+        # Dedupe accidental duplicate 1d rows for same calendar day
         self.db_client.execute_query(
             """
             DELETE FROM stock_data a
@@ -249,22 +393,75 @@ class StockDataScraper:
             """,
             (ticker, ticker),
         )
+        logger.info(f"{ticker}: ladder compaction {stats}")
+        return stats
 
-        logger.info(
-            f"{ticker}: compacted 5m bars older than {DETAILED_WINDOW_DAYS}d "
-            f"(promoted {promoted} daily close(s))"
+    def migrate_legacy_5m(
+        self,
+        ticker: str,
+        on_detail: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, int]:
+        """One-time: aggregate legacy 5m → 15m/30m/1h (+ daily), then delete 5m."""
+        rows, _ = self.db_client.fetch_query(
+            """
+            SELECT COUNT(*) FROM stock_data
+            WHERE ticker = %s AND bar_interval = %s
+            """,
+            (ticker, BAR_5M_LEGACY),
         )
-        return {"promoted_daily": promoted}
+        count = int(rows[0][0]) if rows else 0
+        if count == 0:
+            return {"legacy_5m": 0}
 
-    def scrape_ticker(self, ticker: str) -> dict[str, Any]:
+        if on_detail:
+            on_detail(f"{ticker} · migrate legacy 5m ({count} bars)")
+        # Far-future cutoff so all 5m rows are aggregated
+        far = datetime.now(timezone.utc) + timedelta(days=3650)
+        to_15 = self._aggregate_aged_bars(ticker, BAR_5M_LEGACY, BAR_15M, far)
+        to_30 = self._aggregate_aged_bars(ticker, BAR_5M_LEGACY, BAR_30M, far)
+        to_1h = self._aggregate_aged_bars(ticker, BAR_5M_LEGACY, BAR_1H, far)
+        to_1d = self._aggregate_aged_bars(ticker, BAR_5M_LEGACY, BAR_1D, far)
+
+        self.db_client.execute_query(
+            """
+            DELETE FROM stock_data
+            WHERE ticker = %s AND bar_interval = %s
+            """,
+            (ticker, BAR_5M_LEGACY),
+        )
+        logger.info(
+            f"{ticker}: migrated {count} legacy 5m bars "
+            f"(15m={to_15}, 30m={to_30}, 1h={to_1h}, 1d={to_1d})"
+        )
+        return {
+            "legacy_5m": count,
+            "migrated_15m": to_15,
+            "migrated_30m": to_30,
+            "migrated_1h": to_1h,
+            "migrated_1d": to_1d,
+        }
+
+    def scrape_ticker(
+        self,
+        ticker: str,
+        on_detail: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, Any]:
         ticker = ticker.upper().strip()
-        daily_n = self.backfill_missing_daily(ticker)
-        intraday_n = self.sync_intraday_5m(ticker)
-        compact = self.compact_old_intraday(ticker)
+        if on_detail:
+            on_detail(f"{ticker} · check legacy 5m migration")
+        migrated = self.migrate_legacy_5m(ticker, on_detail=on_detail)
+        counts: dict[str, int] = {}
+        for interval in (BAR_1M, BAR_15M, BAR_30M, BAR_1H, BAR_1D):
+            counts[interval] = self.sync_band(ticker, interval, on_detail=on_detail)
+        if on_detail:
+            on_detail(f"{ticker} · compact price ladder")
+        compact = self.compact_ladder(ticker, on_detail=on_detail)
+        if on_detail:
+            on_detail(f"{ticker} · price sync complete")
         return {
             "ticker": ticker,
-            "daily_upserted": daily_n,
-            "intraday_upserted": intraday_n,
+            "bands": counts,
+            **migrated,
             **compact,
         }
 
@@ -273,14 +470,19 @@ class StockDataScraper:
         tickers: list[str],
         on_progress: Optional[Callable[[str, int, int], None]] = None,
         on_ticker_done: Optional[Callable[[str], None]] = None,
+        on_detail: Optional[Callable[[str], None]] = None,
+        should_continue: Optional[Callable[[], bool]] = None,
     ) -> None:
         total = len(tickers)
         for index, ticker in enumerate(tickers, start=1):
+            if should_continue is not None and not should_continue():
+                logger.info("Price scrape stopped early (cancel requested)")
+                return
             try:
                 logger.info(f"Syncing prices for {ticker} ({index}/{total})...")
                 if on_progress:
                     on_progress(ticker, index, total)
-                result = self.scrape_ticker(ticker)
+                result = self.scrape_ticker(ticker, on_detail=on_detail)
                 logger.info(f"Price sync done for {ticker}: {result}")
                 if on_ticker_done:
                     on_ticker_done(ticker)
@@ -288,6 +490,5 @@ class StockDataScraper:
                 logger.error(f"Error syncing prices for {ticker}: {exc}")
 
 
-# Example usage
 if __name__ == "__main__":
     StockDataScraper().scrape_all_tickers(["AAPL", "MSFT"])

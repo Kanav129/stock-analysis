@@ -22,48 +22,50 @@ def _safe_float(v: Any, default: float | None = None) -> float | None:
 
 class QuotesService:
     def get_quotes(self, tickers: list[str], spark_days: int = 30) -> dict[str, dict[str, Any]]:
-        """Latest price (any bar), prior daily close, and daily sparkline."""
+        """Latest price (any bar), prior daily close, and daily sparkline.
+
+        Sparklines read ``1d`` bars only (avoids scanning dense 1m/15m rows).
+        Latest price uses a short lookback so the interval index stays selective.
+        """
         tickers = [t.upper() for t in tickers if t]
         if not tickers:
             return {}
 
         db = get_db_client()
+        ticker_tuple = tuple(tickers)
+        lookback_days = max(int(spark_days) + 5, 40)
 
-        # Sparkline: one close per day (prefer 1d bars; fall back to last bar of day)
+        # Sparkline: daily closes only — critical after multi-resolution ladder.
         daily_rows, _ = db.fetch_query(
             """
-            SELECT ticker, trade_date, close
-            FROM (
-                SELECT DISTINCT ON (ticker, date)
-                    ticker,
-                    date AS trade_date,
-                    close,
-                    CASE WHEN bar_interval = '1d' THEN 0 ELSE 1 END AS pref
-                FROM stock_data
-                WHERE ticker IN %s
-                  AND close IS NOT NULL
-                  AND date >= CURRENT_DATE - %s * INTERVAL '1 day'
-                ORDER BY ticker, date, pref ASC, bar_ts DESC
-            ) d
-            ORDER BY ticker, trade_date ASC
+            SELECT ticker, date AS trade_date, close
+            FROM stock_data
+            WHERE ticker IN %s
+              AND bar_interval = '1d'
+              AND close IS NOT NULL
+              AND date >= CURRENT_DATE - %s * INTERVAL '1 day'
+            ORDER BY ticker, date ASC
             """,
-            (tuple(tickers), max(spark_days + 5, 40)),
+            (ticker_tuple, lookback_days),
         )
 
         by_ticker: dict[str, list[tuple[Any, float]]] = {t: [] for t in tickers}
         for ticker, trade_date, close in daily_rows:
             by_ticker.setdefault(ticker, []).append((trade_date, float(close)))
 
+        # Latest trade: prefer recent bars (uses ticker/ts index), then fill gaps via 1d.
         latest_rows, _ = db.fetch_query(
             """
             SELECT DISTINCT ON (ticker) ticker, close, bar_ts, bar_interval
             FROM stock_data
-            WHERE ticker IN %s AND close IS NOT NULL
+            WHERE ticker IN %s
+              AND close IS NOT NULL
+              AND bar_ts >= NOW() - INTERVAL '7 days'
             ORDER BY ticker, bar_ts DESC
             """,
-            (tuple(tickers),),
+            (ticker_tuple,),
         )
-        latest_map = {
+        latest_map: dict[str, dict[str, Any]] = {
             row[0]: {
                 "close": float(row[1]) if row[1] is not None else None,
                 "as_of": row[2].isoformat() if hasattr(row[2], "isoformat") else str(row[2]),
@@ -71,6 +73,25 @@ class QuotesService:
             }
             for row in latest_rows
         }
+        missing = [t for t in tickers if t not in latest_map]
+        if missing:
+            fallback_rows, _ = db.fetch_query(
+                """
+                SELECT DISTINCT ON (ticker) ticker, close, bar_ts, bar_interval
+                FROM stock_data
+                WHERE ticker IN %s
+                  AND bar_interval = '1d'
+                  AND close IS NOT NULL
+                ORDER BY ticker, bar_ts DESC
+                """,
+                (tuple(missing),),
+            )
+            for row in fallback_rows:
+                latest_map[row[0]] = {
+                    "close": float(row[1]) if row[1] is not None else None,
+                    "as_of": row[2].isoformat() if hasattr(row[2], "isoformat") else str(row[2]),
+                    "interval": row[3],
+                }
 
         result: dict[str, dict[str, Any]] = {}
         for ticker in tickers:

@@ -1,0 +1,202 @@
+/* Pipeline progress motion — state feedback for Sync / Analysis. */
+
+.pipeline-meter {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-surface-3);
+}
+
+.pipeline-meter__fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+
+.pipeline-meter__fill--error {
+  background: var(--color-down);
+}
+
+.pipeline-meter__fill--done {
+  background: var(--color-up);
+}
+
+/* Continuous sheen so long price ticks still feel alive */
+.pipeline-meter__sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 35%,
+    color-mix(in oklch, var(--color-text-primary) 28%, transparent) 50%,
+    transparent 65%
+  );
+  background-size: 220% 100%;
+  animation: pipeline-sheen 1.35s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  pointer-events: none;
+  mix-blend-mode: soft-light;
+}
+
+.pipeline-meter--active {
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent) 22%, transparent);
+}
+
+.pipeline-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pipeline-live__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  animation: pipeline-pulse 1.1s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  flex-shrink: 0;
+}
+
+.pipeline-live__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+}
+
+.pipeline-ticker-swap {
+  display: inline-block;
+  animation: pipeline-ticker-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.pipeline-stage-chip {
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  transition:
+    color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pipeline-stage-chip--current {
+  background: var(--color-accent);
+  color: var(--color-surface-0);
+  animation: pipeline-stage-glow 1.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+.pipeline-stage-chip--done {
+  background: color-mix(in oklch, var(--color-up) 22%, transparent);
+  color: var(--color-up);
+}
+
+.pipeline-stage-chip--failed {
+  background: color-mix(in oklch, var(--color-down) 22%, transparent);
+  color: var(--color-down);
+}
+
+.pipeline-done-chip {
+  animation: pipeline-chip-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.pipeline-ellipsis::after {
+  content: '…';
+  display: inline-block;
+  margin-left: 1px;
+  animation: pipeline-ellipsis-blink 1.1s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+@keyframes pipeline-sheen {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -40% 0;
+  }
+}
+
+@keyframes pipeline-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.75);
+  }
+}
+
+@keyframes pipeline-stage-glow {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.12);
+  }
+}
+
+@keyframes pipeline-ticker-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pipeline-chip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pipeline-ellipsis-blink {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-meter__fill {
+    transition: none;
+  }
+
+  .pipeline-meter__sheen,
+  .pipeline-live__dot,
+  .pipeline-stage-chip--current,
+  .pipeline-ticker-swap,
+  .pipeline-done-chip,
+  .pipeline-ellipsis::after {
+    animation: none;
+  }
+
+  .pipeline-live__dot {
+    opacity: 1;
+  }
+
+  .pipeline-ellipsis::after {
+    content: '…';
+  }
+}

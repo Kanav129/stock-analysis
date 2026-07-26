@@ -9,7 +9,8 @@ Agentic RAG workflows for news and financial data, with a **Personal Stock Analy
 - **Stock detail**: Price charts, rating history, AI reasoning and supporting headlines
 - **Research reports**: Multi-section core reports (technicals, fundamentals, news, sentiment, decision)
 - **Analysis pipeline**: Manual or scheduled sync → scrape → vector sync → LLM rating
-- **Price storage**: Daily closes retained long-term; last 30 days also keep 5‑minute bars (upsert, no duplicates)
+- **Price storage**: Multi-resolution ladder for charts — `1m` (~2d), `15m` (~8d), `30m` (~16d), `1h` (~35d), `1d` (forever); daily sync gap-fills then compacts
+- **Live prices**: During US RTH with the desk tab open, on-screen tickers refresh every 5 minutes (`1m` Yahoo backfill for the session)
 - **Existing RAG APIs**: News RAG, stock price stats, chart data
 
 ## Architecture
@@ -76,7 +77,7 @@ Workflows in `.github/workflows/`:
 
 | Workflow | When (HKT) | Cron (UTC) | Endpoint |
 |----------|------------|------------|----------|
-| `daily-sync.yml` | Every day 06:00 | `0 22 * * *` | `POST /cron/sync` |
+| `daily-sync.yml` | Tue–Sat 06:00 HKT (skip Sun/Mon = US weekend) | `0 22 * * 1-5` | `POST /cron/sync` |
 | `weekly-analysis.yml` | Saturdays 07:00 | `0 23 * * 5` | `POST /cron/analyze` |
 
 After the API is live, add these **GitHub repo secrets** (Settings → Secrets → Actions):

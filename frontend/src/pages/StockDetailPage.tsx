@@ -18,6 +18,7 @@ import {
   chartRangeHint,
   type ChartRangeId,
 } from '../components/ChartRangeToggle';
+import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
 
 const PriceChart = lazy(() =>
   import('../components/PriceChart').then((m) => ({ default: m.PriceChart })),
@@ -118,6 +119,8 @@ export function StockDetailPage() {
   }, [location.hash, location.pathname, t]);
 
   const [chartRange, setChartRange] = useState<ChartRangeId>('90');
+
+  useLivePriceRefresh(t ? [t] : [], { enabled: !!t });
 
   const quoteQ = useQuery({
     queryKey: ['quotes', t],
@@ -362,7 +365,15 @@ export function StockDetailPage() {
         <div className="col-span-12 flex flex-col gap-3 lg:col-span-8">
           <Panel
             title="Price"
-            subtitle={chartRangeHint(chartRange)}
+            subtitle={
+              chartQ.data?.interval
+                ? `${chartRangeHint(chartRange)} · ${chartQ.data.interval}${
+                    chartRange === '1' && chartQ.data.session_date
+                      ? ` · ${chartQ.data.session_date} ET`
+                      : ''
+                  }`
+                : chartRangeHint(chartRange)
+            }
             actions={
               <ChartRangeToggle value={chartRange} onChange={setChartRange} />
             }
@@ -375,7 +386,12 @@ export function StockDetailPage() {
               </p>
             ) : (
               <Suspense fallback={<ChartFallback />}>
-                <PriceChart data={chartQ.data?.result ?? []} range={chartRange} />
+                <PriceChart
+                  data={chartQ.data?.result ?? []}
+                  range={chartRange}
+                  interval={chartQ.data?.interval}
+                  sessionDate={chartQ.data?.session_date}
+                />
               </Suspense>
             )}
           </Panel>

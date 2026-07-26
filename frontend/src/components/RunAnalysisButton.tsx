@@ -1,14 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { getDeskRunGate } from './deskRunGate';
 
-function formatHkt(iso: string, timezone = 'Asia/Hong_Kong') {
-  return `${new Date(iso).toLocaleTimeString('en-HK', {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-  })} HKT`;
-}
-
+/** Pill trigger with inline Done / Resume gate badge. */
 export function RunAnalysisButton() {
   const qc = useQueryClient();
   const statusQ = useQuery({
@@ -29,28 +23,40 @@ export function RunAnalysisButton() {
   const daily = statusQ.data?.daily;
   const completedToday = Boolean(daily?.already_completed_today);
   const canResume = Boolean(daily?.can_resume);
-  const label = busy ? 'Reports running…' : completedToday ? 'Run again' : 'Run analysis now';
-  const subtitle = completedToday
-    ? `Completed today${daily?.finished_at ? ` · ${formatHkt(daily.finished_at, daily.timezone || 'Asia/Hong_Kong')}` : ''}`
-    : canResume
-      ? `Resuming · ${daily?.completed_count ?? 0} completed`
-      : null;
+  const gate = getDeskRunGate('analysis', daily, busy);
+
+  const label = busy
+    ? 'Reports running…'
+    : completedToday
+      ? 'Run again'
+      : canResume
+        ? 'Resume analysis'
+        : 'Run analysis';
+
+  const toneClass =
+    gate.tone === 'done'
+      ? ' btn-desk-run--done'
+      : gate.tone === 'resume'
+        ? ' btn-desk-run--resume'
+        : '';
 
   return (
-    <div className="flex flex-col items-stretch gap-2">
-      <button
-        type="button"
-        onClick={() => mutation.mutate(completedToday)}
-        disabled={busy}
-        className="btn-terminal btn-terminal--accent"
-        style={{
-          background: busy ? 'var(--color-surface-2)' : undefined,
-          opacity: busy ? 0.7 : 1,
-        }}
-      >
-        {label}
-      </button>
-      {subtitle && <p className="text-xs text-[var(--color-muted)]">{subtitle}</p>}
-    </div>
+    <button
+      type="button"
+      onClick={() => mutation.mutate(completedToday)}
+      disabled={busy}
+      className={`btn-desk-run btn-desk-run--accent${toneClass}`}
+      aria-busy={busy || undefined}
+    >
+      <span className="btn-desk-run__label">{label}</span>
+      {gate.badge ? (
+        <span
+          className={`btn-desk-run__badge btn-desk-run__badge--${gate.tone}`}
+          aria-label={gate.badge}
+        >
+          {gate.badge}
+        </span>
+      ) : null}
+    </button>
   );
 }

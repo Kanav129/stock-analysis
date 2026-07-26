@@ -4,6 +4,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { clearAuthToken } from '../auth';
 import { useSyncKeepAlive } from '../hooks/useSyncKeepAlive';
+import { PrivacyToggle } from './PrivacyToggle';
+import { clearDeskCache } from '../lib/deskCache';
 
 const nav = [
   { to: '/', label: 'Desk' },
@@ -19,6 +21,7 @@ export function Layout() {
 
   function logout() {
     clearAuthToken();
+    clearDeskCache();
     qc.clear();
     navigate('/login', { replace: true });
   }
@@ -67,13 +70,16 @@ export function Layout() {
               );
             })}
           </nav>
-          <button
-            type="button"
-            onClick={logout}
-            className="rounded px-2.5 py-1.5 text-xs font-semibold text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
-          >
-            Log out
-          </button>
+          <div className="flex items-center gap-1">
+            <PrivacyToggle />
+            <button
+              type="button"
+              onClick={logout}
+              className="rounded px-2.5 py-1.5 text-xs font-semibold text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
+            >
+              Log out
+            </button>
+          </div>
         </div>
       </header>
       <main className="terminal-shell mx-auto min-h-[70vh] px-4 py-4">

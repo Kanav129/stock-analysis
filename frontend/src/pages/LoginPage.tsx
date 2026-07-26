@@ -2,11 +2,13 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { isLoggedIn, setAuthToken } from '../auth';
+import { useBackendWake } from '../hooks/useBackendWake';
 
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from || '/';
+  const wakeStatus = useBackendWake();
 
   const [key, setKey] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -15,6 +17,13 @@ export function LoginPage() {
   if (isLoggedIn()) {
     return <Navigate to={from} replace />;
   }
+
+  const wakeLabel =
+    wakeStatus === 'ready'
+      ? 'Desk ready'
+      : wakeStatus === 'slow'
+        ? 'Taking longer than usual — try signing in anyway'
+        : 'Waking desk…';
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -94,6 +103,12 @@ export function LoginPage() {
           <button type="submit" disabled={pending} className="btn-terminal btn-terminal--accent mt-1 w-full">
             {pending ? 'Checking…' : 'Enter desk'}
           </button>
+          <p
+            className="mt-3 text-center text-xs text-[var(--color-text-muted)]"
+            aria-live="polite"
+          >
+            {wakeLabel}
+          </p>
         </form>
       </div>
     </div>

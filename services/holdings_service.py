@@ -133,15 +133,86 @@ class HoldingsService:
         logger.info(f"Saved {count} holdings at {snapshot_at}")
         return count
 
+    def _prior_daily_closes(self, tickers: list[str]) -> dict[str, float]:
+        """Most recent completed daily close per ticker (for day-change vs latest mark)."""
+        if not tickers:
+            return {}
+        db = get_db_client()
+        # Two most recent 1d closes; prior = second (or only if a single bar exists).
+        rows, _ = db.fetch_query(
+            """
+            SELECT ticker, close, rn
+            FROM (
+                SELECT ticker, close,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+                FROM stock_data
+                WHERE ticker IN %s
+                  AND bar_interval = '1d'
+                  AND close IS NOT NULL
+            ) ranked
+            WHERE rn <= 2
+            """,
+            (tuple(tickers),),
+        )
+        latest: dict[str, float] = {}
+        prior: dict[str, float] = {}
+        for ticker, close, rn in rows:
+            price = float(close)
+            if rn == 1:
+                latest[ticker] = price
+            elif rn == 2:
+                prior[ticker] = price
+        # Prefer true prior session; fall back to latest daily when only one bar.
+        return {t: prior.get(t, latest[t]) for t in latest}
+
     def portfolio_summary(self) -> dict[str, Any]:
         holdings = self.get_current_holdings()
         total_value = sum(h.get("market_value") or 0 for h in holdings)
         total_pnl = sum(h.get("unrealized_pnl") or 0 for h in holdings)
         price_dates = [h.get("price_date") for h in holdings if h.get("price_date")]
         snapshot_at = self._latest_snapshot_time()
+
+        cost_basis = 0.0
+        has_cost = False
+        for h in holdings:
+            avg_cost = h.get("avg_cost")
+            qty = float(h.get("quantity") or 0)
+            if avg_cost is not None and qty:
+                cost_basis += float(avg_cost) * qty
+                has_cost = True
+        if not has_cost:
+            cost_basis = total_value - total_pnl
+
+        overall_change_pct = None
+        if cost_basis:
+            overall_change_pct = round(total_pnl / cost_basis * 100, 2)
+
+        prior_closes = self._prior_daily_closes([h["ticker"] for h in holdings])
+        prior_value = 0.0
+        day_dollar = 0.0
+        for h in holdings:
+            ticker = h["ticker"]
+            qty = float(h.get("quantity") or 0)
+            prior = prior_closes.get(ticker)
+            latest = h.get("market_price")
+            if prior is None or not qty:
+                continue
+            prior_value += qty * prior
+            if latest is not None:
+                day_dollar += qty * (float(latest) - prior)
+
+        day_change_pct = None
+        day_change_value = None
+        if prior_value:
+            day_change_pct = round(day_dollar / prior_value * 100, 2)
+            day_change_value = round(day_dollar, 2)
+
         return {
             "total_value": total_value,
             "total_unrealized_pnl": total_pnl,
+            "day_change_pct": day_change_pct,
+            "day_change_value": day_change_value,
+            "overall_change_pct": overall_change_pct,
             "position_count": len(holdings),
             "snapshot_at": max(price_dates) if price_dates else (
                 snapshot_at.isoformat() if snapshot_at else None

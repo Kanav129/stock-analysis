@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-26T09:43:00.000Z",
+  "title": "Design System: Stock Analysis — Personal Desk",
+  "extensions": {
+    "colorMeta": {
+      "desk-azure": {
+        "role": "primary",
+        "displayName": "Desk Azure",
+        "canonical": "oklch(0.72 0.14 250)",
+        "tonalRamp": [
+          "oklch(0.20 0.08 250)",
+          "oklch(0.30 0.10 250)",
+          "oklch(0.42 0.12 250)",
+          "oklch(0.55 0.13 250)",
+          "oklch(0.65 0.14 250)",
+          "oklch(0.72 0.14 250)",
+          "oklch(0.82 0.10 250)",
+          "oklch(0.92 0.04 250)"
+        ]
+      },
+      "surface-0": {
+        "role": "neutral",
+        "displayName": "Void Pit",
+        "canonical": "oklch(0.13 0.02 260)",
+        "tonalRamp": [
+          "oklch(0.10 0.02 260)",
+          "oklch(0.13 0.02 260)",
+          "oklch(0.17 0.025 260)",
+          "oklch(0.21 0.03 260)",
+          "oklch(0.25 0.035 260)",
+          "oklch(0.35 0.03 260)",
+          "oklch(0.55 0.02 260)",
+          "oklch(0.93 0.01 260)"
+        ]
+      },
+      "up": {
+        "role": "semantic",
+        "displayName": "Tape Green",
+        "canonical": "oklch(0.72 0.12 155)",
+        "tonalRamp": [
+          "oklch(0.25 0.08 155)",
+          "oklch(0.40 0.10 155)",
+          "oklch(0.55 0.11 155)",
+          "oklch(0.65 0.12 155)",
+          "oklch(0.72 0.12 155)",
+          "oklch(0.80 0.10 155)",
+          "oklch(0.88 0.06 155)",
+          "oklch(0.95 0.03 155)"
+        ]
+      },
+      "down": {
+        "role": "semantic",
+        "displayName": "Tape Red",
+        "canonical": "oklch(0.65 0.14 25)",
+        "tonalRamp": [
+          "oklch(0.25 0.08 25)",
+          "oklch(0.38 0.11 25)",
+          "oklch(0.50 0.13 25)",
+          "oklch(0.58 0.14 25)",
+          "oklch(0.65 0.14 25)",
+          "oklch(0.75 0.11 25)",
+          "oklch(0.85 0.07 25)",
+          "oklch(0.94 0.03 25)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Panel kicker",
+        "purpose": "Uppercase tracked panel titles — quiet chrome, not hero shout."
+      },
+      "title": {
+        "displayName": "Page title",
+        "purpose": "Trading Desk and similar page headers."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Supporting copy and empty states."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Meta and compact UI labels."
+      },
+      "data": {
+        "displayName": "Data mono",
+        "purpose": "Prices, tickers, percentages, technicals."
+      }
+    },
+    "shadows": [
+      {
+        "name": "overlay-lift",
+        "value": "0 8px 24px color-mix(in oklch, var(--color-surface-0) 55%, transparent)",
+        "purpose": "Chart tooltips and ephemeral floating UI only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out-expo",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Default state transitions (160–280ms)."
+      },
+      {
+        "name": "fade-up",
+        "value": "0.28s cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Page enter; disabled under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Terminal button",
+      "kind": "button",
+      "refersTo": "button-terminal",
+      "description": "Secondary ops — Cancel, Manage, compact actions.",
+      "html": "<button class=\"ds-btn-terminal\" type=\"button\">Cancel</button>",
+      "css": ".ds-btn-terminal { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 4px; border: 1px solid var(--color-surface-3, oklch(0.25 0.035 260)); background: var(--color-surface-2, oklch(0.21 0.03 260)); color: var(--color-text-secondary, oklch(0.72 0.02 260)); font-family: \"Hanken Grotesk\", system-ui, sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; transition: color 160ms cubic-bezier(0.16, 1, 0.3, 1), border-color 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-terminal:hover { color: var(--color-text-primary, oklch(0.93 0.01 260)); border-color: var(--color-accent, oklch(0.72 0.14 250)); } .ds-btn-terminal:focus-visible { outline: 2px solid var(--color-accent, oklch(0.72 0.14 250)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Desk-run pill",
+      "kind": "button",
+      "refersTo": "button-desk-run",
+      "description": "Primary Sync / Analysis instrument with optional status badge.",
+      "html": "<button class=\"ds-btn-desk-run ds-btn-desk-run--accent\" type=\"button\"><span>Sync</span><span class=\"ds-btn-desk-run__badge\">Done · 06:12 HKT</span></button>",
+      "css": ".ds-btn-desk-run { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 8px 16px; border-radius: 999px; border: 1px solid var(--color-surface-3, oklch(0.25 0.035 260)); background: var(--color-surface-2, oklch(0.21 0.03 260)); color: var(--color-text-secondary, oklch(0.72 0.02 260)); font-family: \"Hanken Grotesk\", system-ui, sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; transition: color 160ms cubic-bezier(0.16, 1, 0.3, 1), border-color 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-desk-run--accent { color: var(--color-accent, oklch(0.72 0.14 250)); border-color: color-mix(in oklch, var(--color-accent, oklch(0.72 0.14 250)) 50%, var(--color-surface-3, oklch(0.25 0.035 260))); } .ds-btn-desk-run:hover { color: var(--color-text-primary, oklch(0.93 0.01 260)); border-color: var(--color-accent, oklch(0.72 0.14 250)); } .ds-btn-desk-run__badge { padding: 3px 9px; border-radius: 999px; font-family: \"JetBrains Mono\", ui-monospace, monospace; font-size: 11px; font-weight: 600; color: var(--color-up, oklch(0.72 0.12 155)); background: color-mix(in oklch, var(--color-up, oklch(0.72 0.12 155)) 16%, transparent); } .ds-btn-desk-run:focus-visible { outline: 2px solid var(--color-accent, oklch(0.72 0.14 250)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Terminal panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Primary content container — tonal, bordered, dense header.",
+      "html": "<section class=\"ds-panel\"><header class=\"ds-panel__header\"><h3 class=\"ds-panel__title\">Holdings</h3><p class=\"ds-panel__subtitle\">22 positions</p></header><div class=\"ds-panel__body\">Panel body</div></section>",
+      "css": ".ds-panel { background: var(--color-surface-1, oklch(0.17 0.025 260)); border: 1px solid color-mix(in oklch, var(--color-surface-3, oklch(0.25 0.035 260)) 80%, transparent); border-radius: 6px; min-width: 0; color: var(--color-text-primary, oklch(0.93 0.01 260)); font-family: \"Hanken Grotesk\", system-ui, sans-serif; } .ds-panel__header { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; border-bottom: 1px solid color-mix(in oklch, var(--color-surface-3, oklch(0.25 0.035 260)) 80%, transparent); } .ds-panel__title { margin: 0; font-family: \"Schibsted Grotesk Variable\", system-ui, sans-serif; font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-muted, oklch(0.55 0.02 260)); } .ds-panel__subtitle { margin: 2px 0 0; font-size: 11px; color: var(--color-text-muted, oklch(0.55 0.02 260)); } .ds-panel__body { padding: 12px 16px; font-size: 0.875rem; }"
+    },
+    {
+      "name": "Chart range toggle",
+      "kind": "chip",
+      "refersTo": "chart-range",
+      "description": "Mono segmented control for price ranges.",
+      "html": "<div class=\"ds-chart-range\" role=\"group\"><button type=\"button\" class=\"ds-chart-range__btn\" aria-pressed=\"true\">1D</button><button type=\"button\" class=\"ds-chart-range__btn\" aria-pressed=\"false\">7D</button><button type=\"button\" class=\"ds-chart-range__btn\" aria-pressed=\"false\">1M</button></div>",
+      "css": ".ds-chart-range { display: inline-flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--color-surface-2, oklch(0.21 0.03 260)); border: 1px solid color-mix(in oklch, var(--color-surface-3, oklch(0.25 0.035 260)) 80%, transparent); } .ds-chart-range__btn { appearance: none; border: 0; padding: 4px 8px; border-radius: 4px; font-family: \"JetBrains Mono\", ui-monospace, monospace; font-size: 11px; font-weight: 600; background: transparent; color: var(--color-text-muted, oklch(0.55 0.02 260)); cursor: pointer; } .ds-chart-range__btn[aria-pressed=\"true\"] { background: var(--color-accent, oklch(0.72 0.14 250)); color: var(--color-surface-0, oklch(0.13 0.02 260)); } .ds-chart-range__btn:hover:not([aria-pressed=\"true\"]) { color: var(--color-text-primary, oklch(0.93 0.01 260)); } .ds-chart-range__btn:focus-visible { outline: 2px solid var(--color-accent, oklch(0.72 0.14 250)); outline-offset: 1px; }"
+    },
+    {
+      "name": "Rating badge",
+      "kind": "chip",
+      "refersTo": "rating-badge",
+      "description": "Semantic rating chip using the ladder tokens.",
+      "html": "<span class=\"ds-rating ds-rating--buy\">BUY</span>",
+      "css": ".ds-rating { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 4px; font-family: \"Hanken Grotesk\", system-ui, sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; } .ds-rating--buy { color: var(--color-rating-buy, oklch(0.72 0.13 155)); background: color-mix(in oklch, var(--color-rating-buy, oklch(0.72 0.13 155)) 18%, transparent); } .ds-rating--hold { color: var(--color-rating-hold, oklch(0.78 0.12 95)); background: color-mix(in oklch, var(--color-rating-hold, oklch(0.78 0.12 95)) 18%, transparent); } .ds-rating--sell { color: var(--color-rating-sell, oklch(0.68 0.15 35)); background: color-mix(in oklch, var(--color-rating-sell, oklch(0.68 0.15 35)) 18%, transparent); }"
+    },
+    {
+      "name": "Header nav",
+      "kind": "nav",
+      "refersTo": "nav",
+      "description": "Sticky desk chrome with quiet brand + active chip.",
+      "html": "<header class=\"ds-nav\"><div class=\"ds-nav__brand\"><p class=\"ds-nav__eyebrow\">Personal Desk</p><p class=\"ds-nav__title\">Stock Analysis</p></div><nav class=\"ds-nav__links\"><a class=\"ds-nav__link ds-nav__link--active\" href=\"#\">Desk</a><a class=\"ds-nav__link\" href=\"#\">Watchlist</a><a class=\"ds-nav__link\" href=\"#\">Settings</a></nav></header>",
+      "css": ".ds-nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 16px; background: color-mix(in oklch, var(--color-surface-1, oklch(0.17 0.025 260)) 95%, transparent); border-bottom: 1px solid var(--color-surface-3, oklch(0.25 0.035 260)); font-family: \"Hanken Grotesk\", system-ui, sans-serif; } .ds-nav__eyebrow { margin: 0; font-family: \"Schibsted Grotesk Variable\", system-ui, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--color-text-muted, oklch(0.55 0.02 260)); } .ds-nav__title { margin: 0; font-family: \"Schibsted Grotesk Variable\", system-ui, sans-serif; font-size: 16px; font-weight: 600; color: var(--color-text-primary, oklch(0.93 0.01 260)); } .ds-nav__links { display: flex; gap: 2px; } .ds-nav__link { padding: 6px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; color: var(--color-text-secondary, oklch(0.72 0.02 260)); text-decoration: none; } .ds-nav__link:hover { color: var(--color-text-primary, oklch(0.93 0.01 260)); } .ds-nav__link--active { background: var(--color-surface-3, oklch(0.25 0.035 260)); color: var(--color-text-primary, oklch(0.93 0.01 260)); } .ds-nav__link:focus-visible { outline: 2px solid var(--color-accent, oklch(0.72 0.14 250)); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Decision Console",
+    "overview": "This is a private night-side trading desk: cool-blue darkness, dense panels, and controls that behave like instruments. The interface exists to finish a decision loop — sync data, run analysis, read the call — with operational honesty about progress, cancel, and resume. Personality is sharp, dense, terminal, and no-nonsense: status and numbers first, celebration never.\n\nDepth comes from stacked surfaces and hairline gridlines more than glow. Accent (Desk Azure) is scarce — selection, active ranges, and primary pipeline actions. Market semantics (up / down / hold / rating ladder) carry meaning; decoration does not.\n\nThe system explicitly rejects generic SaaS analytics dashboards — purple gradients, identical card grids, and fluffy “insights” marketing chrome that dilute a trading desk.",
+    "keyCharacteristics": [
+      "Cool-blue dark tonal surfaces (surface-0 → surface-3)",
+      "Restrained Desk Azure accent (≤10% of any screen)",
+      "Display + humanist body + mono data trio",
+      "Dense 12-column terminal grid, 6px panel corners",
+      "Soft elevation reserved for floating overlays (tooltips)",
+      "Motion only for state: 150–280ms ease-out-expo, reduced-motion respected"
+    ],
+    "rules": [
+      {
+        "name": "The One Signal Rule",
+        "body": "Desk Azure appears on ≤10% of any screen. If everything is accented, nothing is.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ladder Rule",
+        "body": "Rating meaning uses the named ladder tokens; never invent a one-off green/red for ratings.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono Means Money Rule",
+        "body": "Numeric market data is always JetBrains Mono with tabular figures. Body sans never carries live prices.",
+        "section": "typography"
+      },
+      {
+        "name": "The No Hero Clamp Rule",
+        "body": "Product type uses fixed rem steps — no fluid marketing clamp() headlines on the desk.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-By-Default Rule",
+        "body": "Surfaces at rest cast no shadow. If a panel needs presence, step its surface token or border — don’t invent a drop shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep Desk Azure scarce — selection, focus, and primary pipeline emphasis only.",
+      "Do use the rating ladder tokens for every rating surface.",
+      "Do put prices, tickers, and % in JetBrains Mono with tabular nums.",
+      "Do prefer tonal surface steps + gridlines over shadows for panel hierarchy.",
+      "Do skeleton in place for loading; never block the whole desk behind one spinner.",
+      "Do honor prefers-reduced-motion (crossfade or instant; no stuck opacity:0 reveals).",
+      "Do keep Sync/Analysis as pill instruments with honest Done/Resume state."
+    ],
+    "donts": [
+      "Don't ship generic SaaS analytics dashboards — purple gradients, identical card grids, and fluffy “insights” marketing chrome that dilute a trading desk. (PRODUCT.md anti-reference, verbatim.)",
+      "Don't use side-stripe borders (border-left / border-right > 1px) as accent decoration.",
+      "Don't use gradient text or decorative glassmorphism on panels.",
+      "Don't invent hero-metric SaaS layouts (giant number + fluff stats strip) for the desk header.",
+      "Don't put display type in buttons or table cells — Schibsted is for titles/kickers only.",
+      "Don't animate width/height for progress; use transform/opacity (or the existing scaleX progress fills).",
+      "Don't treat every section as a card; panels and wells are the container vocabulary."
+    ]
+  }
+}

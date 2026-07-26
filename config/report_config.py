@@ -168,14 +168,10 @@ def compute_factor_scores(
     elif atr_pct_val > 5:
         scores["low_risk"] = max(scores["low_risk"] - 10, 0)
 
-    # ── Sentiment (0–100) ──
+    # ── Sentiment (0–100) — StockTwits only ──
     st = sentiment_data.get("stocktwits", {})
     bullish_pct = st.get("bullish_pct", 0)
-    reddit = sentiment_data.get("reddit", {})
-    sent = min(bullish_pct * 0.7, 70)
-    if reddit.get("has_engagement"):
-        sent += min(reddit.get("average_score", 0) / 10.0, 30)
-    scores["sentiment"] = min(max(int(sent), 0), 100)
+    scores["sentiment"] = min(max(int(bullish_pct), 0), 100)
 
     return scores
 

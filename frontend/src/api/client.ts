@@ -81,6 +81,7 @@ export const api = {
     body: JSON.stringify({ tickers: tickers ?? null, force: Boolean(opts?.force) }),
   }),
   getSyncStatus: () => request<import('./types').SyncProgress>('/sync/status'),
+  cancelSync: () => request<import('./types').SyncProgress>('/sync/cancel', { method: 'POST' }),
   /** Unauthenticated; used to keep the Render free dyno awake during long syncs. */
   health: () => request<{ status: string }>('/health'),
   getAnalysisStatus: () => request<import('./types').AnalysisProgress>('/analysis/status'),
@@ -92,11 +93,25 @@ export const api = {
   removeWatchlist: (ticker: string) => request<{ removed: string }>(`/watchlist/${ticker}`, { method: 'DELETE' }),
   getUniverse: () => request<{ tickers: string[]; watchlist: string[]; holdings: string[] }>('/universe'),
   getChart: (ticker: string, priceType = 'close', duration = '30') =>
-    request<{ ticker: string; result: import('./types').ChartPoint[] }>(`/stock/${ticker}/chart?price_type=${priceType}&duration=${duration}`),
+    request<{
+      ticker: string;
+      interval?: string;
+      session_date?: string;
+      result: import('./types').ChartPoint[];
+    }>(`/stock/${ticker}/chart?price_type=${priceType}&duration=${duration}`),
   getQuotes: (tickers: string[], sparkDays = 30) =>
     request<{ quotes: Record<string, import('./types').StockQuote> }>(
       `/stock/quotes?tickers=${encodeURIComponent(tickers.join(','))}&spark_days=${sparkDays}`,
     ),
+  livePriceRefresh: (tickers: string[]) =>
+    request<{
+      skipped: boolean;
+      reason?: string;
+      results: Record<string, { upserted?: number; error?: string }>;
+    }>('/stock/prices/live-refresh', {
+      method: 'POST',
+      body: JSON.stringify({ tickers }),
+    }),
   getTechnicals: (ticker: string) =>
     request<import('./types').StockTechnicals>(`/stock/${ticker}/technicals`),
   getRecentNews: (ticker: string, limit = 10) =>

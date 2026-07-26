@@ -180,7 +180,7 @@ def test_stale_worker_callback_does_not_save_after_generation_changes():
     }
     news = MagicMock()
 
-    def abandon_then_callback(tickers, on_progress=None, on_ticker_done=None):
+    def abandon_then_callback(tickers, on_progress=None, on_ticker_done=None, **_kwargs):
         svc._run_generation += 1
         on_ticker_done("AAPL")
 
@@ -224,10 +224,10 @@ def test_worker_checkpoints_each_ticker_and_completes():
     news = MagicMock()
     prices = MagicMock()
     news.scrape_all_tickers.side_effect = (
-        lambda tickers, on_progress=None, on_ticker_done=None: on_ticker_done("AAPL")
+        lambda tickers, on_progress=None, on_ticker_done=None, **_k: on_ticker_done("AAPL")
     )
     prices.scrape_all_tickers.side_effect = (
-        lambda tickers, on_progress=None, on_ticker_done=None: on_ticker_done("AAPL")
+        lambda tickers, on_progress=None, on_ticker_done=None, **_k: on_ticker_done("AAPL")
     )
     vector_manager = MagicMock()
     snapshots = []
@@ -386,7 +386,7 @@ def test_worker_constructs_only_price_scraper_for_price_only_resume():
     }
     prices = MagicMock()
     prices.scrape_all_tickers.side_effect = (
-        lambda tickers, on_progress=None, on_ticker_done=None: on_ticker_done("AAPL")
+        lambda tickers, on_progress=None, on_ticker_done=None, **_k: on_ticker_done("AAPL")
     )
 
     with (
@@ -441,3 +441,66 @@ def test_start_passes_pinned_day_to_worker():
         assert worker.cr_frame.f_locals["day"] == "2026-07-22"
         _close_scheduled_coroutine(loop.return_value.create_task)
         assert load_sync.call_args_list[0].args == ("2026-07-22",)
+
+
+def test_request_cancel_sets_flag_when_running():
+    svc = SyncService()
+    svc._running = True
+    with patch.object(svc, "get_status", return_value={"running": True, "status": "running"}):
+        out = svc.request_cancel()
+    assert svc._cancel_requested is True
+    assert "Cancel" in (svc._status.get("message") or "")
+    assert out["running"] is True
+
+
+def test_worker_cancel_keeps_checkpoint_for_resume():
+    svc = SyncService()
+    svc._running = True
+    cp = {
+        "status": "running",
+        "tickers": ["AAPL", "MSFT"],
+        "news_done": ["AAPL"],
+        "prices_done": [],
+        "vectors_done": False,
+        "errors": [],
+    }
+    news = MagicMock()
+
+    def scrape_and_cancel(tickers, on_progress=None, on_ticker_done=None, should_continue=None, **_k):
+        # First ticker succeeds, then cancel stops the rest
+        if on_ticker_done:
+            on_ticker_done(tickers[0])
+        svc._cancel_requested = True
+        assert should_continue is not None and should_continue() is False
+
+    news.scrape_all_tickers.side_effect = scrape_and_cancel
+    snapshots = []
+
+    with (
+        patch(
+            "services.sync_service.NewsScraperFactory.create_scraper",
+            return_value=news,
+        ),
+        patch(
+            "services.sync_service.rcs.save_sync",
+            side_effect=lambda data, day=None: snapshots.append(dict(data)),
+        ),
+        patch("services.sync_service.rcs.mark_last_sync_date") as mark_last,
+    ):
+        asyncio.run(
+            svc._run_worker(
+                ["AAPL", "MSFT"],
+                ["MSFT"],  # remaining news after AAPL already done
+                ["AAPL", "MSFT"],
+                True,
+                checkpoint_seed=cp,
+                day="2026-07-22",
+            )
+        )
+
+    assert svc._status["status"] == "cancelled"
+    assert snapshots[-1]["status"] == "cancelled"
+    assert "AAPL" in snapshots[-1]["news_done"]
+    assert "MSFT" in snapshots[-1]["news_done"]
+    mark_last.assert_not_called()
+    assert svc._running is False

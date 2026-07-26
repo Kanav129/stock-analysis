@@ -257,6 +257,11 @@ body {
   font-weight: 600;
 }
 
+.price-chart__interval {
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
 .price-chart__delta--up {
   color: var(--color-up);
 }
@@ -751,6 +756,108 @@ body {
   color: var(--color-text-secondary);
 }
 
+/* Desk action toolbar — level pill triggers */
+.desk-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+/* Larger pill CTAs with inline Done / Resume badges */
+.btn-desk-run {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  min-height: 40px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--color-surface-3);
+  background: var(--color-surface-2);
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-desk-run:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  border-color: var(--color-accent);
+}
+
+.btn-desk-run:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-desk-run:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.btn-desk-run--accent {
+  border-color: color-mix(in oklch, var(--color-accent) 50%, var(--color-surface-3));
+  color: var(--color-accent);
+}
+
+.btn-desk-run--accent:hover:not(:disabled) {
+  color: var(--color-accent-hover);
+  border-color: var(--color-accent);
+}
+
+.btn-desk-run--done {
+  border-color: color-mix(in oklch, var(--color-up) 45%, var(--color-surface-3));
+}
+
+.btn-desk-run--resume {
+  border-color: color-mix(in oklch, var(--color-hold) 45%, var(--color-surface-3));
+}
+
+.btn-desk-run__label {
+  white-space: nowrap;
+}
+
+.btn-desk-run__badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 11rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-desk-run__badge--done {
+  color: var(--color-up);
+  background: color-mix(in oklch, var(--color-up) 16%, transparent);
+}
+
+.btn-desk-run__badge--resume {
+  color: var(--color-hold);
+  background: color-mix(in oklch, var(--color-hold) 16%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-desk-run {
+    transition: none;
+  }
+}
+
 .btn-terminal {
   display: inline-flex;
   align-items: center;
@@ -775,6 +882,11 @@ body {
 .btn-terminal:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.btn-terminal:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .btn-terminal--accent {

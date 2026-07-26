@@ -11,8 +11,10 @@ name: Daily sync
 
 on:
   schedule:
-    # 06:00 HKT daily (HKT = UTC+8) → 22:00 UTC previous calendar day
-    - cron: "0 22 * * *"
+    # 06:00 HKT on Tue–Sat (after Mon–Fri US sessions).
+    # Fires Mon–Fri 22:00 UTC (= next calendar day 06:00 HKT).
+    # Skips Sun/Mon HKT mornings (US weekend — no new US equity session).
+    - cron: "0 22 * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -21,7 +23,27 @@ jobs:
     # Ceiling for large universes; actual poll loop uses calculated timeout (~2h for 22 tickers).
     timeout-minutes: 240
     steps:
+      - name: Weekend guard
+        id: guard
+        run: |
+          set -euo pipefail
+          # Manual runs always proceed. Scheduled runs skip Sun/Mon HKT
+          # (US weekend — no new US equity session after Sat/Sun).
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          DOW=$(TZ=Asia/Hong_Kong date +%u)  # 1=Mon … 7=Sun
+          echo "HKT weekday=$DOW ($(TZ=Asia/Hong_Kong date -Iseconds))"
+          if [ "$DOW" = "7" ] || [ "$DOW" = "1" ]; then
+            echo "US weekend (Sun/Mon HKT) — skipping scheduled daily sync"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Wake dyno
+        if: steps.guard.outputs.skip != 'true'
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
@@ -45,6 +67,7 @@ jobs:
 
       - name: Start sync
         id: start
+        if: steps.guard.outputs.skip != 'true'
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
@@ -97,6 +120,7 @@ jobs:
           PY
 
       - name: Wait until sync finishes
+        if: steps.guard.outputs.skip != 'true'
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}

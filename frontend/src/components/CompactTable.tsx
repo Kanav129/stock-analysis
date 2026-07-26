@@ -4,12 +4,14 @@ export function CompactTable({
   headers,
   children,
   empty,
+  caption,
   /** Column indexes to center (0-based). */
   centerCols,
 }: {
   headers: ReactNode[];
   children: ReactNode;
   empty?: ReactNode;
+  caption?: string;
   centerCols?: number[];
 }) {
   const centered = new Set(centerCols ?? []);
@@ -17,6 +19,7 @@ export function CompactTable({
   return (
     <div className="overflow-x-auto">
       <table className="compact-table">
+        {caption ? <caption className="sr-only">{caption}</caption> : null}
         <thead>
           <tr>
             {headers.map((h, i) => (

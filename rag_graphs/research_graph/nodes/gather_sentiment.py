@@ -1,4 +1,4 @@
-"""Sentiment node — social media aggregation + 1 LLM call for theme analysis."""
+"""Sentiment node — StockTwits aggregation + 1 LLM call for theme analysis."""
 from __future__ import annotations
 
 import json
@@ -11,17 +11,17 @@ from rag_graphs.research_graph.state import ResearchState
 from scraper.social_scraper import SocialScraper
 from utils.logger import logger
 
-SENTIMENT_SYSTEM = """You are a social sentiment analyst for equities. Given sentiment data from
-StockTwits and Reddit, write a structured analysis in markdown. Include:
+SENTIMENT_SYSTEM = """You are a social sentiment analyst for equities. Given StockTwits
+sentiment data, write a structured analysis in markdown. Include:
 
 1. **Overall Sentiment Direction** (Bullish / Bearish / Neutral) with confidence note.
-2. **Source-by-Source Breakdown** — StockTwits (retail sentiment, themes, bullish/bearish ratios), Reddit (engagement level, key discussions).
-3. **Divergences / Alignments / Key Narratives** — are sources in agreement? What's the dominant narrative?
+2. **StockTwits Breakdown** — retail sentiment, themes, bullish/bearish ratios, sample messages.
+3. **Key Narratives** — dominant narrative and any notable divergences in the sample.
 4. **Catalysts and Risks** surfaced in social data.
 5. A **Summary of Key Sentiment Signals** table.
 6. **Bottom line** for traders.
 
-Keep it under 800 words."""
+Keep it under 800 words. Do not invent Reddit or other sources that are not in the data."""
 
 
 def gather_sentiment(state: ResearchState) -> Dict[str, Any]:
@@ -35,15 +35,12 @@ def gather_sentiment(state: ResearchState) -> Dict[str, Any]:
         logger.warning(f"Social scraper failed for {ticker}: {exc}")
         sentiment_summary = {
             "stocktwits": {"total": 0, "bullish": 0, "bearish": 0, "error": str(exc)},
-            "reddit": {"total_posts": 0, "error": str(exc)},
             "cross_source_alignment": "no_data",
         }
 
-    # ── LLM narrative ──
     st = sentiment_summary.get("stocktwits", {})
-    reddit = sentiment_summary.get("reddit", {})
 
-    if st.get("total", 0) == 0 and reddit.get("total_posts", 0) == 0:
+    if st.get("total", 0) == 0:
         markdown = f"*No social sentiment data found for {ticker} in the past week.*"
     else:
         try:
@@ -54,9 +51,6 @@ def gather_sentiment(state: ResearchState) -> Dict[str, Any]:
 
 ## StockTwits
 {stocktwits_json}
-
-## Reddit
-{reddit_json}
 
 Output the analysis in markdown."""),
             ])
@@ -73,15 +67,6 @@ Output the analysis in markdown."""),
                     "strongly_bullish": st.get("is_strongly_bullish", False),
                     "sample": [{"body": m.get("body", ""), "sentiment": m.get("sentiment")}
                                for m in st.get("sample", [])[:10]],
-                }, indent=2),
-                "reddit_json": json.dumps({
-                    "total_posts": reddit.get("total_posts", 0),
-                    "average_score": reddit.get("average_score", 0),
-                    "average_comments": reddit.get("average_comments", 0),
-                    "has_engagement": reddit.get("has_engagement", False),
-                    "sample": [{"title": p.get("title", ""), "subreddit": p.get("subreddit", ""),
-                                "score": p.get("score", 0), "num_comments": p.get("num_comments", 0)}
-                               for p in reddit.get("sample", [])[:10]],
                 }, indent=2),
             })
             markdown = result.content if hasattr(result, "content") else str(result)

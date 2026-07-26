@@ -26,7 +26,7 @@ class StockData(Base):
     ticker = Column(String(10), nullable=False)
     date = Column(Date, nullable=False)
     bar_ts = Column(DateTime(timezone=True), nullable=False)
-    bar_interval = Column(String(8), nullable=False, default="1d")  # '1d' | '5m'
+    bar_interval = Column(String(8), nullable=False, default="1d")  # '1m'|'15m'|'30m'|'1h'|'1d'
     open = Column(Float)
     high = Column(Float)
     low = Column(Float)

@@ -177,6 +177,7 @@ def daily_sync_summary(cp: dict | None, universe: list[str] | None = None) -> di
     day = today_key()
     tz_name = str(app_timezone())
     if not cp:
+        universe = [t.upper() for t in (universe or [])]
         return {
             "date": day,
             "timezone": tz_name,
@@ -185,6 +186,7 @@ def daily_sync_summary(cp: dict | None, universe: list[str] | None = None) -> di
             "already_completed_today": False,
             "news_done_count": 0,
             "prices_done_count": 0,
+            "universe_count": len(universe),
             "finished_at": None,
         }
     universe = [t.upper() for t in (universe or cp.get("tickers") or [])]
@@ -201,7 +203,11 @@ def daily_sync_summary(cp: dict | None, universe: list[str] | None = None) -> di
             pass
         elif status not in ("error",):
             status = "partial" if (news_n or prices_n) else status
-    can_resume = (not complete) and (news_n > 0 or prices_n > 0 or status in ("partial", "error"))
+    can_resume = (not complete) and (
+        news_n > 0
+        or prices_n > 0
+        or status in ("partial", "error", "cancelled")
+    )
     return {
         "date": day,
         "timezone": tz_name,
@@ -210,6 +216,7 @@ def daily_sync_summary(cp: dict | None, universe: list[str] | None = None) -> di
         "already_completed_today": bool(complete),
         "news_done_count": news_n,
         "prices_done_count": prices_n,
+        "universe_count": len(universe),
         "finished_at": cp.get("finished_at"),
     }
 
@@ -238,5 +245,6 @@ def daily_analysis_summary(cp: dict | None, universe: list[str] | None = None) -
         "can_resume": bool(done_tickers) and not complete,
         "already_completed_today": bool(complete),
         "completed_count": len(done_tickers),
+        "universe_count": len(universe),
         "finished_at": (cp or {}).get("finished_at"),
     }

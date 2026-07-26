@@ -1,9 +1,10 @@
-"""Social sentiment scraper — StockTwits public API + Reddit read-only .json endpoints.
-Free, no authentication required. Aggressively rate-limited to avoid blocks."""
+"""Social sentiment scraper — StockTwits public API.
+
+Reddit was removed: free/anonymous access is blocked and paid API is out of scope.
+"""
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
 from typing import Any
 
 import requests
@@ -12,12 +13,12 @@ from utils.logger import logger
 
 
 class SocialScraper:
-    """Fetches social sentiment data from StockTwits and Reddit."""
+    """Fetches social sentiment data from StockTwits."""
 
     def __init__(self) -> None:
         self._session = requests.Session()
         self._session.headers.update({
-            "User-Agent": "stocks-insights-agent/1.0 (personal research; contact@example.com)"
+            "User-Agent": "stocks-insights-agent/1.0 (personal research)"
         })
         self._last_request: float = 0.0
 
@@ -32,12 +33,11 @@ class SocialScraper:
         try:
             resp = self._session.get(url, params=params, timeout=timeout)
             resp.raise_for_status()
-            return resp.json()  # type: ignore[no-any-return]
+            data = resp.json()
+            return data if isinstance(data, dict) else {}
         except Exception as exc:
             logger.error(f"Social scrape failed: {url} — {exc}")
             return {}
-
-    # ── StockTwits ────────────────────────────────────────────────
 
     def get_stocktwits_messages(self, ticker: str, limit: int = 30) -> list[dict[str, Any]]:
         """Fetch recent StockTwits messages for a ticker.
@@ -78,79 +78,21 @@ class SocialScraper:
             "source": "StockTwits",
         }
 
-    # ── Reddit ────────────────────────────────────────────────────
-
-    REDDIT_SUBREDDITS = ["wallstreetbets", "stocks", "investing"]
-
-    def get_reddit_posts(self, ticker: str, days: int = 7, limit: int = 20) -> list[dict[str, Any]]:
-        """Search Reddit for ticker mentions across finance subreddits.
-        Uses read-only .json endpoints — no auth required."""
-        after = (datetime.utcnow() - timedelta(days=days)).timestamp()
-        posts: list[dict[str, Any]] = []
-        for sub in self.REDDIT_SUBREDDITS:
-            url = f"https://www.reddit.com/r/{sub}/search.json"
-            params = {"q": ticker.upper(), "sort": "new", "limit": min(limit, 25), "restrict_sr": "on"}
-            data = self._get_json(url, params)
-            children = data.get("data", {}).get("children", []) if isinstance(data, dict) else []
-            for child in children:
-                post_data = child.get("data", {})
-                created = post_data.get("created_utc", 0)
-                if created < after:
-                    continue
-                posts.append({
-                    "id": post_data.get("id"),
-                    "title": post_data.get("title", ""),
-                    "selftext": post_data.get("selftext", "")[:500],
-                    "subreddit": sub,
-                    "score": post_data.get("score", 0),
-                    "num_comments": post_data.get("num_comments", 0),
-                    "created_utc": created,
-                    "url": f"https://www.reddit.com{post_data.get('permalink', '')}",
-                    "flair": post_data.get("link_flair_text", ""),
-                })
-            if len(posts) >= limit:
-                posts = posts[:limit]
-                break
-            time.sleep(1.5)  # be kind to Reddit's servers
-
-        logger.info(f"Reddit: {len(posts)} posts for {ticker}")
-        return posts[:limit]
-
-    # ── Combined summary ──────────────────────────────────────────
-
     def get_sentiment_summary(self, ticker: str) -> dict[str, Any]:
-        """Combined StockTwits + Reddit sentiment for the report."""
+        """StockTwits sentiment summary for the research report."""
         st = self.get_stocktwits_sentiment(ticker)
-        reddit = self.get_reddit_posts(ticker)
-
-        # Simple Reddit aggregate
-        reddit_total = len(reddit)
-        reddit_avg_score = round(sum(p["score"] for p in reddit) / max(reddit_total, 1), 1)
-        reddit_avg_comments = round(sum(p["num_comments"] for p in reddit) / max(reddit_total, 1), 1)
-
         return {
             "stocktwits": st,
-            "reddit": {
-                "total_posts": reddit_total,
-                "average_score": reddit_avg_score,
-                "average_comments": reddit_avg_comments,
-                "sample": reddit[:10],
-                "has_engagement": reddit_total > 0,
-            },
-            "cross_source_alignment": self._alignment(st, reddit),
+            "cross_source_alignment": self._alignment(st),
         }
 
     @staticmethod
-    def _alignment(
-        st: dict[str, Any], reddit: list[dict[str, Any]]
-    ) -> str:
-        """Simple heuristic alignment check between sources."""
-        st_bullish = st.get("bullish_pct", 0) > 50
-        reddit_busy = len(reddit) > 5
-        if st_bullish and reddit_busy:
-            return "positive_alignment"
-        if not st_bullish and reddit_busy:
-            return "conflicting"
-        if st.get("total", 0) == 0 and len(reddit) == 0:
+    def _alignment(st: dict[str, Any]) -> str:
+        """Simple heuristic from StockTwits alone."""
+        if st.get("total", 0) == 0:
             return "no_data"
+        if st.get("bullish_pct", 0) > 60:
+            return "positive"
+        if st.get("bearish_pct", 0) > 60:
+            return "negative"
         return "mixed"

@@ -1,16 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SyncProgress } from '../api/types';
+import { getDeskRunGate } from './deskRunGate';
 
-function formatHkt(iso: string, timezone = 'Asia/Hong_Kong') {
-  return `${new Date(iso).toLocaleTimeString('en-HK', {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-  })} HKT`;
-}
+type SyncStartResponse = SyncProgress & {
+  started?: boolean;
+  message?: string;
+};
 
-/** Compact trigger; progress lives in SyncProgressTracker. */
+/** Pill trigger with inline Done / Resume gate badge. */
 export function SyncDataButton({ className = '' }: { className?: string }) {
   const qc = useQueryClient();
 
@@ -19,7 +17,7 @@ export function SyncDataButton({ className = '' }: { className?: string }) {
     queryFn: api.getSyncStatus,
     refetchInterval: (q) => {
       const d = q.state.data as SyncProgress | undefined;
-      return d?.running ? 2000 : 30_000;
+      return d?.running || d?.status === 'running' ? 500 : 30_000;
     },
     refetchIntervalInBackground: true,
   });
@@ -27,9 +25,46 @@ export function SyncDataButton({ className = '' }: { className?: string }) {
   const running = Boolean(statusQ.data?.running) || statusQ.data?.status === 'running';
 
   const mutation = useMutation({
-    mutationFn: (force: boolean) => api.syncData(undefined, { force }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['sync-status'] });
+    mutationFn: (force: boolean) => api.syncData(undefined, { force }) as Promise<SyncStartResponse>,
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ['sync-status'] });
+      const prev = qc.getQueryData<SyncProgress>(['sync-status']);
+      // Instant UI: progress tracker keys off sync-status.running before POST returns.
+      qc.setQueryData<SyncProgress>(['sync-status'], {
+        ...(prev ?? {
+          tickers: [],
+          total: 0,
+          current_index: 0,
+          current_ticker: null,
+          stage: null,
+          stage_label: null,
+          completed: [],
+          errors: [],
+          percent: 0,
+          started_at: null,
+          finished_at: null,
+          last_sync: null,
+        }),
+        running: true,
+        status: 'running',
+        message: 'Starting sync…',
+        finished_at: null,
+        percent: prev?.status === 'running' ? (prev.percent ?? 0) : 0,
+      });
+      return { prev };
+    },
+    onError: (_err, _force, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['sync-status'], ctx.prev);
+    },
+    onSuccess: (res) => {
+      qc.setQueryData<SyncProgress>(['sync-status'], (old) => ({
+        ...(old as SyncProgress),
+        ...res,
+        running: Boolean(res.running) || res.status === 'running',
+        status: res.status ?? (res.started === false ? old?.status ?? 'idle' : 'running'),
+        message: res.message ?? old?.message ?? null,
+      }));
+      void qc.invalidateQueries({ queryKey: ['sync-status'] });
     },
   });
 
@@ -37,28 +72,42 @@ export function SyncDataButton({ className = '' }: { className?: string }) {
   const daily = statusQ.data?.daily;
   const completedToday = Boolean(daily?.already_completed_today);
   const canResume = Boolean(daily?.can_resume);
+  const gate = getDeskRunGate('sync', daily, busy);
+
   const label = busy
     ? 'Sync running…'
     : completedToday
       ? 'Run again'
-      : 'Sync news & price data';
-  const subtitle = completedToday
-    ? `Completed today${daily?.finished_at ? ` · ${formatHkt(daily.finished_at, daily.timezone || 'Asia/Hong_Kong')}` : ''}`
-    : canResume
-      ? `Resuming · ${daily?.prices_done_count ?? 0} prices done`
-      : null;
+      : canResume
+        ? 'Resume sync'
+        : 'Sync news & prices';
+
+  const toneClass =
+    gate.tone === 'done'
+      ? ' btn-desk-run--done'
+      : gate.tone === 'resume'
+        ? ' btn-desk-run--resume'
+        : '';
 
   return (
-    <div className={`flex flex-col items-stretch gap-2 ${className}`}>
+    <div className={`flex flex-col items-stretch gap-1 ${className}`}>
       <button
         type="button"
         onClick={() => mutation.mutate(completedToday)}
         disabled={busy}
-        className="btn-terminal"
+        className={`btn-desk-run${toneClass}`}
+        aria-busy={busy || undefined}
       >
-        {label}
+        <span className="btn-desk-run__label">{label}</span>
+        {gate.badge ? (
+          <span
+            className={`btn-desk-run__badge btn-desk-run__badge--${gate.tone}`}
+            aria-label={gate.badge}
+          >
+            {gate.badge}
+          </span>
+        ) : null}
       </button>
-      {subtitle && <p className="text-xs text-[var(--color-muted)]">{subtitle}</p>}
       {mutation.isError && (
         <p className="text-xs text-[var(--color-down)]">
           {mutation.error instanceof Error ? mutation.error.message : 'Sync failed'}

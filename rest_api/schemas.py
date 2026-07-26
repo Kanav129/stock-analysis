@@ -42,3 +42,7 @@ class ReportTaskStatus(BaseModel):
 class SyncDataRequest(BaseModel):
     tickers: Optional[List[str]] = None
     force: bool = False
+
+
+class LivePriceRefreshRequest(BaseModel):
+    tickers: List[str] = Field(default_factory=list, description="On-screen tickers to refresh")
