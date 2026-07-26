@@ -76,10 +76,11 @@ export const api = {
       body: JSON.stringify({ tickers: tickers ?? null }),
     }),
   cancelAnalysis: () => request<import('./types').AnalysisProgress>('/analysis/cancel', { method: 'POST' }),
-  syncData: (tickers?: string[], opts?: { force?: boolean }) => request<{ started: boolean; message: string; tickers: string[]; last_sync?: string; errors?: { stage: string; error: string }[] }>('/sync/data', {
-    method: 'POST',
-    body: JSON.stringify({ tickers: tickers ?? null, force: Boolean(opts?.force) }),
-  }),
+  syncData: (tickers?: string[], opts?: { force?: boolean }) =>
+    request<import('./types').SyncStartResponse>('/sync/data', {
+      method: 'POST',
+      body: JSON.stringify({ tickers: tickers ?? null, force: Boolean(opts?.force) }),
+    }),
   getSyncStatus: () => request<import('./types').SyncProgress>('/sync/status'),
   cancelSync: () => request<import('./types').SyncProgress>('/sync/cancel', { method: 'POST' }),
   /** Unauthenticated; used to keep the Render free dyno awake during long syncs. */

@@ -216,3 +216,11 @@ export interface SyncProgress {
   started?: boolean;
   daily?: DailyRunSummary;
 }
+
+/** POST /sync/data — status snapshot plus start metadata. */
+export type SyncStartResponse = SyncProgress & {
+  started?: boolean;
+  reason?: string;
+  date?: string;
+  resumed?: boolean;
+};

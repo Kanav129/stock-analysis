@@ -3,11 +3,6 @@ import { api } from '../api/client';
 import type { SyncProgress } from '../api/types';
 import { getDeskRunGate } from './deskRunGate';
 
-type SyncStartResponse = SyncProgress & {
-  started?: boolean;
-  message?: string;
-};
-
 /** Pill trigger with inline Done / Resume gate badge. */
 export function SyncDataButton({ className = '' }: { className?: string }) {
   const qc = useQueryClient();
@@ -25,7 +20,7 @@ export function SyncDataButton({ className = '' }: { className?: string }) {
   const running = Boolean(statusQ.data?.running) || statusQ.data?.status === 'running';
 
   const mutation = useMutation({
-    mutationFn: (force: boolean) => api.syncData(undefined, { force }) as Promise<SyncStartResponse>,
+    mutationFn: (force: boolean) => api.syncData(undefined, { force }),
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: ['sync-status'] });
       const prev = qc.getQueryData<SyncProgress>(['sync-status']);

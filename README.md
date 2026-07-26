@@ -70,7 +70,7 @@ Notes:
 - Free dynos **spin down** after idle; the first request can take ~30–60s.
 - Chroma data under `/app/chroma_db` is **ephemeral** on free tier (lost on redeploy/sleep). Re-run sync after wake if needed. Postgres/Mongo should be managed (Supabase / Atlas).
 - Keep `AUTO_PIPELINE_ENABLED=false` on free tier. Scheduling is done by **GitHub Actions** (below), which also wakes the dyno.
-
+ad
 ### Scheduled jobs (GitHub Actions → wakes Render)
 
 Workflows in `.github/workflows/`:
