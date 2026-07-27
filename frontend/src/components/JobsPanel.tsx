@@ -205,7 +205,7 @@ function SyncJobRow({
     <div className="jobs-item jobs-item--sync">
       <div className="jobs-item__head">
         <strong>Sync</strong>
-        {active ? <PipelineLiveBadge /> : null}
+        {active ? <PipelineLiveBadge verb="Syncing" /> : null}
         {active ? (
           <button type="button" className="btn-ghost" disabled={cancelling} onClick={onCancel}>
             Cancel
@@ -215,7 +215,9 @@ function SyncJobRow({
       <p className="jobs-item__msg">{sync.detail || sync.message || 'Fetching news & prices'}</p>
       <PipelineProgressMeter
         percent={percent}
+        active={active}
         tone={sync.status === 'error' ? 'error' : active ? 'accent' : 'done'}
+        label={`Sync ${percent}%`}
       />
     </div>
   );
@@ -232,6 +234,7 @@ function LlmJobRow({
 }) {
   const progress = job.progress || {};
   const percent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+  const label = progress.message || progress.stage_label || `${jobTypeLabel(job.job_type)}…`;
   return (
     <div className="jobs-item">
       <div className="jobs-item__head">
@@ -239,15 +242,18 @@ function LlmJobRow({
           {job.ticker}
         </Link>
         <span className="jobs-item__badge">{jobTypeLabel(job.job_type)}</span>
-        <PipelineLiveBadge />
+        <PipelineLiveBadge verb="Running" />
         <button type="button" className="btn-ghost" disabled={cancelling} onClick={onCancel}>
           {job.cancel_requested ? 'Cancelling…' : 'Cancel'}
         </button>
       </div>
-      <p className="jobs-item__msg">
-        {progress.message || progress.stage_label || 'Working…'}
-      </p>
-      <PipelineProgressMeter percent={percent} tone="accent" />
+      <p className="jobs-item__msg">{label}</p>
+      <PipelineProgressMeter
+        percent={percent}
+        active
+        tone="accent"
+        label={`${job.ticker} ${jobTypeLabel(job.job_type)} ${percent}%`}
+      />
     </div>
   );
 }
