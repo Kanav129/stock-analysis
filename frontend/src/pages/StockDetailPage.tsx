@@ -220,17 +220,19 @@ export function StockDetailPage() {
       setTaskId(null);
       clearPersistedTask(t);
       qc.invalidateQueries({ queryKey: ['report-active', t] });
+      qc.invalidateQueries({ queryKey: ['jobs'] });
       qc.invalidateQueries({ queryKey: ['ratings'] });
       qc.invalidateQueries({ queryKey: ['ratings', t] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       coreQuery.refetch();
       deepQuery.refetch();
     }
-    if (taskStatus?.status === 'failed') {
+    if (taskStatus?.status === 'failed' || taskStatus?.status === 'cancelled') {
       setGenerating(false);
       setTaskId(null);
       clearPersistedTask(t);
       qc.invalidateQueries({ queryKey: ['report-active', t] });
+      qc.invalidateQueries({ queryKey: ['jobs'] });
     }
   }, [taskStatus?.status, t]);
 
@@ -239,6 +241,7 @@ export function StockDetailPage() {
     onSuccess: (data) => {
       resumeTask(data.task_id, 'core');
       qc.invalidateQueries({ queryKey: ['report-active', t] });
+      qc.invalidateQueries({ queryKey: ['jobs'] });
     },
   });
   const generateDeep = useMutation({
@@ -246,6 +249,18 @@ export function StockDetailPage() {
     onSuccess: (data) => {
       resumeTask(data.task_id, 'deep');
       qc.invalidateQueries({ queryKey: ['report-active', t] });
+      qc.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+
+  const cancelJobMut = useMutation({
+    mutationFn: (id: string) => api.cancelJob(id),
+    onSuccess: () => {
+      setGenerating(false);
+      setTaskId(null);
+      clearPersistedTask(t);
+      qc.invalidateQueries({ queryKey: ['report-active', t] });
+      qc.invalidateQueries({ queryKey: ['jobs'] });
     },
   });
 
@@ -356,6 +371,16 @@ export function StockDetailPage() {
           >
             {generating && generateType === 'deep' ? 'Deep dive…' : 'Deep dive'}
           </button>
+          {generating && taskId ? (
+            <button
+              type="button"
+              className="btn-terminal"
+              disabled={cancelJobMut.isPending}
+              onClick={() => cancelJobMut.mutate(taskId)}
+            >
+              {cancelJobMut.isPending ? 'Cancelling…' : 'Cancel'}
+            </button>
+          ) : null}
           <a href="#report" className="btn-terminal">Report ↓</a>
         </div>
       </div>
@@ -442,6 +467,16 @@ export function StockDetailPage() {
                   <p className="mt-1 text-xs text-[var(--color-text-muted)]">
                     Usually 15–45s. Status survives navigation.
                   </p>
+                  {taskId ? (
+                    <button
+                      type="button"
+                      className="btn-terminal mt-3"
+                      disabled={cancelJobMut.isPending}
+                      onClick={() => cancelJobMut.mutate(taskId)}
+                    >
+                      {cancelJobMut.isPending ? 'Cancelling…' : 'Cancel job'}
+                    </button>
+                  ) : null}
                   {taskStatus?.status === 'failed' && (
                     <p className="mt-2 text-xs text-[var(--color-sell)]">{taskStatus.error}</p>
                   )}

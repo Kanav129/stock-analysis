@@ -12,9 +12,11 @@ from rest_api.routes import (
     sync_routes,
     research_routes,
     cron_routes,
+    jobs_routes,
 )
 from db.bootstrap import bootstrap_schema
 from services.analysis_service import analysis_service
+from services.job_queue_service import job_queue_service
 from services.universe_service import UniverseService
 from services.sync_service import sync_service
 from services.settings_service import SettingsService
@@ -102,6 +104,10 @@ async def startup():
         bootstrap_schema()
     except Exception as exc:
         logger.error(f"Schema bootstrap skipped or failed: {exc}")
+    try:
+        job_queue_service.ensure_started()
+    except Exception as exc:
+        logger.error(f"Job queue start skipped or failed: {exc}")
     if AUTO_PIPELINE_ENABLED:
         asyncio.create_task(sync_in_interval())
         asyncio.create_task(analysis_in_interval())
@@ -146,6 +152,7 @@ pipeline_in_interval = sync_in_interval
 
 app.include_router(auth_router)
 app.include_router(cron_routes.router)
+app.include_router(jobs_routes.router)
 app.include_router(stock_routes.router, prefix="/stock", tags=["Stock Data"])
 app.include_router(news_routes.router, prefix="/news", tags=["News Articles"])
 app.include_router(watchlist_routes.router, tags=["Watchlist"])

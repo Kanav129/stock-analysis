@@ -72,9 +72,22 @@ Kronos forecasts the close drifting from {last_actual:.2f} (last actual) to {las
         markdown += "\n*Single-path forecast from the Kronos foundation model. Not investment advice.*\n"
 
     except ImportError as exc:
+        logger.warning(f"Kronos skipped for {ticker} (deps missing): {exc}")
         kronos_data["error"] = f"Kronos dependencies not installed: {exc}"
         kronos_data["summary"] = "Forecast unavailable — install torch and transformers."
         markdown = "*Kronos forecast unavailable — PyTorch/transformers not installed. Run `pip install torch transformers` to enable.*"
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "dependencies not installed" in msg or "No module named" in msg:
+            logger.warning(f"Kronos skipped for {ticker}: {exc}")
+            kronos_data["error"] = msg
+            kronos_data["summary"] = "Forecast unavailable — install torch and transformers."
+            markdown = "*Kronos forecast unavailable — PyTorch/transformers not installed.*"
+        else:
+            logger.error(f"Kronos failed for {ticker}: {exc}")
+            kronos_data["error"] = msg
+            kronos_data["summary"] = f"Forecast failed: {exc}"
+            markdown = f"*Kronos forecast could not be generated: {exc}*"
     except Exception as exc:
         logger.error(f"Kronos failed for {ticker}: {exc}")
         kronos_data["error"] = str(exc)

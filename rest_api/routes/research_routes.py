@@ -1,33 +1,24 @@
-"""Research report API routes."""
+"""Research report API routes — enqueue via durable desk job queue."""
 from __future__ import annotations
 
-import json
-import traceback
-from uuid import uuid4
-
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from db.db_factory import get_db_client
-from rag_graphs.research_graph.graph import run_research_graph
+from services.job_queue_service import JOB_CORE, JOB_DEEP, job_queue_service
 from services.report_service import ReportService
 from utils.logger import logger
 
 router = APIRouter(prefix="/research", tags=["Research"])
 
-# In-memory task registry (for async report generation)
-_task_registry: dict[str, dict] = {}
-_ACTIVE_STATUSES = frozenset({"pending", "running"})
-
 
 class GenerateResponse(BaseModel):
     task_id: str
-    status: str  # "pending"
+    status: str  # queued | running | pending
 
 
 class TaskStatus(BaseModel):
     task_id: str
-    status: str  # "pending" | "running" | "done" | "failed"
+    status: str
     ticker: str
     report_type: str
     report_id: int | None = None
@@ -40,181 +31,88 @@ class ActiveTaskResponse(BaseModel):
     task: TaskStatus | None = None
 
 
-def _settings_key(task_id: str) -> str:
-    return f"research_task:{task_id}"
+_JOB_TO_REPORT = {JOB_CORE: "core", JOB_DEEP: "deep"}
+_REPORT_TO_JOB = {"core": JOB_CORE, "deep": JOB_DEEP}
 
 
-def _persist_task(task_id: str, task: dict) -> None:
-    """Mirror task state to app_settings so status survives reloads/navigation."""
-    try:
-        db = get_db_client()
-        payload = json.dumps({"task_id": task_id, **task})
-        db.execute_query(
-            """
-            INSERT INTO app_settings (key, value, updated_at)
-            VALUES (%s, %s, NOW())
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
-            """,
-            (_settings_key(task_id), payload),
-        )
-    except Exception as exc:
-        logger.warning(f"Failed to persist research task {task_id}: {exc}")
-
-
-def _load_persisted_task(task_id: str) -> dict | None:
-    try:
-        db = get_db_client()
-        rows, _ = db.fetch_query(
-            "SELECT value FROM app_settings WHERE key = %s",
-            (_settings_key(task_id),),
-        )
-        if not rows:
-            return None
-        data = json.loads(rows[0][0])
-        data.pop("task_id", None)
-        return data
-    except Exception as exc:
-        logger.warning(f"Failed to load research task {task_id}: {exc}")
-        return None
-
-
-def _clear_persisted_task(task_id: str) -> None:
-    try:
-        db = get_db_client()
-        db.execute_query("DELETE FROM app_settings WHERE key = %s", (_settings_key(task_id),))
-    except Exception as exc:
-        logger.warning(f"Failed to clear research task {task_id}: {exc}")
-
-
-def _find_persisted_active(ticker: str, report_type: str | None = None) -> tuple[str, dict] | None:
-    ticker = ticker.upper()
-    try:
-        db = get_db_client()
-        rows, _ = db.fetch_query(
-            "SELECT key, value FROM app_settings WHERE key LIKE %s ORDER BY updated_at ASC",
-            ("research_task:%",),
-        )
-    except Exception as exc:
-        logger.warning(f"Failed to scan research tasks: {exc}")
-        return None
-
-    match: tuple[str, dict] | None = None
-    for key, value in rows:
-        try:
-            data = json.loads(value)
-        except json.JSONDecodeError:
-            continue
-        task_id = data.get("task_id") or key.split(":", 1)[-1]
-        if data.get("ticker") != ticker:
-            continue
-        if data.get("status") not in _ACTIVE_STATUSES:
-            continue
-        if report_type and data.get("report_type") != report_type:
-            continue
-        task = {k: v for k, v in data.items() if k != "task_id"}
-        _task_registry.setdefault(task_id, task)
-        match = (task_id, _task_registry[task_id])
-    return match
-
-
-def _task_to_status(task_id: str, task: dict) -> TaskStatus:
+def _job_to_task_status(job: dict) -> TaskStatus:
+    report_type = _JOB_TO_REPORT.get(job["job_type"], "core")
+    status = job["status"]
+    # Compat with older FE expecting pending
+    if status == "queued":
+        status = "pending"
+    result = job.get("result") or {}
     return TaskStatus(
-        task_id=task_id,
-        status=task["status"],
-        ticker=task["ticker"],
-        report_type=task["report_type"],
-        report_id=task.get("report_id"),
-        rating=task.get("rating"),
-        score=task.get("score"),
-        error=task.get("error"),
+        task_id=job["id"],
+        status=status,
+        ticker=job["ticker"],
+        report_type=report_type,
+        report_id=result.get("report_id"),
+        rating=result.get("rating"),
+        score=result.get("score"),
+        error=job.get("error"),
     )
 
 
-def _get_task(task_id: str) -> dict | None:
-    task = _task_registry.get(task_id)
-    if task:
-        return task
-    loaded = _load_persisted_task(task_id)
-    if loaded:
-        _task_registry[task_id] = loaded
-        return loaded
-    return None
-
-
-def _find_active_task(ticker: str, report_type: str | None = None) -> tuple[str, dict] | None:
-    """Return the most recently registered pending/running task for a ticker."""
+def _enqueue_research(ticker: str, report_type: str) -> GenerateResponse:
+    job_type = _REPORT_TO_JOB.get(report_type)
+    if not job_type:
+        raise HTTPException(400, detail="Invalid report type")
     ticker = ticker.upper()
-    matches: list[tuple[str, dict]] = []
-    for task_id, task in _task_registry.items():
-        if task.get("ticker") != ticker:
-            continue
-        if task.get("status") not in _ACTIVE_STATUSES:
-            continue
-        if report_type and task.get("report_type") != report_type:
-            continue
-        matches.append((task_id, task))
-    if matches:
-        return matches[-1]
-    return _find_persisted_active(ticker, report_type)
-
-
-def _start_or_reuse_task(
-    ticker: str,
-    report_type: str,
-    background_tasks: BackgroundTasks,
-) -> GenerateResponse:
-    existing = _find_active_task(ticker, report_type)
-    if existing:
-        task_id, task = existing
-        logger.info(f"Research task {task_id} reused for {ticker} ({report_type})")
-        return GenerateResponse(task_id=task_id, status=task["status"])
-
-    task_id = str(uuid4())[:12]
-    task = {
-        "status": "pending",
-        "ticker": ticker.upper(),
-        "report_type": report_type,
-        "report_id": None,
-        "rating": None,
-        "score": None,
-        "error": None,
-    }
-    _task_registry[task_id] = task
-    _persist_task(task_id, task)
-    background_tasks.add_task(_run_report_task, task_id, ticker.upper(), report_type)
-    logger.info(f"Research task {task_id} created for {ticker} ({report_type})")
-    return GenerateResponse(task_id=task_id, status="pending")
+    out = job_queue_service.enqueue(job_type, [ticker])
+    jobs = out.get("jobs") or []
+    if not jobs:
+        # already completed today for core — still allow explicit research enqueue?
+        # For single-ticker research, force past daily gate by enqueueing with force
+        if report_type == "core" and out.get("reason") == "already_completed_today":
+            out = job_queue_service.enqueue(job_type, [ticker], force=True)
+            jobs = out.get("jobs") or []
+        if not jobs:
+            raise HTTPException(500, detail=out.get("message") or "Failed to enqueue")
+    job = jobs[0]
+    status = job["status"]
+    if status == "queued":
+        status = "pending"
+    logger.info(
+        "Research job %s for %s (%s) status=%s",
+        job["id"][:8],
+        ticker,
+        report_type,
+        status,
+    )
+    return GenerateResponse(task_id=job["id"], status=status)
 
 
 @router.post("/{ticker}")
-async def generate_report(ticker: str, background_tasks: BackgroundTasks):
-    """Generate a core-4 research report for a ticker. Returns a task ID for polling."""
-    return _start_or_reuse_task(ticker.upper(), "core", background_tasks)
+async def generate_report(ticker: str):
+    """Enqueue a core research report. Returns a job/task ID for polling."""
+    return _enqueue_research(ticker.upper(), "core")
 
 
 @router.post("/{ticker}/deep")
-async def generate_deep_report(ticker: str, background_tasks: BackgroundTasks):
-    """Generate a deep-dive (all 8 analysts + debate) report. Returns a task ID for polling."""
-    return _start_or_reuse_task(ticker.upper(), "deep", background_tasks)
+async def generate_deep_report(ticker: str):
+    """Enqueue a deep-dive report. Returns a job/task ID for polling."""
+    return _enqueue_research(ticker.upper(), "deep")
 
 
 @router.get("/task/{task_id}")
 async def get_task_status(task_id: str):
-    """Poll for report generation status. Returns the report when done."""
-    task = _get_task(task_id)
-    if not task:
+    """Poll for report generation status (desk_jobs row)."""
+    job = job_queue_service.get_job(task_id)
+    if not job:
         raise HTTPException(404, detail="Task not found")
-    return _task_to_status(task_id, task)
+    return _job_to_task_status(job)
 
 
 @router.get("/{ticker}/active")
 async def get_active_task(ticker: str):
-    """Return an in-flight report task for this ticker, if any (survives page navigation)."""
-    found = _find_active_task(ticker.upper())
-    if not found:
-        return ActiveTaskResponse(task=None)
-    task_id, task = found
-    return ActiveTaskResponse(task=_task_to_status(task_id, task))
+    """Return an in-flight report job for this ticker, if any."""
+    ticker = ticker.upper()
+    for job_type in (JOB_DEEP, JOB_CORE):
+        job = job_queue_service.find_active(ticker, job_type)
+        if job:
+            return ActiveTaskResponse(task=_job_to_task_status(job))
+    return ActiveTaskResponse(task=None)
 
 
 @router.get("/{ticker}")
@@ -233,27 +131,3 @@ async def get_report_history(ticker: str):
     svc = ReportService()
     items = svc.get_report_history(ticker.upper())
     return {"ticker": ticker.upper(), "items": items}
-
-
-def _run_report_task(task_id: str, ticker: str, report_type: str) -> None:
-    """Background task: run the LangGraph research pipeline."""
-    registry = _get_task(task_id)
-    if not registry:
-        return
-
-    registry["status"] = "running"
-    _persist_task(task_id, registry)
-    try:
-        result = run_research_graph(ticker, report_type)
-        registry["status"] = "done"
-        registry["report_id"] = result.get("report_id")
-        registry["rating"] = result.get("rating")
-        registry["score"] = result.get("score")
-        _persist_task(task_id, registry)
-        logger.info(f"Research task {task_id} completed: {ticker} {report_type} "
-                     f"rating={result.get('rating')}")
-    except Exception as exc:
-        logger.error(f"Research task {task_id} failed: {exc}\n{traceback.format_exc()}")
-        registry["status"] = "failed"
-        registry["error"] = str(exc)
-        _persist_task(task_id, registry)

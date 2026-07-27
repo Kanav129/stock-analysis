@@ -134,7 +134,7 @@ export interface ResearchReport {
 
 export interface ReportTask {
   task_id: string;
-  status: 'pending' | 'running' | 'done' | 'failed';
+  status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled' | string;
   ticker: string;
   report_type: 'core' | 'deep';
   report_id: number | null;
@@ -172,6 +172,40 @@ export interface DailyRunSummary {
   /** Watchlist/holdings universe size for progress denominators. */
   universe_count?: number;
   finished_at: string | null;
+}
+
+export interface DeskJob {
+  id: string;
+  job_type: 'core_analysis' | 'deep_dive' | 'rescore' | string;
+  ticker: string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted' | string;
+  cancel_requested?: boolean;
+  progress: {
+    stage?: string | null;
+    stage_label?: string | null;
+    message?: string | null;
+    percent?: number | null;
+  };
+  result: {
+    report_id?: number | null;
+    rating?: string | null;
+    score?: number | null;
+  };
+  error?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface JobsSnapshot {
+  sync: SyncProgress | null;
+  jobs: DeskJob[];
+  limits: {
+    max_concurrent: number;
+    running: number;
+    queued: number;
+  };
 }
 
 export interface AnalysisProgress {

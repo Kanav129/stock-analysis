@@ -40,6 +40,16 @@ class FinnhubClient:
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
             return data
+        except requests.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            # Free-tier plans often 403 premium endpoints (e.g. price-target).
+            if status in (401, 403):
+                logger.warning(
+                    f"Finnhub {status} for {endpoint} (plan/forbidden) — skipping"
+                )
+                return {}
+            logger.error(f"Finnhub request failed: {endpoint} — {exc}")
+            return {}
         except Exception as exc:
             logger.error(f"Finnhub request failed: {endpoint} — {exc}")
             return {}
@@ -84,11 +94,13 @@ class FinnhubClient:
         return data
 
     def get_price_target(self, ticker: str) -> dict[str, Any]:
-        """Fetch analyst price target consensus."""
+        """Fetch analyst price target consensus (often premium on free tier)."""
         params = {"symbol": ticker.upper()}
         result = self._get("/stock/price-target", params)
+        if not isinstance(result, dict) or not result:
+            return {}
         logger.info(f"Finnhub: price target for {ticker}")
-        return result if isinstance(result, dict) else {}
+        return result
 
     # ── Company profile / financials ──────────────────────────────
 

@@ -48,7 +48,7 @@ def live_price_refresh(body: LivePriceRefreshRequest):
             detail=f"Too many tickers (max {LIVE_REFRESH_MAX_TICKERS})",
         )
 
-    if sync_service.is_running():
+    if sync_service.is_running:
         return {"skipped": True, "reason": "sync_running", "results": {}}
 
     scraper = StockDataScraper()

@@ -234,7 +234,21 @@ def test_live_price_refresh_skips_when_sync_running(mock_sync):
     from rest_api.routes.stock_routes import live_price_refresh
     from rest_api.schemas import LivePriceRefreshRequest
 
-    mock_sync.is_running.return_value = True
+    # is_running is a @property (bool), not a method — must not call it.
+    mock_sync.is_running = True
     out = live_price_refresh(LivePriceRefreshRequest(tickers=["AAPL"]))
     assert out["skipped"] is True
     assert out["reason"] == "sync_running"
+
+
+@patch("rest_api.routes.stock_routes.StockDataScraper")
+@patch("rest_api.routes.stock_routes.sync_service")
+def test_live_price_refresh_runs_when_idle(mock_sync, mock_scraper_cls):
+    from rest_api.routes.stock_routes import live_price_refresh
+    from rest_api.schemas import LivePriceRefreshRequest
+
+    mock_sync.is_running = False
+    mock_scraper_cls.return_value.refresh_live_1m.return_value = 3
+    out = live_price_refresh(LivePriceRefreshRequest(tickers=["AAPL"]))
+    assert out["skipped"] is False
+    assert out["results"]["AAPL"] == {"upserted": 3}

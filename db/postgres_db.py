@@ -58,7 +58,8 @@ class PostgresDBClient:
             if self._pool is not None and not self._pool.closed:
                 return self._pool
             minconn = max(1, int(os.getenv("POSTGRES_POOL_MIN", "2")))
-            maxconn = max(minconn, int(os.getenv("POSTGRES_POOL_MAX", "8")))
+            # Desk polls + live-refresh + research share one process; 8 saturated easily.
+            maxconn = max(minconn, int(os.getenv("POSTGRES_POOL_MAX", "16")))
             self._pool = ThreadedConnectionPool(minconn, maxconn, **self._connect_kwargs())
             logger.info(f"PostgreSQL pool ready (min={minconn}, max={maxconn}).")
             return self._pool

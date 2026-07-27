@@ -5,8 +5,7 @@ import { api } from '../api/client';
 import { PortfolioSummaryCard } from '../components/PortfolioSummary';
 import { HoldingsTable } from '../components/HoldingsTable';
 import { DeskRunActions } from '../components/DeskRunActions';
-import { SyncProgressTracker } from '../components/SyncProgressTracker';
-import { AnalysisProgressTracker } from '../components/AnalysisProgressTracker';
+import { JobsPanel } from '../components/JobsPanel';
 import { Panel } from '../components/Panel';
 import { HeatTile } from '../components/HeatTile';
 import { DeltaValue } from '../components/DeltaValue';
@@ -270,8 +269,7 @@ export function DashboardPage() {
         <DeskRunActions />
       </div>
 
-      <SyncProgressTracker />
-      <AnalysisProgressTracker />
+      <JobsPanel />
 
       {holdingsPending ? (
         <Skeleton className="h-8 w-full max-w-xl rounded" />

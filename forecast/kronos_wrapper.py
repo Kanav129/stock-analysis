@@ -48,6 +48,10 @@ class KronosForecaster:
             self._model = self._model.to(self._device)
             self._model.eval()
             logger.info(f"Kronos-small loaded on {self._device}")
+        except ImportError as exc:
+            # Optional on free Render — torch/transformers are not in requirements.
+            logger.warning(f"Kronos deps not installed — skipping forecast: {exc}")
+            raise RuntimeError(f"Kronos dependencies not installed: {exc}") from exc
         except Exception as exc:
             logger.error(f"Failed to load Kronos model: {exc}")
             raise RuntimeError(f"Kronos-small could not be loaded: {exc}") from exc

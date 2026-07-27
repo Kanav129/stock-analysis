@@ -86,6 +86,37 @@ export const api = {
   /** Unauthenticated; used to keep the Render free dyno awake during long syncs. */
   health: () => request<{ status: string }>('/health'),
   getAnalysisStatus: () => request<import('./types').AnalysisProgress>('/analysis/status'),
+  getJobs: () => request<import('./types').JobsSnapshot>('/jobs'),
+  enqueueJobs: (
+    jobType: 'core_analysis' | 'deep_dive' | 'rescore',
+    tickers?: string[],
+    opts?: { force?: boolean },
+  ) =>
+    request<{
+      started: boolean;
+      message?: string;
+      reason?: string;
+      jobs?: import('./types').DeskJob[];
+      enqueued?: import('./types').DeskJob[];
+      reused?: import('./types').DeskJob[];
+      limits?: import('./types').JobsSnapshot['limits'];
+    }>('/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        job_type: jobType,
+        tickers: tickers ?? null,
+        force: Boolean(opts?.force),
+      }),
+    }),
+  cancelJob: (jobId: string) =>
+    request<{ ok: boolean; job?: import('./types').DeskJob }>(`/jobs/${jobId}/cancel`, {
+      method: 'POST',
+    }),
+  cancelAllJobs: () =>
+    request<{ ok: boolean; jobs?: import('./types').DeskJob[]; limits?: import('./types').JobsSnapshot['limits'] }>(
+      '/jobs/cancel-all',
+      { method: 'POST' },
+    ),
   getWatchlist: () => request<{ items: import('./types').WatchlistItem[] }>('/watchlist'),
   addWatchlist: (ticker: string, notes?: string) => request<import('./types').WatchlistItem>('/watchlist', {
     method: 'POST',

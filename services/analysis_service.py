@@ -146,12 +146,66 @@ class AnalysisService:
         return self._last_run
 
     def get_status(self) -> dict[str, Any]:
+        from services.job_queue_service import JOB_CORE, job_queue_service
+
+        try:
+            job_queue_service.ensure_started()
+            core_jobs = [
+                j
+                for j in job_queue_service.list_jobs()
+                if j.get("job_type") == JOB_CORE
+            ]
+        except Exception as exc:
+            logger.warning("Could not read job queue for analysis status: %s", exc)
+            core_jobs = []
+
+        running_jobs = [j for j in core_jobs if j.get("status") == "running"]
+        queued_jobs = [j for j in core_jobs if j.get("status") == "queued"]
+        active = bool(running_jobs or queued_jobs)
+
+        current = running_jobs[0] if running_jobs else None
+        progress = (current or {}).get("progress") or {}
+        completed_from_jobs = [
+            {
+                "ticker": j["ticker"],
+                **(j.get("result") or {}),
+            }
+            for j in core_jobs
+            if j.get("status") == "done"
+        ]
+
         with self._state_lock:
             snap = dict(self._progress)
             snap["last_run"] = (
                 self._last_run.isoformat() if self._last_run else snap.get("last_run")
             )
             snap.pop("cancel_requested", None)
+
+        if active:
+            total = len(running_jobs) + len(queued_jobs) + len(completed_from_jobs)
+            # Prefer queue-derived live fields
+            snap.update(
+                {
+                    "running": True,
+                    "status": "running" if running_jobs else "pending",
+                    "mode": "core_report",
+                    "tickers": [j["ticker"] for j in running_jobs + queued_jobs],
+                    "total": max(total, len(running_jobs) + len(queued_jobs)),
+                    "current_index": 0,
+                    "current_ticker": (current or {}).get("ticker"),
+                    "stage": progress.get("stage"),
+                    "stage_label": progress.get("stage_label"),
+                    "message": progress.get("message")
+                    or (
+                        f"{len(running_jobs)} running, {len(queued_jobs)} queued"
+                    ),
+                    "percent": progress.get("percent") or 0,
+                    "completed": completed_from_jobs,
+                }
+            )
+        elif not snap.get("running"):
+            snap.setdefault("status", snap.get("status") or "idle")
+
         day = rcs.today_key()
         checkpoint = rcs.load_analysis(day)
         # After a Render recycle, RAM is idle but the checkpoint may still say
@@ -160,6 +214,7 @@ class AnalysisService:
             checkpoint
             and checkpoint.get("status") == "running"
             and not snap.get("running")
+            and not active
         ):
             checkpoint = dict(checkpoint)
             checkpoint["status"] = "partial"
@@ -194,6 +249,27 @@ class AnalysisService:
         )
         return snap
 
+    def request_cancel(self) -> dict[str, Any]:
+        from services.job_queue_service import JOB_CORE, job_queue_service
+
+        try:
+            job_queue_service.ensure_started()
+            for job in job_queue_service.list_jobs():
+                if job.get("job_type") == JOB_CORE and job.get("status") in (
+                    "queued",
+                    "running",
+                ):
+                    job_queue_service.cancel(job["id"])
+        except Exception as exc:
+            logger.warning("Analysis cancel via job queue failed: %s", exc)
+            with self._state_lock:
+                if self._progress.get("running"):
+                    self._progress["cancel_requested"] = True
+                    self._progress["message"] = (
+                        "Cancel requested — finishing current step…"
+                    )
+        return self.get_status()
+
     def _core_reports_done_today(self, day: str | None = None) -> set[str]:
         """Core reports already persisted in today's HKT calendar window."""
         start, end = rcs.day_bounds_utc(day)
@@ -227,14 +303,6 @@ class AnalysisService:
                 pct = 0
             self._progress["percent"] = max(0, min(100, round(pct, 1)))
 
-    def request_cancel(self) -> dict[str, Any]:
-        with self._state_lock:
-            if not self._progress.get("running"):
-                return self.get_status()
-            self._progress["cancel_requested"] = True
-            self._progress["message"] = "Cancel requested — finishing current step…"
-        return self.get_status()
-
     def _cancel_requested(self) -> bool:
         with self._state_lock:
             return bool(self._progress.get("cancel_requested"))
@@ -244,14 +312,8 @@ class AnalysisService:
         tickers: list[str] | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
-        """Start core-report analysis for the universe in a background thread."""
-        with self._state_lock:
-            if self._progress.get("running"):
-                return {
-                    "started": False,
-                    "message": "An analysis is already running.",
-                    **{k: v for k, v in self.get_status().items() if k != "cancel_requested"},
-                }
+        """Enqueue per-ticker core analysis jobs (durable desk queue)."""
+        from services.job_queue_service import JOB_CORE, job_queue_service
 
         target = [t.upper() for t in (tickers or self.universe.get_tickers())]
         if not target:
@@ -261,120 +323,35 @@ class AnalysisService:
                 "status": "idle",
                 "running": False,
             }
-
-        day = rcs.today_key()
-        checkpoint = rcs.load_analysis(day)
-        checkpoint_completed = [
-            dict(item)
-            for item in (checkpoint or {}).get("completed") or []
-            if isinstance(item, dict) and item.get("ticker")
-        ]
-        checkpoint_done = {
-            str(item["ticker"]).upper() for item in checkpoint_completed
-        }
-        db_done = set() if force else self._core_reports_done_today(day)
-        done = set() if force else checkpoint_done | db_done
-        todo = [ticker for ticker in target if ticker not in done]
-
-        if not force and not todo:
-            summary_checkpoint = dict(
-                checkpoint or rcs.empty_analysis_checkpoint(target)
-            )
-            summary_checkpoint.update(
-                status="completed",
-                tickers=target,
-                completed=checkpoint_completed
-                + [
-                    {"ticker": ticker}
-                    for ticker in target
-                    if ticker in db_done and ticker not in checkpoint_done
-                ],
-            )
-            rcs.save_analysis(summary_checkpoint, day=day)
-            rcs.mark_last_analysis_date(day)
-            return {
-                **self.get_status(),
-                "started": False,
-                "reason": "already_completed_today",
-                "date": day,
-                "finished_at": (checkpoint or {}).get("finished_at"),
-                "message": "Core analysis already completed today.",
-                "daily": rcs.daily_analysis_summary(summary_checkpoint, target),
-            }
-
-        if force:
-            checkpoint = rcs.empty_analysis_checkpoint(target)
-        else:
-            checkpoint = dict(
-                checkpoint or rcs.empty_analysis_checkpoint(target)
-            )
-            checkpoint.update(
-                status="running",
-                tickers=target,
-                errors=[],
-                finished_at=None,
-            )
-            checkpoint.setdefault("started_at", datetime.utcnow().isoformat())
-            checkpoint["completed"] = checkpoint_completed + [
-                {"ticker": ticker}
-                for ticker in target
-                if ticker in db_done and ticker not in checkpoint_done
-            ]
-        rcs.save_analysis(checkpoint, day=day)
-
-        started_at = datetime.utcnow()
-        timeouts = compute_analysis_timeouts(len(todo), mode="core_report")
-        self._update(
-            running=True,
-            status="pending",
-            mode="core_report",
-            tickers=todo,
-            total=len(todo),
-            current_index=0,
-            current_ticker=None,
-            stage=None,
-            stage_label=None,
-            completed=[],
-            errors=[],
-            percent=0,
-            message=f"Queued core reports for {len(todo)} ticker(s)…",
-            started_at=started_at.isoformat(),
-            finished_at=None,
-            cancel_requested=False,
-            deadline_at=(started_at + timedelta(seconds=timeouts["total"])).isoformat(),
-        )
-
-        self._worker = threading.Thread(
-            target=self._run_worker,
-            args=(todo, timeouts, day, checkpoint),
-            daemon=True,
-            name="analysis-core-report-worker",
-        )
-        self._worker.start()
-        logger.info(
-            "Core-report analysis started for %s tickers (timeout=%ss ≈ %.1f min)",
-            len(todo),
-            timeouts["total"],
-            timeouts["total"] / 60,
-        )
+        out = job_queue_service.enqueue(JOB_CORE, target, force=force)
+        status = self.get_status()
+        skipped = out.get("skipped_completed") or []
         return {
-            "started": True,
-            "message": f"Generating core reports + ratings for {len(todo)} ticker(s).",
-            "resumed": bool(done),
-            "skipped": len(target) - len(todo),
-            "date": day,
-            "checkpoint": checkpoint,
-            "timeouts": timeouts,
-            **self.get_status(),
+            **status,
+            "started": out.get("started", False),
+            "message": out.get("message") or status.get("message"),
+            "reason": out.get("reason"),
+            "date": out.get("date") or rcs.today_key(),
+            "enqueued": out.get("enqueued") or [],
+            "reused": out.get("reused") or [],
+            "skipped_completed": skipped,
+            "skipped": len(skipped),
+            "resumed": bool(skipped) and bool(out.get("enqueued") or out.get("reused")),
+            "jobs": out.get("jobs") or [],
         }
 
     def run(self, tickers: list[str] | None = None) -> dict[str, Any]:
-        """Sync entrypoint used by scheduled pipeline — blocks until finished."""
+        """Sync entrypoint used by scheduled pipeline — blocks until queue drains."""
+        import time
+
+        from services.job_queue_service import JOB_CORE, job_queue_service
+
         result = self.start(tickers)
         if not result.get("started"):
             return result
-        if self._worker:
-            self._worker.join()
+        # Wait until no active core jobs remain
+        while job_queue_service._count_active_type(JOB_CORE) > 0:
+            time.sleep(1.0)
         status = self.get_status()
         return {
             "analyzed": status.get("completed") or [],
@@ -561,14 +538,9 @@ class AnalysisService:
         return final
 
     def start_rescore(self, tickers: list[str] | None = None) -> dict[str, Any]:
-        """Re-run decision synthesis only from saved report sections (no data gather)."""
-        with self._state_lock:
-            if self._progress.get("running"):
-                return {
-                    "started": False,
-                    "message": "An analysis is already running.",
-                    **self.get_status(),
-                }
+        """Enqueue per-ticker rescore jobs from saved report sections."""
+        from services.job_queue_service import JOB_RESCORE, job_queue_service
+        from services.report_service import ReportService
 
         reports = ReportService().list_latest_reports_by_ticker()
         by_ticker = {r["ticker"]: r for r in reports}
@@ -585,37 +557,15 @@ class AnalysisService:
                 "running": False,
             }
 
-        started_at = datetime.utcnow()
-        self._update(
-            running=True,
-            status="pending",
-            mode="rescore",
-            tickers=target,
-            total=len(target),
-            current_index=0,
-            current_ticker=None,
-            stage=None,
-            stage_label=None,
-            completed=[],
-            errors=[],
-            percent=0,
-            message=f"Queued rescore for {len(target)} ticker(s)…",
-            started_at=started_at.isoformat(),
-            finished_at=None,
-            cancel_requested=False,
-        )
-
-        self._worker = threading.Thread(
-            target=self._run_rescore_worker,
-            args=(target, by_ticker),
-            daemon=True,
-            name="analysis-rescore-worker",
-        )
-        self._worker.start()
+        out = job_queue_service.enqueue(JOB_RESCORE, target)
+        status = self.get_status()
         return {
-            "started": True,
-            "message": f"Rescoring ratings for {len(target)} ticker(s) from saved reports.",
-            **self.get_status(),
+            **status,
+            "started": out.get("started", False),
+            "message": out.get("message")
+            or f"Rescoring ratings for {len(target)} ticker(s) from saved reports.",
+            "jobs": out.get("jobs") or [],
+            "mode": "rescore",
         }
 
     def _run_rescore_worker(

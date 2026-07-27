@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { DeskRunActions } from '../components/DeskRunActions';
-import { SyncProgressTracker } from '../components/SyncProgressTracker';
+import { JobsPanel } from '../components/JobsPanel';
 import { WatchlistList } from '../components/WatchlistList';
 
 export function WatchlistPage() {
@@ -35,7 +35,7 @@ export function WatchlistPage() {
         <DeskRunActions showAnalysis={false} />
       </div>
 
-      <SyncProgressTracker />
+      <JobsPanel />
 
       <form
         className="flex flex-wrap gap-3 rounded-lg bg-[var(--color-surface-1)] p-6"

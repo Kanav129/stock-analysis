@@ -61,3 +61,27 @@ CREATE TABLE IF NOT EXISTS stock_reports (
 
 CREATE INDEX IF NOT EXISTS idx_stock_reports_ticker_type
     ON stock_reports (ticker, report_type, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS desk_jobs (
+    id UUID PRIMARY KEY,
+    job_type VARCHAR(32) NOT NULL CHECK (job_type IN (
+        'core_analysis', 'deep_dive', 'rescore'
+    )),
+    ticker VARCHAR(10) NOT NULL,
+    status VARCHAR(16) NOT NULL CHECK (status IN (
+        'queued', 'running', 'done', 'failed', 'cancelled', 'interrupted'
+    )),
+    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    progress JSONB NOT NULL DEFAULT '{}'::jsonb,
+    result JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_desk_jobs_status_created
+    ON desk_jobs (status, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_desk_jobs_ticker_type_status
+    ON desk_jobs (ticker, job_type, status);

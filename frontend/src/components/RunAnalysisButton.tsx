@@ -16,10 +16,29 @@ export function RunAnalysisButton() {
     mutationFn: (force: boolean) => api.runAnalysis(undefined, { force }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['analysis-status'] });
+      qc.invalidateQueries({ queryKey: ['jobs'] });
     },
   });
 
-  const busy = Boolean(statusQ.data?.running) || mutation.isPending;
+  const jobsQ = useQuery({
+    queryKey: ['jobs'],
+    queryFn: api.getJobs,
+    refetchInterval: (q) => {
+      const jobs = q.state.data?.jobs ?? [];
+      return jobs.some((j) => j.status === 'queued' || j.status === 'running')
+        ? 800
+        : false;
+    },
+  });
+
+  const llmBusy = Boolean(
+    jobsQ.data?.jobs?.some(
+      (j) =>
+        (j.job_type === 'core_analysis' || j.job_type === 'rescore') &&
+        (j.status === 'queued' || j.status === 'running'),
+    ),
+  );
+  const busy = Boolean(statusQ.data?.running) || mutation.isPending || llmBusy;
   const daily = statusQ.data?.daily;
   const completedToday = Boolean(daily?.already_completed_today);
   const canResume = Boolean(daily?.can_resume);
