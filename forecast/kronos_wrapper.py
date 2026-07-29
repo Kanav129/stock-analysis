@@ -1,9 +1,9 @@
-"""Kronos-small time-series forecaster, lazy-loaded on Apple Silicon MPS.
-8 GB M1 Air safe: model is ~100 MB, loaded only during forecast then released."""
+"""Kronos-small time-series forecaster, lazy-loaded on Apple Silicon MPS or CPU."""
 from __future__ import annotations
 
 import gc
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -12,111 +12,152 @@ import pandas as pd
 from utils.logger import logger
 
 KRONOS_MODEL_ID = "NeoQuasar/Kronos-small"
+KRONOS_TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-base"
 DEFAULT_HISTORY = 200
 DEFAULT_HORIZON = 20
+MAX_CONTEXT = 512
+
+
+def _model_dir() -> Path:
+    return Path(__file__).resolve().parent / "kronos_model"
+
+
+def _ensure_kronos_model_code() -> None:
+    model_dir = _model_dir()
+    if (model_dir / "kronos.py").exists() and (model_dir / "module.py").exists():
+        return
+    raise RuntimeError(
+        "Kronos model code is missing. Run: bash scripts/setup_kronos.sh"
+    )
+
+
+def _prepare_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize yfinance OHLCV to Kronos lowercase schema."""
+    out = df.copy()
+    rename = {
+        "Open": "open",
+        "High": "high",
+        "Low": "low",
+        "Close": "close",
+        "Volume": "volume",
+    }
+    out = out.rename(columns={k: v for k, v in rename.items() if k in out.columns})
+    needed = ["open", "high", "low", "close"]
+    missing = [c for c in needed if c not in out.columns]
+    if missing:
+        raise ValueError(f"Missing OHLC columns: {missing}")
+    if "volume" not in out.columns:
+        out["volume"] = 0.0
+    return out[needed + ["volume"]]
 
 
 class KronosForecaster:
-    """Lazy-loads Kronos-small from Hugging Face for price forecasting.
-    Designed for 8 GB MacBook Air — model is loaded on demand and explicitly released."""
+    """Lazy-loads Kronos-small from Hugging Face for price forecasting."""
 
     def __init__(self) -> None:
-        self._model: Any = None
+        self._predictor: Any = None
         self._device: str = "cpu"
 
-    def _load_model(self) -> None:
-        """Load Kronos-small. Tries MPS first, falls back to CPU."""
-        if self._model is not None:
-            return
-
+    def _resolve_device(self) -> str:
         try:
             import torch
+
             if torch.backends.mps.is_available():
-                self._device = "mps"
-            else:
-                self._device = "cpu"
+                return "mps"
+            if torch.cuda.is_available():
+                return "cuda:0"
         except ImportError:
-            self._device = "cpu"
-            logger.warning("torch not available — Kronos will run on CPU")
+            pass
+        return "cpu"
+
+    def _load_predictor(self) -> None:
+        if self._predictor is not None:
+            return
+
+        _ensure_kronos_model_code()
+        self._device = self._resolve_device()
 
         try:
-            from transformers import AutoModelForTimeSeriesForecasting
-            self._model = AutoModelForTimeSeriesForecasting.from_pretrained(
-                KRONOS_MODEL_ID,
-                trust_remote_code=True,
-            )
-            self._model = self._model.to(self._device)
-            self._model.eval()
-            logger.info(f"Kronos-small loaded on {self._device}")
+            from forecast.kronos_model import Kronos, KronosPredictor, KronosTokenizer
         except ImportError as exc:
-            # Optional on free Render — torch/transformers are not in requirements.
             logger.warning(f"Kronos deps not installed — skipping forecast: {exc}")
             raise RuntimeError(f"Kronos dependencies not installed: {exc}") from exc
+
+        try:
+            tokenizer = KronosTokenizer.from_pretrained(KRONOS_TOKENIZER_ID)
+            model = Kronos.from_pretrained(KRONOS_MODEL_ID)
+            self._predictor = KronosPredictor(
+                model,
+                tokenizer,
+                device=self._device,
+                max_context=MAX_CONTEXT,
+            )
+            logger.info(f"Kronos-small loaded on {self._device}")
         except Exception as exc:
             logger.error(f"Failed to load Kronos model: {exc}")
             raise RuntimeError(f"Kronos-small could not be loaded: {exc}") from exc
 
     def forecast(self, df: pd.DataFrame, horizon: int = DEFAULT_HORIZON) -> dict[str, Any]:
-        """Generate a 20-day price forecast.
+        """Generate a price forecast for the next `horizon` business days."""
+        self._load_predictor()
 
-        Args:
-            df: DataFrame with columns [Open, High, Low, Close, Volume], sorted by date ascending.
-            horizon: Number of days to forecast (default 20).
+        history_len = min(len(df), DEFAULT_HISTORY, MAX_CONTEXT)
+        hist = _prepare_ohlcv(df.tail(history_len))
+        hist = hist[~hist.index.duplicated(keep="last")].sort_index()
 
-        Returns:
-            Dict with forecast table, summary stats, and metadata.
-        """
-        self._load_model()
+        last_actual = float(hist["close"].iloc[-1])
+        last_date = pd.Timestamp(hist.index[-1])
 
-        # Take last history days
-        history_len = min(len(df), DEFAULT_HISTORY)
-        df = df.tail(history_len)
+        lookback = len(hist)
+        x_timestamp = pd.Series(pd.to_datetime(hist.index))
+        y_timestamp = pd.Series(
+            pd.date_range(
+                last_date + timedelta(days=1),
+                periods=horizon,
+                freq="B",
+            )
+        )
 
-        last_actual = float(df["Close"].iloc[-1])
-        last_date = df.index[-1]
-
-        # Build input tensor: [batch=1, seq_len, features=5]
         try:
-            import torch
-            values = df[["Open", "High", "Low", "Close", "Volume"]].values.astype(np.float32)
-            tensor = torch.tensor(values, device=self._device).unsqueeze(0)  # [1, T, 5]
-
-            with torch.inference_mode():
-                output = self._model.generate(
-                    tensor,
-                    forecast_horizon=horizon,
-                )
-
-            # output shape: [1, T + horizon, 5] — last `horizon` rows are forecast
-            forecast_slice = output[0, -horizon:, :].cpu().numpy()  # [horizon, 5]
+            pred_df = self._predictor.predict(
+                df=hist,
+                x_timestamp=x_timestamp,
+                y_timestamp=y_timestamp,
+                pred_len=horizon,
+                T=1.0,
+                top_p=0.9,
+                sample_count=1,
+                verbose=False,
+            )
         except Exception as exc:
             logger.error(f"Kronos inference failed: {exc}")
-            # Fallback: drift forecast
-            return self._drift_fallback(df, horizon)
+            return self._drift_fallback(hist, horizon)
 
         forecast_rows: list[dict[str, Any]] = []
-        forecast_dates = pd.date_range(last_date + timedelta(days=1), periods=horizon, freq="B")
-
-        for i, (date, row) in enumerate(zip(forecast_dates, forecast_slice)):
-            # Ensure non-negative and reasonable values
-            o, h, l, c, v = float(row[0]), float(row[1]), float(row[2]), float(row[3]), int(max(float(row[4]), 0))
-            o = max(o, 0.0)
-            c = max(c, 0.0)
-            h = max(h, o, c)
-            l = min(l, o, c)
-
-            forecast_rows.append({
-                "day": i + 1,
-                "date": date.strftime("%Y-%m-%d"),
-                "open": round(o, 2),
-                "high": round(h, 2),
-                "low": round(l, 2),
-                "close": round(c, 2),
-                "volume": v,
-            })
+        for i, (date, row) in enumerate(pred_df.iterrows()):
+            o = max(float(row["open"]), 0.0)
+            c = max(float(row["close"]), 0.0)
+            h = max(float(row["high"]), o, c)
+            l = min(float(row["low"]), o, c)
+            vol = int(max(float(row.get("volume", 0)), 0))
+            forecast_rows.append(
+                {
+                    "day": i + 1,
+                    "date": pd.Timestamp(date).strftime("%Y-%m-%d"),
+                    "open": round(o, 2),
+                    "high": round(h, 2),
+                    "low": round(l, 2),
+                    "close": round(c, 2),
+                    "volume": vol,
+                }
+            )
 
         last_close = forecast_rows[-1]["close"]
-        delta_pct = round((last_close - last_actual) / last_actual * 100, 2) if last_actual > 0 else 0.0
+        delta_pct = (
+            round((last_close - last_actual) / last_actual * 100, 2)
+            if last_actual > 0
+            else 0.0
+        )
         direction = "upward" if delta_pct > 0 else "downward"
         all_closes = [r["close"] for r in forecast_rows]
         fcast_range = f"{min(all_closes):.2f}–{max(all_closes):.2f}"
@@ -125,9 +166,10 @@ class KronosForecaster:
         return {
             "model": KRONOS_MODEL_ID,
             "device": self._device,
-            "history_days": history_len,
+            "history_days": lookback,
             "horizon": horizon,
             "last_actual": last_actual,
+            "last_date": last_date.strftime("%Y-%m-%d"),
             "forecast": forecast_rows,
             "summary": (
                 f"Kronos forecasts the close drifting from {last_actual:.2f} (last actual) "
@@ -139,39 +181,44 @@ class KronosForecaster:
         }
 
     def _drift_fallback(self, df: pd.DataFrame, horizon: int) -> dict[str, Any]:
-        """Simple drift + volatility forecast when Kronos inference fails."""
-        close = df["Close"]
+        """Simple drift forecast when Kronos inference fails."""
+        close = df["close"] if "close" in df.columns else df["Close"]
         last_actual = float(close.iloc[-1])
-        last_date = df.index[-1]
+        last_date = pd.Timestamp(df.index[-1])
 
-        # Daily returns stats
         daily_returns = close.pct_change().dropna()
         mean_return = float(daily_returns.mean())
         std_return = float(daily_returns.std())
-        avg_vol = int(df["Volume"].tail(20).mean()) if "Volume" in df else 1000000
-        last_vol = int(df["Volume"].iloc[-1]) if "Volume" in df else 1000000
+        vol_col = "volume" if "volume" in df.columns else "Volume"
+        avg_vol = int(df[vol_col].tail(20).mean()) if vol_col in df.columns else 1_000_000
+        last_vol = int(df[vol_col].iloc[-1]) if vol_col in df.columns else 1_000_000
 
         forecast_rows = []
         price = last_actual
         dates = pd.date_range(last_date + timedelta(days=1), periods=horizon, freq="B")
         for i, date in enumerate(dates):
             shock = np.random.normal(mean_return, std_return)
-            price = price * (1 + shock)
-            price = max(price, 0.01)
+            price = max(price * (1 + shock), 0.01)
             o = price * (1 + np.random.uniform(-0.01, 0.01))
             vol = int(max(last_vol * (1 + np.random.uniform(-0.3, 0.3)), avg_vol * 0.5))
-            forecast_rows.append({
-                "day": i + 1,
-                "date": date.strftime("%Y-%m-%d"),
-                "open": round(float(o), 2),
-                "high": round(float(max(o, price * 1.02)), 2),
-                "low": round(float(min(o, price * 0.98)), 2),
-                "close": round(float(price), 2),
-                "volume": vol,
-            })
+            forecast_rows.append(
+                {
+                    "day": i + 1,
+                    "date": date.strftime("%Y-%m-%d"),
+                    "open": round(float(o), 2),
+                    "high": round(float(max(o, price * 1.02)), 2),
+                    "low": round(float(min(o, price * 0.98)), 2),
+                    "close": round(float(price), 2),
+                    "volume": vol,
+                }
+            )
 
         last_close = forecast_rows[-1]["close"]
-        delta_pct = round((last_close - last_actual) / last_actual * 100, 2) if last_actual > 0 else 0.0
+        delta_pct = (
+            round((last_close - last_actual) / last_actual * 100, 2)
+            if last_actual > 0
+            else 0.0
+        )
 
         return {
             "model": "drift-fallback (Kronos unavailable)",
@@ -179,6 +226,7 @@ class KronosForecaster:
             "history_days": len(df),
             "horizon": horizon,
             "last_actual": last_actual,
+            "last_date": last_date.strftime("%Y-%m-%d"),
             "forecast": forecast_rows,
             "summary": (
                 f"Drift forecast (Kronos fell back): {last_actual:.2f} → {last_close:.2f} "
@@ -189,13 +237,14 @@ class KronosForecaster:
         }
 
     def unload(self) -> None:
-        """Release model from memory. Call after forecast is complete."""
-        if self._model is not None:
-            del self._model
-            self._model = None
+        """Release model from memory."""
+        if self._predictor is not None:
+            del self._predictor
+            self._predictor = None
             gc.collect()
             try:
                 import torch
+
                 if self._device == "mps":
                     torch.mps.empty_cache()
             except Exception:

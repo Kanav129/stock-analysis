@@ -211,13 +211,18 @@ def test_get_status_embeds_daily_analysis_summary():
         ) as summarize,
         patch("services.job_queue_service.job_queue_service.ensure_started"),
         patch(
+            "services.job_queue_service.job_queue_service.count_active",
+            return_value=0,
+        ),
+        patch(
             "services.job_queue_service.job_queue_service.list_jobs",
             return_value=[],
-        ),
+        ) as list_jobs,
     ):
         result = svc.get_status()
 
     assert result["daily"] == daily
+    list_jobs.assert_not_called()
     summary_checkpoint, summary_universe = summarize.call_args.args
     assert summary_checkpoint == checkpoint
     assert summary_universe == universe
@@ -239,6 +244,10 @@ def test_get_status_daily_summary_includes_core_reports_done_today():
         ) as done_today,
         patch("services.job_queue_service.job_queue_service.ensure_started"),
         patch(
+            "services.job_queue_service.job_queue_service.count_active",
+            return_value=0,
+        ),
+        patch(
             "services.job_queue_service.job_queue_service.list_jobs",
             return_value=[],
         ),
@@ -249,6 +258,35 @@ def test_get_status_daily_summary_includes_core_reports_done_today():
     done_today.assert_called()
     assert result["daily"]["completed_count"] == 2
     done_today.assert_called_once_with("2026-07-22")
+
+
+def test_get_status_idle_reuses_daily_cache():
+    svc = _service()
+    universe = ["AAPL"]
+    daily = {"status": "partial", "can_resume": True, "already_completed_today": False}
+
+    with (
+        patch.object(svc.universe, "get_tickers", return_value=universe),
+        patch("services.analysis_service.rcs.today_key", return_value="2026-07-22"),
+        patch("services.analysis_service.rcs.load_analysis", return_value=None),
+        patch.object(svc, "_core_reports_done_today", return_value=set()) as done_today,
+        patch(
+            "services.analysis_service.rcs.daily_analysis_summary",
+            return_value=daily,
+        ) as summarize,
+        patch("services.job_queue_service.job_queue_service.ensure_started"),
+        patch(
+            "services.job_queue_service.job_queue_service.count_active",
+            return_value=0,
+        ),
+    ):
+        first = svc.get_status()
+        second = svc.get_status()
+
+    assert first["daily"] == daily
+    assert second["daily"] == daily
+    assert summarize.call_count == 1
+    assert done_today.call_count == 1
 
 
 def test_worker_checkpoints_each_success_and_completes():

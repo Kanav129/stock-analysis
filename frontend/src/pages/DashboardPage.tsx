@@ -10,9 +10,9 @@ import { Panel } from '../components/Panel';
 import { HeatTile } from '../components/HeatTile';
 import { DeltaValue } from '../components/DeltaValue';
 import { Sparkline } from '../components/Sparkline';
-import { Skeleton } from '../components/Skeleton';
+import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 import { RatingBadge } from '../components/RatingBadge';
-import type { Rating, SyncProgress, StockQuote } from '../api/types';
+import type { Rating, StockQuote } from '../api/types';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
 import { isUsRegularSession } from '../lib/usMarketHours';
 import { patchDeskCache, readDeskCache } from '../lib/deskCache';
@@ -21,6 +21,9 @@ const MARKET_TICKERS = ['SPY', 'QQQ', 'IWM', 'DIA'];
 /** Heatmap prefers watchlist; holdings fill remaining slots up to this cap. */
 const HEATMAP_CAP = 18;
 const CALLS_CAP = 6;
+const MARKET_SPARK_DAYS = 7;
+const HEAT_SPARK_DAYS = 7;
+const HOLDINGS_SPARK_DAYS = 5;
 
 /** Higher = more urgent for the review queue (soft ACCUMULATE ranks below REDUCE/BUY). */
 const CALL_PRIORITY: Record<Rating, number> = {
@@ -62,16 +65,11 @@ function fmtLiveAt(ms: number | null, liveEnabled: boolean): string {
 export function DashboardPage() {
   const qc = useQueryClient();
 
-  // Lightweight — in-memory on the API; safe to poll even during sync
+  // Polling owned by useSyncKeepAlive — subscribe only.
   const syncQ = useQuery({
     queryKey: ['sync-status'],
     queryFn: api.getSyncStatus,
-    refetchInterval: (q) => {
-      const d = q.state.data as SyncProgress | undefined;
-      return d?.running || d?.status === 'running' ? 500 : 30_000;
-    },
-    refetchIntervalInBackground: true,
-    staleTime: 1_000,
+    staleTime: 5_000,
   });
   const syncing = Boolean(syncQ.data?.running) || syncQ.data?.status === 'running';
 
@@ -85,15 +83,6 @@ export function DashboardPage() {
     initialData: sessionCache?.holdings as Awaited<ReturnType<typeof api.getHoldings>> | undefined,
     initialDataUpdatedAt: sessionCache?.holdings ? sessionCache.at : undefined,
   });
-  const ratingsQ = useQuery({
-    queryKey: ['ratings'],
-    queryFn: api.getRatings,
-    refetchInterval: syncing ? false : DESK_STALE_MS,
-    staleTime: DESK_STALE_MS,
-    placeholderData: keepPrevious,
-    initialData: sessionCache?.ratings as Awaited<ReturnType<typeof api.getRatings>> | undefined,
-    initialDataUpdatedAt: sessionCache?.ratings ? sessionCache.at : undefined,
-  });
   const watchlistQ = useQuery({
     queryKey: ['watchlist'],
     queryFn: api.getWatchlist,
@@ -103,11 +92,35 @@ export function DashboardPage() {
     initialDataUpdatedAt: sessionCache?.watchlist ? sessionCache.at : undefined,
   });
 
+  const holdingsTickers = (holdingsQ.data?.holdings ?? []).map((h) => h.ticker);
+
+  const deskTickers = useMemo(() => {
+    const fromHoldings = holdingsTickers.map((t) => t.toUpperCase());
+    const fromWatch = (watchlistQ.data?.items ?? []).map((i) => i.ticker.toUpperCase());
+    return [...new Set([...fromHoldings, ...fromWatch])].sort();
+  }, [holdingsTickers, watchlistQ.data]);
+  const deskTickerKey = deskTickers.join(',');
+
+  const ratingsQ = useQuery({
+    queryKey: ['ratings', 'desk', deskTickerKey],
+    queryFn: () => api.getRatings(deskTickers),
+    enabled: deskTickers.length > 0,
+    refetchInterval: syncing ? false : DESK_STALE_MS,
+    staleTime: DESK_STALE_MS,
+    placeholderData: keepPrevious,
+    initialData:
+      sessionCache?.ratingsDeskKey === deskTickerKey
+        ? (sessionCache.ratings as Awaited<ReturnType<typeof api.getRatings>> | undefined)
+        : undefined,
+    initialDataUpdatedAt:
+      sessionCache?.ratingsDeskKey === deskTickerKey && sessionCache?.ratings
+        ? sessionCache.at
+        : undefined,
+  });
+
   const analysisQ = useQuery({
     queryKey: ['analysis-status'],
     queryFn: api.getAnalysisStatus,
-    refetchInterval: (q) => (q.state.data?.running ? 800 : 30_000),
-    refetchIntervalInBackground: true,
     staleTime: 5_000,
   });
 
@@ -126,108 +139,14 @@ export function DashboardPage() {
     if (holdingsQ.data) patchDeskCache({ holdings: holdingsQ.data });
   }, [holdingsQ.data]);
   useEffect(() => {
-    if (ratingsQ.data) patchDeskCache({ ratings: ratingsQ.data });
-  }, [ratingsQ.data]);
+    if (ratingsQ.data && deskTickerKey) {
+      patchDeskCache({ ratings: ratingsQ.data, ratingsDeskKey: deskTickerKey });
+    }
+  }, [ratingsQ.data, deskTickerKey]);
   useEffect(() => {
     if (watchlistQ.data) patchDeskCache({ watchlist: watchlistQ.data });
   }, [watchlistQ.data]);
 
-  const deskOnlyTickers = useMemo(() => {
-    const fromHoldings = (holdingsQ.data?.holdings ?? []).map((h) => h.ticker);
-    const fromWatch = (watchlistQ.data?.items ?? []).map((i) => i.ticker);
-    const market = new Set(MARKET_TICKERS);
-    return [...new Set([...fromHoldings, ...fromWatch].map((t) => t.toUpperCase()))].filter(
-      (t) => !market.has(t),
-    );
-  }, [holdingsQ.data, watchlistQ.data]);
-
-  const liveTickers = useMemo(
-    () => [...MARKET_TICKERS, ...deskOnlyTickers],
-    [deskOnlyTickers],
-  );
-
-  // Don't compete with first paint / cold API — Yahoo backfill after desk settles.
-  const deskReady = Boolean(holdingsQ.data || watchlistQ.data);
-  const liveEnabled = !syncing && deskReady;
-  const { lastLiveAt } = useLivePriceRefresh(liveTickers, {
-    enabled: liveEnabled,
-    deferMs: 45_000,
-  });
-
-  const marketQuotesQ = useQuery({
-    queryKey: ['quotes', 'market', MARKET_TICKERS.join(',')],
-    queryFn: () => api.getQuotes(MARKET_TICKERS, 30),
-    staleTime: DESK_STALE_MS,
-    refetchInterval: syncing ? false : DESK_STALE_MS,
-    placeholderData: keepPrevious,
-    initialData: sessionCache?.marketQuotes as
-      | { quotes: Record<string, StockQuote> }
-      | undefined,
-    initialDataUpdatedAt: sessionCache?.marketQuotes ? sessionCache.at : undefined,
-  });
-
-  const deskQuoteKey = deskOnlyTickers.join(',');
-  const deskQuotesQ = useQuery({
-    queryKey: ['quotes', 'desk', deskQuoteKey],
-    queryFn: () => api.getQuotes(deskOnlyTickers, 30),
-    enabled: deskOnlyTickers.length > 0,
-    staleTime: DESK_STALE_MS,
-    refetchInterval: syncing ? false : DESK_STALE_MS,
-    placeholderData: keepPrevious,
-    initialData:
-      sessionCache?.deskQuoteKey === deskQuoteKey
-        ? (sessionCache.deskQuotes as { quotes: Record<string, StockQuote> } | undefined)
-        : undefined,
-    initialDataUpdatedAt:
-      sessionCache?.deskQuoteKey === deskQuoteKey && sessionCache?.deskQuotes
-        ? sessionCache.at
-        : undefined,
-  });
-
-  useEffect(() => {
-    if (marketQuotesQ.data) patchDeskCache({ marketQuotes: marketQuotesQ.data });
-  }, [marketQuotesQ.data]);
-  useEffect(() => {
-    if (deskQuotesQ.data && deskQuoteKey) {
-      patchDeskCache({ deskQuotes: deskQuotesQ.data, deskQuoteKey });
-    }
-  }, [deskQuotesQ.data, deskQuoteKey]);
-
-  const quotes = useMemo(
-    () => ({
-      ...(marketQuotesQ.data?.quotes ?? {}),
-      ...(deskQuotesQ.data?.quotes ?? {}),
-    }),
-    [marketQuotesQ.data, deskQuotesQ.data],
-  );
-
-  const summary = holdingsQ.data?.summary ?? {
-    total_value: 0,
-    total_unrealized_pnl: 0,
-    position_count: 0,
-    snapshot_at: null,
-  };
-
-  const ratings = ratingsQ.data?.ratings ?? [];
-  const ratingMap = Object.fromEntries(ratings.map((r) => [r.ticker, r]));
-  const holdingsTickers = (holdingsQ.data?.holdings ?? []).map((h) => h.ticker);
-
-  const callsToReview = useMemo(() => {
-    const universe = new Set([
-      ...holdingsTickers.map((t) => t.toUpperCase()),
-      ...(watchlistQ.data?.items ?? []).map((i) => i.ticker.toUpperCase()),
-    ]);
-    return ratings
-      .filter((r) => universe.has(r.ticker.toUpperCase()) && r.rating !== 'HOLD')
-      .sort((a, b) => {
-        const p = (CALL_PRIORITY[b.rating] ?? 0) - (CALL_PRIORITY[a.rating] ?? 0);
-        if (p !== 0) return p;
-        return Math.abs(b.score) - Math.abs(a.score);
-      })
-      .slice(0, CALLS_CAP);
-  }, [ratings, holdingsTickers, watchlistQ.data]);
-
-  // Watchlist and holdings-only slices (overlap stays in watchlist).
   const { heatWatchlist, heatHoldings } = useMemo(() => {
     const wl = [...new Set((watchlistQ.data?.items ?? []).map((i) => i.ticker.toUpperCase()))];
     const wlSet = new Set(wl);
@@ -245,7 +164,133 @@ export function DashboardPage() {
   }, [watchlistQ.data, holdingsTickers]);
   const heatTickers = heatWatchlist.length + heatHoldings.length;
 
-  // Only skeleton when we have nothing to show (no session cache / no data yet)
+  const heatQuoteTickers = useMemo(
+    () => [...new Set([...heatWatchlist, ...heatHoldings])],
+    [heatWatchlist, heatHoldings],
+  );
+  const heatQuoteKey = heatQuoteTickers.join(',');
+
+  const holdingsRestTickers = useMemo(() => {
+    const heatSet = new Set(heatQuoteTickers);
+    return [
+      ...new Set(holdingsTickers.map((t) => t.toUpperCase()).filter((t) => !heatSet.has(t))),
+    ].sort();
+  }, [holdingsTickers, heatQuoteTickers]);
+  const holdingsRestQuoteKey = holdingsRestTickers.join(',');
+
+  const liveTickers = useMemo(
+    () => [...MARKET_TICKERS, ...heatQuoteTickers],
+    [heatQuoteTickers],
+  );
+
+  const deskReady = Boolean(holdingsQ.data || watchlistQ.data);
+  const liveEnabled = !syncing && deskReady;
+  const { lastLiveAt } = useLivePriceRefresh(liveTickers, {
+    enabled: liveEnabled,
+    deferMs: 45_000,
+  });
+
+  const marketQuotesQ = useQuery({
+    queryKey: ['quotes', 'market', MARKET_TICKERS.join(',')],
+    queryFn: () => api.getQuotes(MARKET_TICKERS, MARKET_SPARK_DAYS),
+    staleTime: DESK_STALE_MS,
+    refetchInterval: syncing ? false : DESK_STALE_MS,
+    placeholderData: keepPrevious,
+    initialData: sessionCache?.marketQuotes as
+      | { quotes: Record<string, StockQuote> }
+      | undefined,
+    initialDataUpdatedAt: sessionCache?.marketQuotes ? sessionCache.at : undefined,
+  });
+
+  const heatQuotesQ = useQuery({
+    queryKey: ['quotes', 'heat', heatQuoteKey],
+    queryFn: () => api.getQuotes(heatQuoteTickers, HEAT_SPARK_DAYS),
+    enabled: heatQuoteTickers.length > 0,
+    staleTime: DESK_STALE_MS,
+    refetchInterval: syncing ? false : DESK_STALE_MS,
+    placeholderData: keepPrevious,
+    initialData:
+      sessionCache?.heatQuoteKey === heatQuoteKey
+        ? (sessionCache.heatQuotes as { quotes: Record<string, StockQuote> } | undefined)
+        : undefined,
+    initialDataUpdatedAt:
+      sessionCache?.heatQuoteKey === heatQuoteKey && sessionCache?.heatQuotes
+        ? sessionCache.at
+        : undefined,
+  });
+
+  const holdingsRestQuotesQ = useQuery({
+    queryKey: ['quotes', 'holdings-rest', holdingsRestQuoteKey],
+    queryFn: () => api.getQuotes(holdingsRestTickers, HOLDINGS_SPARK_DAYS),
+    enabled:
+      holdingsRestTickers.length > 0 &&
+      Boolean(holdingsQ.data) &&
+      (heatQuoteTickers.length === 0 || heatQuotesQ.isSuccess),
+    staleTime: DESK_STALE_MS,
+    refetchInterval: syncing ? false : DESK_STALE_MS,
+    placeholderData: keepPrevious,
+    initialData:
+      sessionCache?.holdingsRestQuoteKey === holdingsRestQuoteKey
+        ? (sessionCache.holdingsRestQuotes as { quotes: Record<string, StockQuote> } | undefined)
+        : undefined,
+    initialDataUpdatedAt:
+      sessionCache?.holdingsRestQuoteKey === holdingsRestQuoteKey &&
+      sessionCache?.holdingsRestQuotes
+        ? sessionCache.at
+        : undefined,
+  });
+
+  useEffect(() => {
+    if (marketQuotesQ.data) patchDeskCache({ marketQuotes: marketQuotesQ.data });
+  }, [marketQuotesQ.data]);
+  useEffect(() => {
+    if (heatQuotesQ.data && heatQuoteKey) {
+      patchDeskCache({ heatQuotes: heatQuotesQ.data, heatQuoteKey });
+    }
+  }, [heatQuotesQ.data, heatQuoteKey]);
+  useEffect(() => {
+    if (holdingsRestQuotesQ.data && holdingsRestQuoteKey) {
+      patchDeskCache({
+        holdingsRestQuotes: holdingsRestQuotesQ.data,
+        holdingsRestQuoteKey,
+      });
+    }
+  }, [holdingsRestQuotesQ.data, holdingsRestQuoteKey]);
+
+  const quotes = useMemo(
+    () => ({
+      ...(marketQuotesQ.data?.quotes ?? {}),
+      ...(heatQuotesQ.data?.quotes ?? {}),
+      ...(holdingsRestQuotesQ.data?.quotes ?? {}),
+    }),
+    [marketQuotesQ.data, heatQuotesQ.data, holdingsRestQuotesQ.data],
+  );
+
+  const summary = holdingsQ.data?.summary ?? {
+    total_value: 0,
+    total_unrealized_pnl: 0,
+    position_count: 0,
+    snapshot_at: null,
+  };
+
+  const ratings = ratingsQ.data?.ratings ?? [];
+  const ratingMap = Object.fromEntries(ratings.map((r) => [r.ticker, r]));
+
+  const callsToReview = useMemo(() => {
+    const universe = new Set([
+      ...holdingsTickers.map((t) => t.toUpperCase()),
+      ...(watchlistQ.data?.items ?? []).map((i) => i.ticker.toUpperCase()),
+    ]);
+    return ratings
+      .filter((r) => universe.has(r.ticker.toUpperCase()) && r.rating !== 'HOLD')
+      .sort((a, b) => {
+        const p = (CALL_PRIORITY[b.rating] ?? 0) - (CALL_PRIORITY[a.rating] ?? 0);
+        if (p !== 0) return p;
+        return Math.abs(b.score) - Math.abs(a.score);
+      })
+      .slice(0, CALLS_CAP);
+  }, [ratings, holdingsTickers, watchlistQ.data]);
+
   const holdingsPending = holdingsQ.isLoading && !holdingsQ.data;
   const marketPending = marketQuotesQ.isLoading && !marketQuotesQ.data;
 
@@ -258,12 +303,17 @@ export function DashboardPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-semibold">Trading Desk</h2>
-          <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
-            {analysisQ.data?.last_run
-              ? `Last analysis ${new Date(analysisQ.data.last_run).toLocaleString()}`
-              : analysisQ.isLoading
-                ? 'Checking last analysis…'
-                : 'No analysis run yet'}
+          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+            {analysisQ.isLoading ? (
+              <>
+                <LoadingSpinner size="sm" />
+                <span>Checking last analysis…</span>
+              </>
+            ) : analysisQ.data?.last_run ? (
+              `Last analysis ${new Date(analysisQ.data.last_run).toLocaleString()}`
+            ) : (
+              'No analysis run yet'
+            )}
           </p>
         </div>
         <DeskRunActions />
@@ -272,7 +322,7 @@ export function DashboardPage() {
       <JobsPanel />
 
       {holdingsPending ? (
-        <Skeleton className="h-8 w-full max-w-xl rounded" />
+        <LoadingState label="Loading portfolio…" compact minHeight="3rem" />
       ) : (
         <PortfolioSummaryCard summary={summary} />
       )}
@@ -308,11 +358,7 @@ export function DashboardPage() {
             subtitle={`${holdingsTickers.length} positions · ${freshnessLine}`}
           >
             {holdingsPending ? (
-              <div className="flex flex-col gap-2">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} className="h-8 w-full" />
-                ))}
-              </div>
+              <LoadingState label="Loading holdings…" minHeight="12rem" />
             ) : (
               <HoldingsTable
                 holdings={holdingsQ.data?.holdings ?? []}
@@ -325,17 +371,16 @@ export function DashboardPage() {
 
         <div className="col-span-12 flex flex-col gap-3 lg:col-span-4">
           <Panel title="Market" subtitle="SPY · QQQ · IWM · DIA" dense>
+            {marketPending ? (
+              <LoadingState label="Loading market…" compact minHeight="8rem" />
+            ) : (
             <div className="flex flex-col">
               {MARKET_TICKERS.map((t) => {
                 const q = quotes[t];
-                if (marketPending && !q) {
-                  return <Skeleton key={t} className="mb-1 h-7 w-full rounded" />;
-                }
                 return (
-                  <Link
+                  <div
                     key={t}
-                    to={`/stock/${t}`}
-                    className="flex items-center gap-2 border-b border-[var(--color-surface-3)] py-1.5 last:border-0 hover:bg-[var(--color-surface-2)]"
+                    className="flex items-center gap-2 border-b border-[var(--color-surface-3)] py-1.5 last:border-0"
                   >
                     <span className="w-9 shrink-0 font-mono text-xs font-semibold text-[var(--color-accent)]">
                       {t}
@@ -345,10 +390,11 @@ export function DashboardPage() {
                       {q?.latest_close != null ? `$${q.latest_close.toFixed(2)}` : '—'}
                     </span>
                     <DeltaValue value={q?.change_pct} className="w-14 shrink-0 text-right text-[11px]" />
-                  </Link>
+                  </div>
                 );
               })}
             </div>
+            )}
           </Panel>
 
           <Panel
@@ -362,11 +408,7 @@ export function DashboardPage() {
             dense
           >
             {watchlistQ.isLoading && heatTickers === 0 ? (
-              <div className="grid grid-cols-2 gap-1.5">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <Skeleton key={i} className="h-14 w-full rounded" />
-                ))}
-              </div>
+              <LoadingState label="Loading heatmap…" minHeight="10rem" />
             ) : heatTickers === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 Add watchlist tickers or sync holdings to populate the heatmap.

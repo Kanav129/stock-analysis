@@ -1,17 +1,20 @@
 /** Session cache so Desk remounts paint instantly while network refreshes. */
 
 /** Bump when cached payload shape changes (e.g. new summary fields). */
-const KEY = 'desk_session_cache_v2';
+const KEY = 'desk_session_cache_v3';
 const MAX_AGE_MS = 15 * 60_000;
 
 export type DeskSessionCache = {
   at: number;
   holdings?: unknown;
   ratings?: unknown;
+  ratingsDeskKey?: string;
   watchlist?: unknown;
   marketQuotes?: unknown;
-  deskQuotes?: unknown;
-  deskQuoteKey?: string;
+  heatQuotes?: unknown;
+  heatQuoteKey?: string;
+  holdingsRestQuotes?: unknown;
+  holdingsRestQuoteKey?: string;
 };
 
 export function readDeskCache(): DeskSessionCache | null {

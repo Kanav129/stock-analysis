@@ -8,7 +8,6 @@ import {
   PipelineProgressMeter,
   PipelineStageChip,
 } from './PipelineProgressMeter';
-import type { AnalysisProgress } from '../api/types';
 
 const CORE_STAGES = [
   { id: 'gather_prices', label: 'Technicals', verb: 'Reading technicals' },
@@ -32,16 +31,12 @@ function stageIndex(stages: { id: string }[], stage: string | null): number {
 export function AnalysisProgressTracker() {
   const qc = useQueryClient();
 
+  // Polling owned by useSyncKeepAlive — subscribe only.
   const statusQ = useQuery({
     queryKey: ['analysis-status'],
     queryFn: api.getAnalysisStatus,
-    refetchInterval: (q) => {
-      const d = q.state.data as AnalysisProgress | undefined;
-      return d?.running ? 800 : 15000;
-    },
-    refetchIntervalInBackground: true,
+    staleTime: 5_000,
   });
-
   const cancelMut = useMutation({
     mutationFn: api.cancelAnalysis,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['analysis-status'] }),

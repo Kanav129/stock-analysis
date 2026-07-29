@@ -48,6 +48,8 @@ def run_kronos(state: ResearchState) -> Dict[str, Any]:
             "horizon": forecast_result["horizon"],
             "forecast": forecast_result["forecast"],
             "summary": forecast_result["summary"],
+            "last_actual": forecast_result.get("last_actual"),
+            "last_date": forecast_result.get("last_date"),
             "error": "",
         }
 
@@ -74,15 +76,25 @@ Kronos forecasts the close drifting from {last_actual:.2f} (last actual) to {las
     except ImportError as exc:
         logger.warning(f"Kronos skipped for {ticker} (deps missing): {exc}")
         kronos_data["error"] = f"Kronos dependencies not installed: {exc}"
-        kronos_data["summary"] = "Forecast unavailable — install torch and transformers."
-        markdown = "*Kronos forecast unavailable — PyTorch/transformers not installed. Run `pip install torch transformers` to enable.*"
+        kronos_data["summary"] = "Forecast unavailable — install PyTorch and run scripts/setup_kronos.sh."
+        markdown = (
+            "*Kronos forecast unavailable — install PyTorch (`pip install torch einops huggingface_hub safetensors`) "
+            "and fetch model code (`bash scripts/setup_kronos.sh`).*"
+        )
     except RuntimeError as exc:
         msg = str(exc)
         if "dependencies not installed" in msg or "No module named" in msg:
             logger.warning(f"Kronos skipped for {ticker}: {exc}")
             kronos_data["error"] = msg
-            kronos_data["summary"] = "Forecast unavailable — install torch and transformers."
-            markdown = "*Kronos forecast unavailable — PyTorch/transformers not installed.*"
+            kronos_data["summary"] = "Forecast unavailable — install PyTorch and run scripts/setup_kronos.sh."
+            markdown = (
+                "*Kronos forecast unavailable — install PyTorch and run `bash scripts/setup_kronos.sh`.*"
+            )
+        elif "model code is missing" in msg.lower():
+            logger.warning(f"Kronos skipped for {ticker}: {exc}")
+            kronos_data["error"] = msg
+            kronos_data["summary"] = "Forecast unavailable — Kronos model code not installed."
+            markdown = "*Kronos forecast unavailable — run `bash scripts/setup_kronos.sh`.*"
         else:
             logger.error(f"Kronos failed for {ticker}: {exc}")
             kronos_data["error"] = msg

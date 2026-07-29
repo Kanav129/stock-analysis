@@ -15,6 +15,10 @@ def persist_report(state: ResearchState) -> Dict[str, Any]:
     logger.info(f"---PERSIST {report_type.upper()} REPORT {ticker}---")
 
     sections = state.get("sections_markdown", {})
+    kronos_data = state.get("kronos_data") or {}
+    if kronos_data.get("forecast"):
+        sections = dict(sections)
+        sections["_kronos_data"] = kronos_data
     rating_dict = {
         "rating": state.get("rating", "HOLD"),
         "score": state.get("score", 0),

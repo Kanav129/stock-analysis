@@ -182,6 +182,26 @@ class JobQueueService:
             "queued": queued,
         }
 
+    def count_active(self, job_type: str | None = None) -> int:
+        """Cheap COUNT of queued/running jobs (optional type filter)."""
+        db = get_db_client()
+        if job_type:
+            rows, _ = db.fetch_query(
+                """
+                SELECT COUNT(*) FROM desk_jobs
+                WHERE status IN ('queued', 'running') AND job_type = %s
+                """,
+                (job_type,),
+            )
+        else:
+            rows, _ = db.fetch_query(
+                """
+                SELECT COUNT(*) FROM desk_jobs
+                WHERE status IN ('queued', 'running')
+                """
+            )
+        return int(rows[0][0] or 0) if rows else 0
+
     def list_jobs(self) -> list[dict[str, Any]]:
         db = get_db_client()
         rows, cols = db.fetch_query(

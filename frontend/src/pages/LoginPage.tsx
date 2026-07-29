@@ -3,6 +3,7 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { isLoggedIn, setAuthToken } from '../auth';
 import { useBackendWake } from '../hooks/useBackendWake';
+import { LoadingSpinner } from '../components/LoadingSpinner';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -71,7 +72,7 @@ export function LoginPage() {
       />
 
       <div className="relative w-full max-w-sm animate-fade-up">
-        <p className="font-display text-[10px] uppercase tracking-[0.2em] text-[var(--color-text-muted)]">
+        <p className="font-display text-[length:var(--text-label)] uppercase tracking-[0.2em] text-[var(--color-text-muted)]">
           Personal Desk
         </p>
         <h1 className="font-display mt-1 text-3xl font-semibold tracking-tight text-[var(--color-text-primary)]">
@@ -100,13 +101,21 @@ export function LoginPage() {
               {error}
             </p>
           )}
-          <button type="submit" disabled={pending} className="btn-terminal btn-terminal--accent mt-1 w-full">
-            {pending ? 'Checking…' : 'Enter desk'}
+          <button type="submit" disabled={pending} className="btn-terminal btn-terminal--accent mt-1 flex w-full items-center justify-center gap-2">
+            {pending ? (
+              <>
+                <LoadingSpinner size="sm" />
+                Checking…
+              </>
+            ) : (
+              'Enter desk'
+            )}
           </button>
           <p
-            className="mt-3 text-center text-xs text-[var(--color-text-muted)]"
+            className="mt-3 flex items-center justify-center gap-2 text-center text-xs text-[var(--color-text-muted)]"
             aria-live="polite"
           >
+            {wakeStatus !== 'ready' ? <LoadingSpinner size="sm" /> : null}
             {wakeLabel}
           </p>
         </form>

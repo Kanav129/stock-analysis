@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 
 const MODEL_PRESETS = [
   'deepseek/deepseek-v4-pro',
@@ -67,6 +68,20 @@ export function SettingsPage() {
   const key = or?.key;
   const credits = or?.credits;
 
+  if (settingsQ.isLoading && !settingsQ.data) {
+    return (
+      <div className="flex max-w-2xl flex-col gap-6 animate-fade-up">
+        <div>
+          <h2 className="font-display text-2xl font-semibold">Settings</h2>
+          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+            OpenRouter API, models, and scheduling.
+          </p>
+        </div>
+        <LoadingState label="Loading settings…" minHeight="16rem" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex max-w-2xl flex-col gap-6 animate-fade-up">
       <div>
@@ -86,7 +101,7 @@ export function SettingsPage() {
             </p>
           </div>
           <span
-            className={`inline-flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[11px] font-semibold ${
+            className={`inline-flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[length:var(--text-label)] font-semibold ${
               or?.connected
                 ? 'bg-[color-mix(in_oklch,var(--color-up)_18%,transparent)] text-[var(--color-up)]'
                 : 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)]'
@@ -97,14 +112,23 @@ export function SettingsPage() {
                 or?.connected ? 'bg-[var(--color-up)]' : 'bg-[var(--color-text-muted)]'
               }`}
             />
-            {openrouterQ.isLoading ? 'Checking…' : or?.connected ? 'Connected' : 'Not connected'}
+            {openrouterQ.isLoading ? (
+              <span className="inline-flex items-center gap-1.5">
+                <LoadingSpinner size="sm" />
+                Checking…
+              </span>
+            ) : or?.connected ? (
+              'Connected'
+            ) : (
+              'Not connected'
+            )}
           </span>
         </div>
 
         {/* Credits / usage */}
         <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               Remaining
             </p>
             <p
@@ -120,7 +144,7 @@ export function SettingsPage() {
                     ? 'Unlimited'
                     : '—'}
             </p>
-            <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
+            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
               {credits?.remaining != null
                 ? 'Account balance'
                 : key?.limit_remaining != null
@@ -129,31 +153,31 @@ export function SettingsPage() {
             </p>
           </div>
           <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               Today
             </p>
             <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-[var(--color-text-primary)]">
               {fmtCredits(key?.usage_daily)}
             </p>
-            <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">Usage</p>
+            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">Usage</p>
           </div>
           <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               This month
             </p>
             <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-[var(--color-text-primary)]">
               {fmtCredits(key?.usage_monthly)}
             </p>
-            <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">Usage</p>
+            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">Usage</p>
           </div>
           <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               All time
             </p>
             <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-[var(--color-text-primary)]">
               {fmtCredits(key?.usage)}
             </p>
-            <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">Usage</p>
+            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">Usage</p>
           </div>
         </div>
 
@@ -177,7 +201,7 @@ export function SettingsPage() {
         )}
 
         {or?.credits_note && or.connected && (
-          <p className="mb-4 text-[11px] text-[var(--color-text-muted)]">{or.credits_note}</p>
+          <p className="mb-4 text-[length:var(--text-label)] text-[var(--color-text-muted)]">{or.credits_note}</p>
         )}
 
         <div className="flex flex-col gap-4">
@@ -204,7 +228,7 @@ export function SettingsPage() {
                 {showKey ? 'Hide' : 'Show'}
               </button>
             </div>
-            <span className="text-[11px] text-[var(--color-text-muted)]">
+            <span className="text-[length:var(--text-label)] text-[var(--color-text-muted)]">
               Stored in app settings (overrides .env). Get a key at{' '}
               <a
                 href="https://openrouter.ai/keys"

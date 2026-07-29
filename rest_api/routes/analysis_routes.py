@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from rest_api.schemas import AnalysisRunRequest
 from services.analysis_service import analysis_service
@@ -11,8 +11,12 @@ ratings_service = RatingsService()
 
 
 @router.get("/ratings")
-def get_latest_ratings():
-    return {"ratings": ratings_service.get_latest_ratings()}
+def get_latest_ratings(tickers: Optional[str] = Query(None)):
+    """Latest rating per ticker. Optional comma-separated tickers scopes the query."""
+    ticker_list = None
+    if tickers:
+        ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    return {"ratings": ratings_service.get_latest_ratings(ticker_list)}
 
 
 @router.get("/ratings/{ticker}")

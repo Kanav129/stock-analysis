@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -46,6 +47,8 @@ DEFAULT_CORE_SECONDS_PER_TICKER = 190
 DEFAULT_RESCORE_SECONDS_PER_TICKER = 45
 DEFAULT_TIMEOUT_BUFFER = 1.2  # +20% headroom
 MIN_ANALYSIS_TIMEOUT_SECONDS = 10 * 60
+# Idle /analysis/status polls reuse the daily Done/Resume gate for this long.
+DAILY_STATUS_CACHE_SECONDS = 30
 
 
 def _env_float(name: str, default: float) -> float:
@@ -117,6 +120,9 @@ class AnalysisService:
         self._state_lock = threading.Lock()
         self._progress: dict[str, Any] = self._idle_progress()
         self._worker: threading.Thread | None = None
+        self._daily_cache_day: str | None = None
+        self._daily_cache: dict[str, Any] | None = None
+        self._daily_cache_at: float = 0.0
         self._initialized = True
 
     @staticmethod
@@ -150,6 +156,31 @@ class AnalysisService:
 
         try:
             job_queue_service.ensure_started()
+            active_n = job_queue_service.count_active(JOB_CORE)
+        except Exception as exc:
+            logger.warning("Could not count job queue for analysis status: %s", exc)
+            active_n = 0
+
+        with self._state_lock:
+            snap = dict(self._progress)
+            snap["last_run"] = (
+                self._last_run.isoformat() if self._last_run else snap.get("last_run")
+            )
+            snap.pop("cancel_requested", None)
+
+        # Idle path: skip list_jobs detail + reuse cached daily gate.
+        if active_n == 0 and not snap.get("running"):
+            snap.setdefault("status", snap.get("status") or "idle")
+            snap["running"] = False
+            day = rcs.today_key()
+            cached = self._get_cached_daily(day)
+            if cached is not None:
+                snap["daily"] = cached
+                return snap
+            snap["daily"] = self._build_daily_summary(day, active=False)
+            return snap
+
+        try:
             core_jobs = [
                 j
                 for j in job_queue_service.list_jobs()
@@ -174,16 +205,8 @@ class AnalysisService:
             if j.get("status") == "done"
         ]
 
-        with self._state_lock:
-            snap = dict(self._progress)
-            snap["last_run"] = (
-                self._last_run.isoformat() if self._last_run else snap.get("last_run")
-            )
-            snap.pop("cancel_requested", None)
-
         if active:
             total = len(running_jobs) + len(queued_jobs) + len(completed_from_jobs)
-            # Prefer queue-derived live fields
             snap.update(
                 {
                     "running": True,
@@ -207,13 +230,32 @@ class AnalysisService:
             snap.setdefault("status", snap.get("status") or "idle")
 
         day = rcs.today_key()
+        # Prefer short-lived daily cache even while jobs run (gate is for the button).
+        cached = self._get_cached_daily(day)
+        if cached is not None:
+            snap["daily"] = cached
+        else:
+            snap["daily"] = self._build_daily_summary(day, active=active)
+        return snap
+
+    def _get_cached_daily(self, day: str) -> dict[str, Any] | None:
+        if (
+            self._daily_cache is not None
+            and self._daily_cache_day == day
+            and (time.monotonic() - self._daily_cache_at) < DAILY_STATUS_CACHE_SECONDS
+        ):
+            return self._daily_cache
+        return None
+
+    def _build_daily_summary(
+        self, day: str, *, active: bool
+    ) -> dict[str, Any]:
         checkpoint = rcs.load_analysis(day)
         # After a Render recycle, RAM is idle but the checkpoint may still say
         # "running". Heal to partial so UI/cron know they can resume.
         if (
             checkpoint
             and checkpoint.get("status") == "running"
-            and not snap.get("running")
             and not active
         ):
             checkpoint = dict(checkpoint)
@@ -243,11 +285,14 @@ class AnalysisService:
             for ticker in sorted(db_done)
             if ticker not in checkpoint_done
         ]
-        snap["daily"] = rcs.daily_analysis_summary(
+        daily = rcs.daily_analysis_summary(
             effective_checkpoint,
             universe,
         )
-        return snap
+        self._daily_cache_day = day
+        self._daily_cache = daily
+        self._daily_cache_at = time.monotonic()
+        return daily
 
     def request_cancel(self) -> dict[str, Any]:
         from services.job_queue_service import JOB_CORE, job_queue_service

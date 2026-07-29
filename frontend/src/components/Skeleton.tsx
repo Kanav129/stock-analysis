@@ -1,5 +1,6 @@
 /** Lightweight loading placeholders — reserve space to avoid CLS. */
 import type { CSSProperties } from 'react';
+import { LoadingState } from './LoadingSpinner';
 
 export function Skeleton({
   className = '',
@@ -14,6 +15,7 @@ export function Skeleton({
 export function DeskSkeleton() {
   return (
     <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading trading desk">
+      <LoadingState label="Loading desk…" minHeight="4rem" compact />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-col gap-2">
           <Skeleton className="h-5 w-36" />
@@ -72,11 +74,6 @@ export function DeskSkeleton() {
 
 export function PageFallback() {
   return (
-    <div className="flex flex-col gap-3 py-2" aria-busy="true" aria-label="Loading page">
-      <Skeleton className="h-6 w-40" />
-      <Skeleton className="h-3 w-64" />
-      <Skeleton className="mt-2 h-40 w-full rounded" />
-      <Skeleton className="h-24 w-full rounded" />
-    </div>
+    <LoadingState label="Loading page…" minHeight="50vh" size="lg" />
   );
 }

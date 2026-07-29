@@ -5,11 +5,11 @@ import { getDeskRunGate } from './deskRunGate';
 /** Pill trigger with inline Done / Resume gate badge. */
 export function RunAnalysisButton() {
   const qc = useQueryClient();
+  // Polling owned by useSyncKeepAlive — subscribe only.
   const statusQ = useQuery({
     queryKey: ['analysis-status'],
     queryFn: api.getAnalysisStatus,
-    refetchInterval: (q) => (q.state.data?.running ? 800 : false),
-    refetchIntervalInBackground: true,
+    staleTime: 5_000,
   });
 
   const mutation = useMutation({
@@ -23,12 +23,7 @@ export function RunAnalysisButton() {
   const jobsQ = useQuery({
     queryKey: ['jobs'],
     queryFn: api.getJobs,
-    refetchInterval: (q) => {
-      const jobs = q.state.data?.jobs ?? [];
-      return jobs.some((j) => j.status === 'queued' || j.status === 'running')
-        ? 800
-        : false;
-    },
+    staleTime: 5_000,
   });
 
   const llmBusy = Boolean(

@@ -7,7 +7,7 @@ import {
   PipelineLiveBadge,
   PipelineProgressMeter,
 } from './PipelineProgressMeter';
-import type { DeskJob, JobsSnapshot, SyncProgress } from '../api/types';
+import type { DeskJob, SyncProgress } from '../api/types';
 import './jobsPanel.css';
 
 function jobTypeLabel(jobType: string): string {
@@ -16,23 +16,15 @@ function jobTypeLabel(jobType: string): string {
   return 'Analysis';
 }
 
-function jobHasActivity(data?: JobsSnapshot): boolean {
-  if (!data) return false;
-  const sync = data.sync;
-  const syncing = Boolean(sync?.running) || sync?.status === 'running';
-  const llm = data.jobs.some((j) => j.status === 'queued' || j.status === 'running');
-  return syncing || llm;
-}
-
 export function JobsPanel() {
   const qc = useQueryClient();
   const [dismissedSyncAt, setDismissedSyncAt] = useState<string | null>(null);
 
+  // Polling owned by useSyncKeepAlive — subscribe only.
   const jobsQ = useQuery({
     queryKey: ['jobs'],
     queryFn: api.getJobs,
-    refetchInterval: (q) => (jobHasActivity(q.state.data) ? 800 : 15_000),
-    refetchIntervalInBackground: true,
+    staleTime: 5_000,
   });
 
   const cancelJobMut = useMutation({

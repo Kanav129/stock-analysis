@@ -34,6 +34,40 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/** Like `request`, but returns null on 404 instead of throwing. */
+async function requestOptional<T>(path: string, options?: RequestInit): Promise<T | null> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string> | undefined),
+  };
+  const token = getAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers,
+  });
+
+  if (res.status === 404) return null;
+
+  if (res.status === 401) {
+    clearAuthToken();
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      window.location.assign('/login');
+    }
+    const err = await res.json().catch(() => ({ detail: 'Unauthorized' }));
+    throw new Error(formatApiError(err, 'Unauthorized'));
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(formatApiError(err, `${res.status} ${res.statusText}`));
+  }
+  return res.json();
+}
+
 function formatApiError(err: { detail?: unknown }, fallback: string): string {
   const detail = err?.detail;
   if (typeof detail === 'string' && detail.trim()) return detail;
@@ -63,7 +97,13 @@ export const api = {
       body: JSON.stringify({ key }),
     }),
   getHoldings: () => request<{ holdings: import('./types').Holding[]; summary: import('./types').PortfolioSummary }>('/holdings'),
-  getRatings: () => request<{ ratings: import('./types').StockRating[] }>('/ratings'),
+  getRatings: (tickers?: string[]) => {
+    const qs =
+      tickers && tickers.length
+        ? `?tickers=${encodeURIComponent(tickers.join(','))}`
+        : '';
+    return request<{ ratings: import('./types').StockRating[] }>(`/ratings${qs}`);
+  },
   getRatingHistory: (ticker: string) => request<{ ticker: string; history: import('./types').StockRating[] }>(`/ratings/${ticker}`),
   runAnalysis: (tickers?: string[], opts?: { force?: boolean }) =>
     request<import('./types').AnalysisProgress>('/analysis/run', {
@@ -179,6 +219,8 @@ export const api = {
   generateReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}`, { method: 'POST' }),
   generateDeepReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}/deep`, { method: 'POST' }),
   getReport: (ticker: string, type: string = 'core') => request<import('./types').ResearchReport>(`/research/${ticker}?type=${type}`),
+  getReportIfExists: (ticker: string, type: string = 'core') =>
+    requestOptional<import('./types').ResearchReport>(`/research/${ticker}?type=${type}`),
   getTaskStatus: (taskId: string) => request<import('./types').ReportTask>(`/research/task/${taskId}`),
   getActiveReportTask: (ticker: string) =>
     request<{ task: import('./types').ReportTask | null }>(`/research/${ticker}/active`),

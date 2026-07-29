@@ -7,7 +7,6 @@ import {
   PipelineProgressMeter,
   PipelineStageChip,
 } from './PipelineProgressMeter';
-import type { SyncProgress } from '../api/types';
 
 const SYNC_STAGES = [
   { id: 'news', label: 'News', verb: 'Pulling news' },
@@ -34,15 +33,11 @@ export function SyncProgressTracker() {
   const qc = useQueryClient();
   const [dismissedAt, setDismissedAt] = useState<string | null>(null);
 
+  // Polling owned by useSyncKeepAlive — subscribe only.
   const statusQ = useQuery({
     queryKey: ['sync-status'],
     queryFn: api.getSyncStatus,
-    refetchInterval: (q) => {
-      const d = q.state.data as SyncProgress | undefined;
-      // Sub-step detail updates often during price ladder work.
-      return d?.running || d?.status === 'running' ? 500 : 20_000;
-    },
-    refetchIntervalInBackground: true,
+    staleTime: 5_000,
   });
 
   const cancelMut = useMutation({

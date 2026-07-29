@@ -31,6 +31,7 @@ Locally you can run the same API image with Docker Compose and the Vite app sepa
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+bash scripts/setup_kronos.sh   # fetch Kronos model code (once)
 cp .env.example .env   # fill in credentials
 uvicorn rest_api.main:app --reload --host 0.0.0.0 --port 8001
 ```
@@ -51,6 +52,19 @@ npm run dev
 ```
 
 Open http://localhost:5173
+
+### Kronos price forecast (deep reports)
+
+Deep reports include a **Kronos-small** 20-day forecast. Requirements:
+
+1. `pip install -r requirements.txt` (includes PyTorch, einops, huggingface_hub)
+2. `bash scripts/setup_kronos.sh` (downloads upstream model code into `forecast/kronos_model/`)
+
+First forecast run downloads ~100 MB of weights from Hugging Face. On Apple Silicon, inference uses MPS; otherwise CPU.
+
+**Render free tier:** PyTorch + the model may exceed 512 MB RAM — Kronos works reliably on local dev or a paid Render plan. Docker builds run `setup_kronos.sh` automatically.
+
+Regenerate a deep report after setup to refresh the Kronos section and chart.
 
 ## Deploy
 

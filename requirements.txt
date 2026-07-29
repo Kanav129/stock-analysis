@@ -21,7 +21,8 @@ httpx>=0.26.0
 pytest>=7.4.0
 nest-asyncio>=1.6.0
 numpy>=1.24.0
-# Research report — Kronos forecast (optional; uncomment to enable price forecasting)
-# torch>=2.0.0
-# transformers>=4.40.0
-# huggingface_hub>=0.20.0
+# Research report — Kronos forecast (PyTorch + upstream model code via scripts/setup_kronos.sh)
+torch>=2.0.0
+einops>=0.8.1
+huggingface_hub>=0.20.0
+safetensors>=0.4.0

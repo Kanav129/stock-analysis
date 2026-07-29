@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { DeskRunActions } from '../components/DeskRunActions';
 import { JobsPanel } from '../components/JobsPanel';
 import { WatchlistList } from '../components/WatchlistList';
+import { LoadingState } from '../components/LoadingSpinner';
 
 export function WatchlistPage() {
   const [ticker, setTicker] = useState('');
@@ -67,7 +68,7 @@ export function WatchlistPage() {
 
       <div className="rounded-lg bg-[var(--color-surface-1)]">
         {watchlistQ.isLoading ? (
-          <p className="p-6 text-sm text-[var(--color-text-muted)]">Loading watchlist…</p>
+          <LoadingState label="Loading watchlist…" minHeight="8rem" />
         ) : items.length ? (
           <WatchlistList items={items} />
         ) : (

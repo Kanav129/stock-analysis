@@ -7,14 +7,11 @@ import { getDeskRunGate } from './deskRunGate';
 export function SyncDataButton({ className = '' }: { className?: string }) {
   const qc = useQueryClient();
 
+  // Polling owned by useSyncKeepAlive — subscribe only.
   const statusQ = useQuery({
     queryKey: ['sync-status'],
     queryFn: api.getSyncStatus,
-    refetchInterval: (q) => {
-      const d = q.state.data as SyncProgress | undefined;
-      return d?.running || d?.status === 'running' ? 500 : 30_000;
-    },
-    refetchIntervalInBackground: true,
+    staleTime: 5_000,
   });
 
   const running = Boolean(statusQ.data?.running) || statusQ.data?.status === 'running';

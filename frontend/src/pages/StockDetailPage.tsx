@@ -12,7 +12,7 @@ import { FactorBars } from '../components/FactorBars';
 import { SectionAccordion } from '../components/SectionAccordion';
 import { DecisionBrief } from '../components/DecisionBrief';
 import { DecisionSnapshot } from '../components/DecisionSnapshot';
-import { Skeleton } from '../components/Skeleton';
+import { ChartLoading, LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 import {
   ChartRangeToggle,
   chartRangeHint,
@@ -34,7 +34,7 @@ const ForecastChart = lazy(() =>
 );
 
 function ChartFallback() {
-  return <Skeleton className="h-64 w-full rounded" />;
+  return <ChartLoading />;
 }
 
 const CORE_LABELS: Record<string, string> = {
@@ -96,7 +96,6 @@ export function StockDetailPage() {
   const location = useLocation();
   const qc = useQueryClient();
   const reportRef = useRef<HTMLDivElement>(null);
-  const autoStarted = useRef(false);
 
   const [generating, setGenerating] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -135,25 +134,43 @@ export function StockDetailPage() {
     enabled: !!t,
     staleTime: 60_000,
   });
-  const coreQuery = useQuery({
-    queryKey: ['report', t, 'core'],
-    queryFn: () => api.getReport(t, 'core'),
+  const deepQuery = useQuery({
+    queryKey: ['report', t, 'deep'],
+    queryFn: () => api.getReportIfExists(t, 'deep'),
     enabled: !!t && !generating,
-    retry: false,
+    retry: 2,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
     staleTime: 60_000,
   });
 
-  // Secondary — load after first paint data is in flight
+  const deepSettled = deepQuery.isFetched || deepQuery.isError;
+  const deepMissing = deepSettled && !deepQuery.data;
+
+  const coreQuery = useQuery({
+    queryKey: ['report', t, 'core'],
+    queryFn: () => api.getReportIfExists(t, 'core'),
+    enabled: !!t && !generating && deepMissing,
+    retry: 1,
+    staleTime: 60_000,
+  });
+
+  // First-paint settled: defer secondary DB reads so we don't exhaust the pool.
+  const primarySettled =
+    !!t &&
+    !generating &&
+    (quoteQ.isFetched || quoteQ.isError) &&
+    (deepQuery.isFetched || deepQuery.isError);
+
   const technicalsQ = useQuery({
     queryKey: ['technicals', t],
     queryFn: () => api.getTechnicals(t),
-    enabled: !!t,
+    enabled: primarySettled,
     staleTime: 60_000,
   });
   const historyQ = useQuery({
     queryKey: ['ratings', t],
     queryFn: () => api.getRatingHistory(t),
-    enabled: !!t,
+    enabled: primarySettled,
     staleTime: 60_000,
   });
   const watchlistQ = useQuery({
@@ -164,7 +181,7 @@ export function StockDetailPage() {
   const newsQ = useQuery({
     queryKey: ['news', t],
     queryFn: () => api.getRecentNews(t, 15),
-    enabled: !!t,
+    enabled: primarySettled,
     staleTime: 60_000,
   });
 
@@ -172,8 +189,8 @@ export function StockDetailPage() {
     queryKey: ['report-active', t],
     queryFn: () => api.getActiveReportTask(t),
     enabled: !!t,
-    retry: false,
-    staleTime: 0,
+    retry: 1,
+    staleTime: 5_000,
   });
 
   useEffect(() => {
@@ -199,19 +216,18 @@ export function StockDetailPage() {
       .catch(() => clearPersistedTask(t));
   }, [t, activeTaskQuery.data, activeTaskQuery.isLoading, activeTaskQuery.isFetching, generating, taskId]);
 
-  const deepQuery = useQuery({
-    queryKey: ['report', t, 'deep'],
-    queryFn: () => api.getReport(t, 'deep'),
-    enabled: !!t && !generating && (coreQuery.isFetched || coreQuery.isError),
-    retry: false,
-    staleTime: 60_000,
-  });
-
   const { data: taskStatus } = useQuery<ReportTask | null>({
     queryKey: ['report-task', taskId],
     queryFn: () => (taskId ? api.getTaskStatus(taskId) : null),
     enabled: !!taskId && generating,
-    refetchInterval: taskId && generating ? 2000 : false,
+    refetchInterval: () => {
+      if (!taskId || !generating) return false;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return false;
+      }
+      return 2500;
+    },
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {
@@ -264,45 +280,22 @@ export function StockDetailPage() {
     },
   });
 
-  // Reset auto-start when ticker changes
-  useEffect(() => {
-    autoStarted.current = false;
-  }, [t]);
-
-  // Auto-generate once if no report and nothing in flight
-  useEffect(() => {
-    if (!t || autoStarted.current || generating || taskId) return;
-    if (activeTaskQuery.isLoading || activeTaskQuery.isFetching) return;
-    if (coreQuery.isLoading || deepQuery.isLoading) return;
-    if (coreQuery.data || deepQuery.data) return;
-    if (activeTaskQuery.data?.task) return;
-    const reportsResolved = coreQuery.isFetched && deepQuery.isFetched;
-    if (!reportsResolved) return;
-    autoStarted.current = true;
-    generateCore.mutate();
-  }, [
-    t,
-    generating,
-    taskId,
-    activeTaskQuery.isLoading,
-    activeTaskQuery.isFetching,
-    activeTaskQuery.data,
-    coreQuery.isLoading,
-    deepQuery.isLoading,
-    coreQuery.data,
-    deepQuery.data,
-    coreQuery.isFetched,
-    deepQuery.isFetched,
-  ]);
-
   const latest = historyQ.data?.history?.[0];
   const onWatchlist = watchlistQ.data?.items.some((i) => i.ticker === t);
   const quote = quoteQ.data?.quotes?.[t];
   const tech = technicalsQ.data;
-  const report: ResearchReport | null = deepQuery.data || coreQuery.data || null;
-  const hasDeep = !!deepQuery.data;
+
+  const report: ResearchReport | null =
+    deepQuery.data ?? (deepSettled ? coreQuery.data ?? null : null);
+  const reportPending =
+    !generating &&
+    !!t &&
+    (!deepSettled || (deepMissing && (coreQuery.isLoading || coreQuery.isFetching)));
+  const hasDeep = report?.report_type === 'deep';
   const sections = report?.sections || {};
-  const sectionIds = Object.keys(sections).filter((k) => sections[k]);
+  const sectionIds = Object.keys(sections).filter(
+    (k) => sections[k] && !k.startsWith('_'),
+  );
 
   const toggleWatchlist = useMutation({
     mutationFn: async () => {
@@ -361,7 +354,11 @@ export function StockDetailPage() {
             onClick={() => generateCore.mutate()}
             disabled={generateCore.isPending || generating}
           >
-            {generating && generateType === 'core' ? 'Generating…' : 'Regenerate'}
+            {generating && generateType === 'core'
+              ? 'Generating…'
+              : report
+                ? 'Regenerate'
+                : 'Generate report'}
           </button>
           <button
             type="button"
@@ -404,7 +401,7 @@ export function StockDetailPage() {
             }
           >
             {chartQ.isLoading ? (
-              <p className="text-xs text-[var(--color-text-muted)]">Loading chart…</p>
+              <ChartLoading />
             ) : chartQ.isError ? (
               <p className="text-xs text-[var(--color-down)]">
                 {chartQ.error instanceof Error ? chartQ.error.message : 'Failed to load chart'}
@@ -422,7 +419,9 @@ export function StockDetailPage() {
           </Panel>
 
           <Panel title="Technicals" dense>
-            {!tech?.available ? (
+            {technicalsQ.isLoading ? (
+              <LoadingState label="Loading technicals…" compact minHeight="6rem" />
+            ) : !tech?.available ? (
               <p className="text-xs text-[var(--color-text-muted)]">
                 Sync price data to compute technicals.
               </p>
@@ -457,10 +456,9 @@ export function StockDetailPage() {
             >
               {generating && (
                 <div className="py-8 text-center">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" strokeWidth="2" style={{ animation: 'spin 1s linear infinite', margin: '0 auto 12px' }}>
-                    <circle cx="12" cy="12" r="10" strokeOpacity="0.2" />
-                    <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
-                  </svg>
+                  <div className="mb-3 flex justify-center">
+                    <LoadingSpinner size="lg" />
+                  </div>
                   <p className="text-sm font-semibold">
                     Generating {generateType === 'deep' ? 'deep dive' : 'core'} report…
                   </p>
@@ -481,6 +479,10 @@ export function StockDetailPage() {
                     <p className="mt-2 text-xs text-[var(--color-sell)]">{taskStatus.error}</p>
                   )}
                 </div>
+              )}
+
+              {!generating && reportPending && (
+                <LoadingState label="Loading report…" minHeight="12rem" />
               )}
 
               {!generating && report && (
@@ -511,10 +513,16 @@ export function StockDetailPage() {
                       </SectionAccordion>
                     ))}
                     {(() => {
-                      const kronos = (report as ResearchReport & {
-                        _kronos_data?: { forecast: import('../api/types').ForecastPoint[]; last_actual: number; last_date: string };
-                      })._kronos_data;
-                      if (!report.sections?.kronos || !kronos?.forecast) return null;
+                      const kronos = (
+                        report.sections as Record<string, unknown> | undefined
+                      )?._kronos_data as
+                        | {
+                            forecast: import('../api/types').ForecastPoint[];
+                            last_actual: number;
+                            last_date: string;
+                          }
+                        | undefined;
+                      if (!report.sections?.kronos || !kronos?.forecast?.length) return null;
                       return (
                         <ForecastChart
                           forecast={kronos.forecast}
@@ -532,13 +540,13 @@ export function StockDetailPage() {
                 </Suspense>
               )}
 
-              {!generating && !report && (
+              {!generating && !report && !reportPending && (
                 <div className="py-6 text-center">
                   <p className="text-sm text-[var(--color-text-secondary)]">No saved report yet.</p>
                   <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-                    {generateCore.isPending || autoStarted.current
+                    {generateCore.isPending
                       ? 'Starting generation…'
-                      : 'Click Regenerate to create one.'}
+                      : 'Use Generate report or Deep dive above when you want a new analysis.'}
                   </p>
                 </div>
               )}
@@ -546,9 +554,13 @@ export function StockDetailPage() {
           </div>
 
           <Panel title="Rating history" dense>
+            {historyQ.isLoading ? (
+              <ChartLoading label="Loading rating history…" />
+            ) : (
             <Suspense fallback={<ChartFallback />}>
               <RatingHistoryChart history={historyQ.data?.history ?? []} />
             </Suspense>
+            )}
           </Panel>
         </div>
 
@@ -584,7 +596,7 @@ export function StockDetailPage() {
 
           <Panel title="News stream" dense>
             {newsQ.isLoading ? (
-              <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
+              <LoadingState label="Loading news…" compact minHeight="6rem" />
             ) : (
               <div className="news-stream">
                 {(newsQ.data?.articles ?? []).map((a, i) => (
