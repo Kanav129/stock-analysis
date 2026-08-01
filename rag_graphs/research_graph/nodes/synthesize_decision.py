@@ -11,6 +11,7 @@ from config.llm_config import get_analysis_llm, resolve_analysis_model
 from config.rating_config import RATING_TAGS, clamp_score, normalize_rating
 from config.report_config import compute_dimension_alignment, compute_factor_scores
 from rag_graphs.research_graph.state import ResearchState
+from services.portfolio_context_service import portfolio_markdown_for
 from utils.logger import logger
 
 
@@ -73,35 +74,36 @@ buy/sell. Reserve STRONG_* for high-conviction setups with aligned factors.
 Keep rating and score consistent with the bands above. Be specific and actionable with
 entry/stop/target when possible.
 
+You also receive the user's Personal Portfolio holdings table when available.
+Stock research remains the primary driver of rating and score. Use the portfolio
+for position_note and posture (size, add/trim/hold relative to existing weight).
+You may slightly nudge rating and/or score when concentration or position size
+has a clear, material effect (e.g. already a very large weight or sector cluster);
+keep nudges modest and state them explicitly in reasoning. If portfolio influence
+is none, say so briefly in reasoning.
+
 Output Format: JSON with fields rating, score, reasoning (markdown), key_drivers (list),
 supporting_headlines (list), entry (number or null), stop (number or null), target
 (number or null), position_note (string), posture (string)."""
 
 
-def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
-    ticker = state["ticker"]
-    logger.info(f"---SYNTHESIZE DECISION {ticker}---")
+def build_decision_context(
+    *,
+    ticker: str,
+    live_price: float,
+    factor_scores: dict[str, Any],
+    sections: dict[str, Any],
+    portfolio_markdown: str,
+) -> str:
+    def truncate(text: str, max_chars: int = 3000) -> str:
+        return text[:max_chars] + ("..." if len(text) > max_chars else "")
 
-    live_price = state.get("live_price") or 0.0
-
-    fundamental_data = state.get("fundamental_data") or {}
-    market_data = state.get("market_data") or {}
-    sentiment_data = state.get("sentiment_data") or {}
-
-    factor_scores = state.get("factor_scores") or compute_factor_scores(
-        fundamental_data, market_data, sentiment_data
-    )
-
-    sections = state.get("sections_markdown") or {}
     market_md = sections.get("market") or sections.get("technicals") or ""
     fundamentals_md = sections.get("fundamentals", "")
     news_md = sections.get("news", "")
     sentiment_md = sections.get("sentiment", "")
 
-    def truncate(text: str, max_chars: int = 3000) -> str:
-        return text[:max_chars] + ("..." if len(text) > max_chars else "")
-
-    context = f"""## Market / Technicals
+    return f"""## Market / Technicals
 {truncate(market_md) or truncate(fundamentals_md, 1500)}
 
 ## Fundamentals
@@ -123,7 +125,43 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
 
 ## Live Price
 ${float(live_price):.2f}
+
+{portfolio_markdown}
 """
+
+
+def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
+    ticker = state["ticker"]
+    logger.info(f"---SYNTHESIZE DECISION {ticker}---")
+
+    live_price = state.get("live_price") or 0.0
+
+    fundamental_data = state.get("fundamental_data") or {}
+    market_data = state.get("market_data") or {}
+    sentiment_data = state.get("sentiment_data") or {}
+
+    factor_scores = state.get("factor_scores") or compute_factor_scores(
+        fundamental_data, market_data, sentiment_data
+    )
+
+    sections = state.get("sections_markdown") or {}
+
+    try:
+        portfolio_md = portfolio_markdown_for(ticker)
+    except Exception as exc:
+        logger.warning(f"Portfolio context failed for {ticker}: {exc}")
+        portfolio_md = (
+            "## Personal Portfolio\n- Portfolio context unavailable.\n"
+            "- Use generic position sizing."
+        )
+
+    context = build_decision_context(
+        ticker=ticker,
+        live_price=float(live_price),
+        factor_scores=factor_scores,
+        sections=sections,
+        portfolio_markdown=portfolio_md,
+    )
 
     try:
         llm = get_analysis_llm(temperature=0.25)
