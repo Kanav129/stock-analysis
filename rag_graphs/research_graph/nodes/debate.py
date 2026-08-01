@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from config.llm_config import get_research_llm
 from rag_graphs.research_graph.state import ResearchState
+from services.portfolio_context_service import portfolio_markdown_for
 from utils.logger import logger
 
 BULL_SYSTEM = """You are an aggressive growth analyst with a bullish tilt. Given full research on a stock,
@@ -17,12 +18,16 @@ BEAR_SYSTEM = """You are a conservative risk manager with a bearish tilt. Given 
 write your bear case. Argue for reducing or exiting. Think about what could go wrong. Be skeptical.
 Output in markdown, under 400 words."""
 
-NEUTRAL_SYSTEM = """You are a balanced, probabilistic portfolio manager. Given full research on a stock
-and the bull/bear cases, write a fair synthesis that weighs both sides. Recommend a specific action
-size (add/trim/hold) with clear reasoning. Output in markdown, under 400 words."""
+NEUTRAL_SYSTEM = """You are a balanced, probabilistic portfolio manager. Given full research on a stock,
+the bull/bear cases, and the user's Personal Portfolio holdings when available, write a fair synthesis
+that weighs both sides. Recommend a specific action size (add/trim/hold) with clear reasoning.
+Consider position size relative to the book and concentration; only lean the rating slightly when
+concentration or size is material. Position sizing must reference existing holdings when present.
+Output in markdown, under 400 words."""
 
 RESEARCH_MANAGER_SYSTEM = """You are the head of research. You receive three analyst perspectives
-(bull/aggressive, bear/conservative, neutral/balanced) plus the full research sections.
+(bull/aggressive, bear/conservative, neutral/balanced) plus the full research sections and the
+user's Personal Portfolio holdings when available.
 
 Synthesize them into the final decision chain:
 
@@ -34,7 +39,8 @@ Synthesize them into the final decision chain:
 2. **Trader Proposal** — concrete execution plan from the trader's perspective.
    - `**Action**: BUY/HOLD/SELL`
    - `**Reasoning**: ` paragraph
-   - `**Position Sizing**: ` specific guidance
+   - `**Position Sizing**: ` specific guidance that references existing holdings when present
+     (size relative to book; concentration). Only lean rating slightly if concentration/size is material.
    - End with: `FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**`
 
 3. **Portfolio Decision** — the final, authoritative call.
@@ -46,19 +52,39 @@ Synthesize them into the final decision chain:
 Output in markdown. Under 1200 words total. Make the final call clear and decisive."""
 
 
+def assemble_debate_context(
+    sections: dict[str, Any],
+    portfolio_markdown: str,
+) -> str:
+    parts: list[str] = []
+    section_ids = [
+        "market", "fundamentals", "news", "sentiment",
+        "flows", "policy", "lockup", "kronos",
+    ]
+    for sid in section_ids:
+        md = sections.get(sid, "")
+        if md:
+            parts.append(f"## {sid.title()}\n{md[:2000]}")
+    body = "\n\n".join(parts)
+    return f"{body}\n\n{portfolio_markdown}".strip()
+
+
 def debate(state: ResearchState) -> Dict[str, Any]:
     ticker = state["ticker"]
     logger.info(f"---DEBATE {ticker}---")
 
-    # Assemble full context from all sections
     sections = state.get("sections_markdown", {})
-    full_context_parts = []
-    section_ids = ["market", "fundamentals", "news", "sentiment", "flows", "policy", "lockup", "kronos"]
-    for sid in section_ids:
-        md = sections.get(sid, "")
-        if md:
-            full_context_parts.append(f"## {sid.title()}\n{md[:2000]}")  # truncate each section
-    full_context = "\n\n".join(full_context_parts)
+    try:
+        portfolio_md = portfolio_markdown_for(ticker)
+    except Exception as exc:
+        logger.warning(f"Portfolio context failed for {ticker}: {exc}")
+        portfolio_md = (
+            "## Personal Portfolio\n- Portfolio context unavailable.\n"
+            "- Use generic position sizing."
+        )
+
+    # Same assembled context (research + portfolio) for all four analysts.
+    full_context = assemble_debate_context(sections, portfolio_md)
 
     factor_scores = state.get("factor_scores", {})
     scores_note = f"Factor Scores: Value {factor_scores.get('value', 0)}, Growth {factor_scores.get('growth', 0)}, "
