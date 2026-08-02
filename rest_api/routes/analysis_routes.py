@@ -19,6 +19,12 @@ def get_latest_ratings(tickers: Optional[str] = Query(None)):
     return {"ratings": ratings_service.get_latest_ratings(ticker_list)}
 
 
+@router.get("/ratings/recent")
+def get_recent_ratings(limit: int = Query(8, ge=1, le=50)):
+    """Most recent rating rows across the desk (chronological, not one-per-ticker)."""
+    return {"ratings": ratings_service.get_recent_ratings(limit)}
+
+
 @router.get("/ratings/{ticker}")
 def get_rating_history(ticker: str):
     history = ratings_service.get_rating_history(ticker)

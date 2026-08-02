@@ -62,7 +62,7 @@ Deep reports include a **Kronos-small** 20-day forecast. Requirements:
 
 First forecast run downloads ~100 MB of weights from Hugging Face. On Apple Silicon, inference uses MPS; otherwise CPU.
 
-**Render free tier:** PyTorch + the model may exceed 512 MB RAM — Kronos works reliably on local dev or a paid Render plan. Docker builds run `setup_kronos.sh` automatically.
+**Render free/Starter (512 MB):** set `KRONOS_ENABLED=false` (default in `render.yaml`) so deep reports skip Kronos instead of OOMing. Enable on local or a larger instance (e.g. Render Standard 2 GB). Docker builds still run `setup_kronos.sh` for when you turn it on.
 
 Regenerate a deep report after setup to refresh the Kronos section and chart.
 
@@ -84,7 +84,7 @@ Notes:
 - Free dynos **spin down** after idle; the first request can take ~30–60s.
 - Chroma data under `/app/chroma_db` is **ephemeral** on free tier (lost on redeploy/sleep). Re-run sync after wake if needed. Postgres/Mongo should be managed (Supabase / Atlas).
 - Keep `AUTO_PIPELINE_ENABLED=false` on free tier. Scheduling is done by **GitHub Actions** (below), which also wakes the dyno.
-ad
+
 ### Scheduled jobs (GitHub Actions → wakes Render)
 
 Workflows in `.github/workflows/`:
@@ -92,7 +92,13 @@ Workflows in `.github/workflows/`:
 | Workflow | When (HKT) | Cron (UTC) | Endpoint |
 |----------|------------|------------|----------|
 | `daily-sync.yml` | Tue–Sat 06:00 HKT (skip Sun/Mon = US weekend) | `0 22 * * 1-5` | `POST /cron/sync` |
-| `weekly-analysis.yml` | Saturdays 07:00 | `0 23 * * 5` | `POST /cron/analyze` |
+| `weekly-analysis.yml` | Mondays 06:00 ET | `0 11 * * 1` | wake → holdings → sync → analyze |
+
+**Weekly analysis order:** `IBKR holdings (best effort)` → `prices/news (required)` → `analysis (required)`.
+
+1. `POST /cron/holdings/sync` refreshes stock/ETF positions from IBKR Flex. On failure or timeout the workflow emits a warning and continues with the last saved holdings snapshot.
+2. `POST /cron/sync` must complete for the expanded universe before analysis starts.
+3. `POST /cron/analyze` runs only when today’s price/news sync is complete.
 
 After the API is live, add these **GitHub repo secrets** (Settings → Secrets → Actions):
 
@@ -101,7 +107,16 @@ After the API is live, add these **GitHub repo secrets** (Settings → Secrets �
 | `API_BASE_URL` | `https://<your-service>.onrender.com` (no trailing slash) |
 | `ADMIN_KEY` | Same as Render `ADMIN_KEY` |
 
-You can also run them manually: Actions → workflow → **Run workflow**.
+Also set on Render (never commit tokens):
+
+| Variable | Purpose |
+|----------|---------|
+| `IBKR_FLEX_TOKEN` | Flex Web Service token |
+| `IBKR_FLEX_QUERY_ID` | Flex Query ID that includes **Open Positions** |
+
+**One-time Flex Query setup (Account Management → Flex Web Service):** create a Token, then a Flex Query with Open Positions for stocks/ETFs (include quantity, cost basis, mark price, unrealized P&L, % of NAV, currency, conid). Point `IBKR_FLEX_QUERY_ID` at that query. You can also sync manually from the dashboard **Sync holdings** button (`POST /holdings/sync`).
+
+You can also run workflows manually: Actions → workflow → **Run workflow**.
 
 ### Frontend → Vercel
 
@@ -121,6 +136,8 @@ You can also run them manually: Actions → workflow → **Run workflow**.
 | GET | `/universe` | Holdings + watchlist tickers |
 | GET/POST/DELETE | `/watchlist` | Manage watchlist |
 | GET | `/holdings` | Current holdings snapshot |
+| POST | `/holdings/sync` | Sync IBKR Flex Open Positions into holdings |
+| POST | `/cron/holdings/sync` | Same as above (scheduler / weekly workflow) |
 | GET | `/ratings` | Latest rating per ticker |
 | GET | `/ratings/{ticker}` | Rating history |
 | POST | `/analysis/run` | Trigger analysis |
@@ -136,9 +153,11 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 |----------|--------|---------|
 | `CORS_ORIGINS` | Render | Allowed browser origins (comma-separated) |
 | `ADMIN_KEY` | Render (+ GitHub Actions) | Access key for login + cron Bearer auth |
+| `IBKR_FLEX_TOKEN` / `IBKR_FLEX_QUERY_ID` | Render | IBKR Flex holdings import (never log the token) |
 | `VITE_API_BASE_URL` | Vercel | Render API origin for the SPA |
 | `PORT` | Render | Injected automatically |
 | `AUTO_PIPELINE_ENABLED` | Render | Prefer `false` on free tier |
+| `KRONOS_ENABLED` | Render | `false` on free/Starter (512 MB); `true` locally / Standard+ |
 | `SYNC_INTERVAL` | Render | Seconds between in-process syncs (default 86400) |
 | `ANALYSIS_INTERVAL` | Render | Seconds between in-process analyses (default 604800) |
 | `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | OpenRouter models |

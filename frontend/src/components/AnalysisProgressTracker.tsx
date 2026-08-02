@@ -154,8 +154,19 @@ export function AnalysisProgressTracker() {
               style={{ animationDelay: `${Math.min(i, 6) * 30}ms` }}
             >
               <span className="font-mono">{c.ticker}</span>
-              {c.rating && <RatingBadge rating={c.rating} />}
-              {c.score != null && <ScoreMeter value={c.score} showLabel />}
+              {c.rating && (
+                <RatingBadge
+                  rating={c.rating}
+                  reportType={data.mode === 'core_report' || data.mode === 'rescore' ? 'core' : null}
+                />
+              )}
+              {c.score != null && (
+                <ScoreMeter
+                  value={c.score}
+                  showLabel
+                  reportType={data.mode === 'core_report' || data.mode === 'rescore' ? 'core' : null}
+                />
+              )}
             </span>
           ))}
         </div>

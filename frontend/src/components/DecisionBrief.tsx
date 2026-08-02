@@ -101,8 +101,9 @@ export function DecisionBrief({ report }: { report: ResearchReport }) {
 
       <div className="decision-brief__hero">
         <div
-          className="decision-brief__rating"
+          className={`decision-brief__rating${report.report_type === 'deep' ? ' decision-brief__rating--deep' : ''}`}
           style={{ background: c.bg, borderColor: c.border, color: c.color }}
+          title={report.report_type === 'deep' ? 'Deep report' : report.report_type === 'core' ? 'Core report' : undefined}
         >
           {rating.rating.replace(/_/g, ' ')}
         </div>
@@ -112,7 +113,7 @@ export function DecisionBrief({ report }: { report: ResearchReport }) {
           </p>
           <div className="decision-brief__score-block">
             <span className="decision-brief__label">AI score (−100 sell → +100 buy)</span>
-            <ScoreMeter value={score} size="md" />
+            <ScoreMeter value={score} size="md" reportType={report.report_type} />
           </div>
           {rating.calibration_note && (
             <p className="decision-brief__meta">{rating.calibration_note}</p>

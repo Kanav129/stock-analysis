@@ -17,6 +17,9 @@ services:
     envVars:
       - key: AUTO_PIPELINE_ENABLED
         value: "false"
+      # PyTorch/Kronos OOM on 512 MB (free/Starter). Enable on Standard+ or local.
+      - key: KRONOS_ENABLED
+        value: "false"
       - key: SYNC_INTERVAL
         value: "86400"
       - key: ANALYSIS_INTERVAL

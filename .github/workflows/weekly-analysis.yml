@@ -11,8 +11,9 @@ name: Weekly analysis
 
 on:
   schedule:
-    # Saturday 07:00 HKT (HKT = UTC+8) → 23:00 UTC Friday
-    - cron: "0 23 * * 5"
+    # Monday 06:00 America/New_York (EST) → 11:00 UTC Monday.
+    # During EDT (Mar–Nov) this fires at 07:00 ET — still before the 09:30 open.
+    - cron: "0 11 * * 1"
   workflow_dispatch:
 
 jobs:
@@ -43,6 +44,140 @@ jobs:
           echo "Check API_BASE_URL secret is your Render URL (not Vercel), e.g. https://xxx.onrender.com" >&2
           exit 1
 
+      # Best-effort IBKR Flex holdings sync. On failure, continue with the last
+      # saved snapshot so price/news sync and analysis still run.
+      - name: Sync IBKR holdings (best effort)
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -uo pipefail
+          BASE="${API_BASE_URL%/}"
+          BASE="${BASE%/api}"
+          set +e
+          body=$(curl -sS --max-time 180 \
+            -X POST "${BASE}/cron/holdings/sync" \
+            -H "Authorization: Bearer ${ADMIN_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            -w "\nHTTP_STATUS:%{http_code}")
+          status=$?
+          set -e
+          echo "$body"
+          http_code=$(echo "$body" | sed -n 's/^HTTP_STATUS://p' | tail -n1)
+          payload=$(echo "$body" | sed '/^HTTP_STATUS:/d')
+          if [ "$status" -ne 0 ] || [ -z "$http_code" ] || [ "$http_code" -ge 400 ]; then
+            echo "::warning::IBKR holdings sync failed (HTTP ${http_code:-n/a}). Continuing with last saved holdings snapshot."
+            exit 0
+          fi
+          echo "Holdings sync ok: $payload"
+
+      - name: Ensure sync complete (run if needed)
+        id: sync
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          BASE="${API_BASE_URL%/}"
+          BASE="${BASE%/api}"
+          body=$(curl -fsS --max-time 120 \
+            -X POST "${BASE}/cron/sync" \
+            -H "Authorization: Bearer ${ADMIN_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+          echo "$body"
+          SYNC_START_BODY="$body" python3 <<'PY'
+          import json, math, os
+          body = json.loads(os.environ["SYNC_START_BODY"])
+          if body.get("reason") == "already_completed_today" or (
+              body.get("started") is False and body.get("reason") == "already_completed_today"
+          ):
+              print("Sync already completed today — skip wait")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                  fh.write("skip_wait=true\n")
+                  fh.write("max_polls=0\n")
+                  fh.write("poll_seconds=30\n")
+              raise SystemExit(0)
+          n = max(1, int(body.get("total") or len(body.get("tickers") or []) or 1))
+          timeouts = body.get("timeouts") or {}
+          if timeouts.get("total"):
+              total_s = int(timeouts["total"])
+          else:
+              total_s = max(600, int(math.ceil(n * (30 + 200) * 1.2)) + 600)
+          wait_s = int(math.ceil(total_s * 1.1))
+          poll_s = 30
+          max_polls = max(1, int(math.ceil(wait_s / poll_s)))
+          print(f"Waiting for sync: up to {max_polls}×{poll_s}s")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"max_polls={max_polls}\n")
+              fh.write(f"poll_seconds={poll_s}\n")
+          PY
+
+      - name: Wait until sync finishes
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+          MAX_POLLS: ${{ steps.sync.outputs.max_polls }}
+          POLL_SECONDS: ${{ steps.sync.outputs.poll_seconds }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.sync.outputs.skip_wait }}" = "true" ]; then
+            echo "Skipping sync wait — already completed today"
+            exit 0
+          fi
+          BASE="${API_BASE_URL%/}"
+          BASE="${BASE%/api}"
+          MAX_POLLS="${MAX_POLLS:-240}"
+          POLL_SECONDS="${POLL_SECONDS:-30}"
+          RESUMES=0
+          MAX_RESUMES=30
+          for i in $(seq 1 "$MAX_POLLS"); do
+            body=$(curl -fsS --max-time 60 \
+              "${BASE}/sync/status" \
+              -H "Authorization: Bearer ${ADMIN_KEY}")
+            echo "$body"
+            eval "$(SYNC_BODY="$body" python3 <<'PY'
+          import json, os
+          d = json.loads(os.environ["SYNC_BODY"])
+          daily = d.get("daily") or {}
+          def sh(name, value):
+              print(f'{name}={json.dumps(str(value))}')
+          sh("running", d.get("running", False))
+          sh("status", d.get("status", ""))
+          sh("daily_status", daily.get("status", ""))
+          sh("can_resume", bool(daily.get("can_resume")))
+          sh("already_done", bool(daily.get("already_completed_today")))
+          PY
+          )"
+            if [ "$running" = "True" ] || [ "$status" = "running" ]; then
+              sleep "$POLL_SECONDS"
+              continue
+            fi
+            if [ "$already_done" = "True" ] || [ "$status" = "completed" ] || [ "$daily_status" = "completed" ]; then
+              echo "Sync finished successfully"
+              exit 0
+            fi
+            if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
+              if [ "$RESUMES" -ge "$MAX_RESUMES" ]; then
+                echo "Exceeded ${MAX_RESUMES} sync resume attempts" >&2
+                exit 1
+              fi
+              RESUMES=$((RESUMES + 1))
+              curl -fsS --max-time 120 \
+                -X POST "${BASE}/cron/sync" \
+                -H "Authorization: Bearer ${ADMIN_KEY}" \
+                -H "Content-Type: application/json" \
+                -d '{}' || true
+              sleep "$POLL_SECONDS"
+              continue
+            fi
+            echo "Sync failed with status=${status}, daily.status=${daily_status}" >&2
+            exit 1
+          done
+          echo "Timed out waiting for sync" >&2
+          exit 1
+
       - name: Start analysis
         id: start
         env:
@@ -64,6 +199,9 @@ jobs:
           ANALYSIS_START_BODY="$body" python3 <<'PY'
           import json, math, os
           body = json.loads(os.environ["ANALYSIS_START_BODY"])
+          if body.get("reason") == "sync_not_complete":
+              print("Sync not complete — cannot start analysis")
+              raise SystemExit(1)
           if body.get("reason") == "already_completed_today" or (
               body.get("started") is False and body.get("reason") == "already_completed_today"
           ):

@@ -8,6 +8,11 @@ from psycopg2.extras import Json
 from config.rating_config import clamp_score, normalize_rating, score_from_legacy_confidence
 from db.db_factory import get_db_client
 
+RATING_SELECT = """
+    id, ticker, rating, score, reasoning,
+    key_drivers, supporting_headlines, price_summary, model, report_type, created_at
+"""
+
 
 def _extract_score(rating_obj: dict[str, Any]) -> int:
     if rating_obj.get("score") is not None:
@@ -16,6 +21,15 @@ def _extract_score(rating_obj: dict[str, Any]) -> int:
         str(rating_obj.get("rating") or "HOLD"),
         rating_obj.get("confidence"),
     )
+
+
+def _normalize_report_type(value: Any) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if raw in {"core", "deep"}:
+        return raw
+    return None
 
 
 class RatingsService:
@@ -45,16 +59,42 @@ class RatingsService:
                 merged.append(analysis[ticker])
         return merged
 
+    def get_recent_ratings(self, limit: int = 8, *, days: int = 5) -> list[dict[str, Any]]:
+        """Latest rating per ticker from the last ``days`` (newest first)."""
+        n = max(1, min(int(limit), 50))
+        window_days = max(1, min(int(days), 90))
+        db = get_db_client()
+        # One row per ticker (newest), then order the desk list by recency.
+        # Truncate reasoning — tile only needs score/rating, not full synthesis.
+        rows, cols = db.fetch_query(
+            f"""
+            SELECT id, ticker, rating, score, reasoning,
+                   key_drivers, supporting_headlines, price_summary, model, report_type, created_at
+            FROM (
+                SELECT DISTINCT ON (ticker)
+                    id, ticker, rating, score,
+                    LEFT(COALESCE(reasoning, ''), 280) AS reasoning,
+                    key_drivers, supporting_headlines, price_summary, model, report_type, created_at
+                FROM stock_ratings
+                WHERE created_at >= NOW() - (%s * INTERVAL '1 day')
+                ORDER BY ticker, created_at DESC
+            ) latest
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (window_days, n),
+        )
+        return [self._row_to_dict(cols, row) for row in rows]
+
     def _latest_analysis_ratings(
         self, tickers: list[str] | None = None
     ) -> list[dict[str, Any]]:
         db = get_db_client()
         if tickers:
             rows, cols = db.fetch_query(
-                """
+                f"""
                 SELECT DISTINCT ON (ticker)
-                    id, ticker, rating, score, reasoning,
-                    key_drivers, supporting_headlines, price_summary, model, created_at
+                    {RATING_SELECT}
                 FROM stock_ratings
                 WHERE ticker IN %s
                 ORDER BY ticker, created_at DESC
@@ -63,10 +103,9 @@ class RatingsService:
             )
         else:
             rows, cols = db.fetch_query(
-                """
+                f"""
                 SELECT DISTINCT ON (ticker)
-                    id, ticker, rating, score, reasoning,
-                    key_drivers, supporting_headlines, price_summary, model, created_at
+                    {RATING_SELECT}
                 FROM stock_ratings
                 ORDER BY ticker, created_at DESC
                 """
@@ -171,7 +210,7 @@ class RatingsService:
                 "model": model,
                 "created_at": created,
                 "source": "report",
-                "report_type": report_type,
+                "report_type": _normalize_report_type(report_type),
             })
         return result
 
@@ -179,9 +218,8 @@ class RatingsService:
         ticker = ticker.upper()
         db = get_db_client()
         rows, cols = db.fetch_query(
-            """
-            SELECT id, ticker, rating, score, reasoning,
-                   key_drivers, supporting_headlines, price_summary, model, created_at
+            f"""
+            SELECT {RATING_SELECT}
             FROM stock_ratings
             WHERE ticker = %s
             ORDER BY created_at DESC
@@ -190,7 +228,7 @@ class RatingsService:
         )
         history = [self._row_to_dict(cols, row) for row in rows]
 
-        report = next((r for r in self._latest_report_ratings() if r["ticker"] == ticker), None)
+        report = next((r for r in self._latest_report_ratings([ticker]) if r["ticker"] == ticker), None)
         if report:
             if not history or history[0].get("created_at") != report.get("created_at"):
                 if not history or (report.get("created_at") or "") >= (history[0].get("created_at") or ""):
@@ -199,14 +237,13 @@ class RatingsService:
 
     def get_latest_for_ticker(self, ticker: str) -> dict[str, Any] | None:
         ticker = ticker.upper()
-        for r in self._latest_report_ratings():
+        for r in self._latest_report_ratings([ticker]):
             if r["ticker"] == ticker:
                 return r
         db = get_db_client()
         rows, cols = db.fetch_query(
-            """
-            SELECT id, ticker, rating, score, reasoning,
-                   key_drivers, supporting_headlines, price_summary, model, created_at
+            f"""
+            SELECT {RATING_SELECT}
             FROM stock_ratings
             WHERE ticker = %s
             ORDER BY created_at DESC
@@ -224,13 +261,15 @@ class RatingsService:
             score = score_from_legacy_confidence(data.get("rating", "HOLD"), data.get("confidence"))
         score = clamp_score(score, 0)
         rating = normalize_rating(data.get("rating"))
+        report_type = _normalize_report_type(data.get("report_type"))
 
         db = get_db_client()
         db.execute_query(
             """
             INSERT INTO stock_ratings
-                (ticker, rating, score, reasoning, key_drivers, supporting_headlines, price_summary, model)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (ticker, rating, score, reasoning, key_drivers, supporting_headlines,
+                 price_summary, model, report_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 data["ticker"].upper(),
@@ -241,6 +280,7 @@ class RatingsService:
                 Json(data.get("supporting_headlines", [])),
                 Json(data.get("price_summary", {})),
                 data.get("model"),
+                report_type,
             ),
         )
 
@@ -256,5 +296,6 @@ class RatingsService:
         if "score" in result:
             result["score"] = clamp_score(result.get("score"))
         result["rating"] = normalize_rating(result.get("rating"))
+        result["report_type"] = _normalize_report_type(result.get("report_type"))
         result.setdefault("source", "analysis")
         return result

@@ -7,6 +7,9 @@ export type Rating =
   | 'BUY'
   | 'STRONG_BUY';
 
+/** Research report provenance for a rating/score. */
+export type ReportType = 'core' | 'deep';
+
 export interface StockRating {
   id: number;
   ticker: string;
@@ -19,6 +22,9 @@ export interface StockRating {
   price_summary: Record<string, unknown>;
   model?: string;
   created_at: string;
+  source?: string;
+  /** Present when the rating came from a core/deep research report. */
+  report_type?: ReportType | null;
 }
 
 export interface Holding {
@@ -32,6 +38,23 @@ export interface Holding {
   currency: string;
   snapshot_at: string | null;
   price_date?: string | null;
+  conid?: string | null;
+  asset_class?: string | null;
+  description?: string | null;
+  ibkr_mark_price?: number | null;
+  ibkr_position_value?: number | null;
+  ibkr_unrealized_pnl?: number | null;
+  percent_of_nav?: number | null;
+  source?: string | null;
+}
+
+export interface HoldingsSyncResult {
+  saved: number;
+  skipped: number;
+  tickers: string[];
+  snapshot_at: string | null;
+  source: string;
+  skipped_asset_classes?: Record<string, number>;
 }
 
 export interface StockQuote {
@@ -73,6 +96,9 @@ export interface PortfolioSummary {
   overall_change_pct?: number | null;
   position_count: number;
   snapshot_at: string | null;
+  /** When the holdings book was last imported (IBKR Flex / manual). */
+  holdings_synced_at?: string | null;
+  source?: string | null;
 }
 
 export interface WatchlistItem {
@@ -82,6 +108,7 @@ export interface WatchlistItem {
   added_at: string;
   rating?: Rating | null;
   score?: number | null;
+  report_type?: ReportType | null;
   latest_price?: number | null;
   price_date?: string | null;
   description?: string | null;

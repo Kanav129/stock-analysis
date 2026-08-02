@@ -60,6 +60,7 @@ def persist_report(state: ResearchState) -> Dict[str, Any]:
             "supporting_headlines": rating_dict["supporting_headlines"],
             "price_summary": {"live_price": state.get("live_price"), "source": "research_report"},
             "model": state.get("model"),
+            "report_type": report_type,
         })
     except Exception as exc:
         logger.error(f"Failed to persist report for {ticker}: {exc}")

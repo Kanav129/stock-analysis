@@ -174,7 +174,8 @@ export function HoldingsTable({
   if (!holdings.length) {
     return (
       <p className="text-sm text-[var(--color-text-secondary)]">
-        No holdings yet. Sync to import positions, then Analysis for ratings.
+        No holdings yet. Use <span className="font-medium">Sync holdings</span> to
+        import IBKR stock/ETF positions, then run Analysis for ratings.
       </p>
     );
   }
@@ -227,9 +228,13 @@ export function HoldingsTable({
               </SensitiveValue>
             </td>
             <td className="is-center">
-              {r ? <RatingBadge rating={r.rating} /> : <span className="text-[var(--color-text-muted)]">—</span>}
+              {r ? (
+                <RatingBadge rating={r.rating} reportType={r.report_type} />
+              ) : (
+                <span className="text-[var(--color-text-muted)]">—</span>
+              )}
             </td>
-            <td>{r ? <ScoreMeter value={r.score} /> : '—'}</td>
+            <td>{r ? <ScoreMeter value={r.score} reportType={r.report_type} /> : '—'}</td>
           </tr>
         );
       })}

@@ -327,10 +327,17 @@ export function StockDetailPage() {
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             {(report?.rating?.rating || latest?.rating) && (
-              <RatingBadge rating={(report?.rating?.rating || latest?.rating)!} />
+              <RatingBadge
+                rating={(report?.rating?.rating || latest?.rating)!}
+                reportType={report?.report_type ?? latest?.report_type}
+              />
             )}
             {(report?.rating?.score ?? latest?.score) != null && (
-              <ScoreMeter value={(report?.rating?.score ?? latest?.score)!} size="md" />
+              <ScoreMeter
+                value={(report?.rating?.score ?? latest?.score)!}
+                size="md"
+                reportType={report?.report_type ?? latest?.report_type}
+              />
             )}
             {report?.entry_levels && (
               <span className="font-mono text-[11px] text-[var(--color-text-muted)]">
@@ -580,6 +587,7 @@ export function StockDetailPage() {
               <DecisionSnapshot
                 rating={(report?.rating?.rating || latest?.rating)!}
                 score={(report?.rating?.score ?? latest?.score) ?? 0}
+                reportType={report?.report_type ?? latest?.report_type}
                 posture={report?.rating?.posture}
                 onJumpToThesis={
                   report?.rating?.reasoning

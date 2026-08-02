@@ -10,14 +10,31 @@ CREATE TABLE IF NOT EXISTS watchlist (
 CREATE TABLE IF NOT EXISTS holdings_snapshot (
     id SERIAL PRIMARY KEY,
     account_id VARCHAR(64) NOT NULL DEFAULT 'default',
-    ticker VARCHAR(10) NOT NULL,
+    ticker VARCHAR(32) NOT NULL,
     quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
     avg_cost DOUBLE PRECISION,
     market_price DOUBLE PRECISION,
     market_value DOUBLE PRECISION,
     unrealized_pnl DOUBLE PRECISION,
     currency VARCHAR(8) DEFAULT 'USD',
-    snapshot_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    snapshot_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    conid VARCHAR(32),
+    asset_class VARCHAR(32),
+    description TEXT,
+    exchange VARCHAR(64),
+    side VARCHAR(16),
+    multiplier DOUBLE PRECISION,
+    report_date VARCHAR(32),
+    ibkr_mark_price DOUBLE PRECISION,
+    ibkr_position_value DOUBLE PRECISION,
+    cost_basis_money DOUBLE PRECISION,
+    cost_basis_price DOUBLE PRECISION,
+    ibkr_unrealized_pnl DOUBLE PRECISION,
+    percent_of_nav DOUBLE PRECISION,
+    fx_rate_to_base DOUBLE PRECISION,
+    raw_symbol VARCHAR(64),
+    source VARCHAR(32) DEFAULT 'manual',
+    source_data JSONB DEFAULT '{}'::jsonb
 );
 
 CREATE INDEX IF NOT EXISTS idx_holdings_snapshot_at ON holdings_snapshot (snapshot_at DESC);
@@ -35,6 +52,7 @@ CREATE TABLE IF NOT EXISTS stock_ratings (
     supporting_headlines JSONB DEFAULT '[]'::jsonb,
     price_summary JSONB DEFAULT '{}'::jsonb,
     model VARCHAR(128),
+    report_type VARCHAR(16) CHECK (report_type IS NULL OR report_type IN ('core', 'deep')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

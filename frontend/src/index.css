@@ -429,6 +429,11 @@ body {
   border-color: color-mix(in oklch, var(--color-rating-strong-sell) 40%, transparent);
 }
 
+/* Quiet deep-report provenance: hairline azure ring, no extra label chrome. */
+.rating-badge--deep {
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-accent) 65%, transparent);
+}
+
 .heat-tile {
   display: block;
   padding: 8px 10px;
@@ -591,6 +596,11 @@ body {
   text-transform: uppercase;
   white-space: nowrap;
 }
+
+.decision-brief__rating--deep {
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-accent) 65%, transparent);
+}
+
 
 .decision-brief__hero-copy {
   display: grid;

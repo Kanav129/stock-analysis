@@ -65,6 +65,55 @@ def migrate_stock_ratings_schema() -> None:
                 "ALTER TABLE stock_ratings ADD CONSTRAINT stock_ratings_score_check "
                 "CHECK (score >= -100 AND score <= 100)"
             )
+
+            # Refresh column set after possible renames/adds above
+            cursor.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'stock_ratings'
+                """
+            )
+            cols = {r[0] for r in cursor.fetchall()}
+            if "report_type" not in cols:
+                cursor.execute(
+                    "ALTER TABLE stock_ratings ADD COLUMN report_type VARCHAR(16)"
+                )
+                # Best-effort backfill from nearby stock_reports rows
+                cursor.execute(
+                    """
+                    UPDATE stock_ratings sr
+                    SET report_type = matched.report_type
+                    FROM (
+                        SELECT sr2.id, rpt.report_type
+                        FROM stock_ratings sr2
+                        INNER JOIN LATERAL (
+                            SELECT r.report_type
+                            FROM stock_reports r
+                            WHERE r.ticker = sr2.ticker
+                              AND r.rating IS NOT NULL
+                              AND r.created_at BETWEEN sr2.created_at - INTERVAL '15 minutes'
+                                                  AND sr2.created_at + INTERVAL '15 minutes'
+                            ORDER BY ABS(EXTRACT(EPOCH FROM (r.created_at - sr2.created_at)))
+                            LIMIT 1
+                        ) rpt ON TRUE
+                        WHERE sr2.report_type IS NULL
+                    ) matched
+                    WHERE sr.id = matched.id
+                    """
+                )
+                logger.info("Added stock_ratings.report_type and backfilled from reports.")
+
+            cursor.execute(
+                "ALTER TABLE stock_ratings DROP CONSTRAINT IF EXISTS stock_ratings_report_type_check"
+            )
+            cursor.execute(
+                """
+                ALTER TABLE stock_ratings
+                ADD CONSTRAINT stock_ratings_report_type_check
+                CHECK (report_type IS NULL OR report_type IN ('core', 'deep'))
+                """
+            )
+
             conn.commit()
             logger.info("stock_ratings schema migration completed.")
         except Exception as exc:

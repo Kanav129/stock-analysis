@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { PortfolioSummaryCard } from '../components/PortfolioSummary';
 import { HoldingsTable } from '../components/HoldingsTable';
+import { SyncHoldingsButton } from '../components/SyncHoldingsButton';
 import { DeskRunActions } from '../components/DeskRunActions';
 import { JobsPanel } from '../components/JobsPanel';
 import { Panel } from '../components/Panel';
@@ -16,11 +17,13 @@ import type { Rating, StockQuote } from '../api/types';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
 import { isUsRegularSession } from '../lib/usMarketHours';
 import { patchDeskCache, readDeskCache } from '../lib/deskCache';
+import { scoreTextClass } from '../lib/reportDepth';
 
 const MARKET_TICKERS = ['SPY', 'QQQ', 'IWM', 'DIA'];
 /** Heatmap prefers watchlist; holdings fill remaining slots up to this cap. */
 const HEATMAP_CAP = 18;
 const CALLS_CAP = 6;
+const RECENT_ANALYSIS_CAP = 8;
 const MARKET_SPARK_DAYS = 7;
 const HEAT_SPARK_DAYS = 7;
 const HOLDINGS_SPARK_DAYS = 5;
@@ -116,6 +119,14 @@ export function DashboardPage() {
       sessionCache?.ratingsDeskKey === deskTickerKey && sessionCache?.ratings
         ? sessionCache.at
         : undefined,
+  });
+
+  const recentRatingsQ = useQuery({
+    queryKey: ['ratings', 'recent', RECENT_ANALYSIS_CAP],
+    queryFn: () => api.getRecentRatings(RECENT_ANALYSIS_CAP),
+    refetchInterval: syncing ? false : DESK_STALE_MS,
+    staleTime: DESK_STALE_MS,
+    placeholderData: keepPrevious,
   });
 
   const analysisQ = useQuery({
@@ -291,12 +302,22 @@ export function DashboardPage() {
       .slice(0, CALLS_CAP);
   }, [ratings, holdingsTickers, watchlistQ.data]);
 
+  const recentAnalysis = recentRatingsQ.data?.ratings ?? [];
+
   const holdingsPending = holdingsQ.isLoading && !holdingsQ.data;
   const marketPending = marketQuotesQ.isLoading && !marketQuotesQ.data;
 
   const syncAt =
     syncQ.data?.last_sync ?? syncQ.data?.daily?.finished_at ?? syncQ.data?.finished_at ?? null;
-  const freshnessLine = `Prices · sync ${fmtDeskTime(syncAt)} · live ${fmtLiveAt(lastLiveAt, liveEnabled)}`;
+  const holdingsSyncedAt =
+    holdingsQ.data?.holdings_synced_at ??
+    holdingsQ.data?.summary?.holdings_synced_at ??
+    null;
+  const freshnessLine = [
+    `Holdings · ${fmtDeskTime(holdingsSyncedAt)}`,
+    `Prices · sync ${fmtDeskTime(syncAt)}`,
+    `live ${fmtLiveAt(lastLiveAt, liveEnabled)}`,
+  ].join(' · ');
 
   return (
     <div className="flex flex-col gap-3">
@@ -341,8 +362,42 @@ export function DashboardPage() {
                 <span className="shrink-0 font-mono text-xs font-semibold text-[var(--color-accent)]">
                   {r.ticker}
                 </span>
-                <RatingBadge rating={r.rating} />
-                <span className="font-mono text-xs tabular-nums text-[var(--color-text-secondary)]">
+                <RatingBadge rating={r.rating} reportType={r.report_type} />
+                <span className={scoreTextClass(r.report_type)}>
+                  {r.score > 0 ? `+${r.score}` : String(r.score)}
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Recent analysis" subtitle="Last 5 days · newest first" dense>
+        {recentRatingsQ.isLoading && !recentAnalysis.length ? (
+          <p className="text-xs text-[var(--color-text-muted)]">Loading recent analysis…</p>
+        ) : recentRatingsQ.isError ? (
+          <p className="text-xs text-[var(--color-down)]">
+            {recentRatingsQ.error instanceof Error
+              ? recentRatingsQ.error.message
+              : 'Failed to load recent analysis.'}
+          </p>
+        ) : recentAnalysis.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            No analysis in the last 5 days. Run Analysis to populate.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-0 sm:flex-row sm:flex-wrap sm:gap-x-3 sm:gap-y-1">
+            {recentAnalysis.map((r) => (
+              <Link
+                key={`${r.id}-${r.ticker}-${r.created_at}`}
+                to={`/stock/${r.ticker}`}
+                className="flex min-w-0 items-center gap-2 border-b border-[var(--color-surface-3)] py-1 last:border-0 hover:bg-[var(--color-surface-2)] sm:border-b-0 sm:py-0.5"
+              >
+                <span className="shrink-0 font-mono text-xs font-semibold text-[var(--color-accent)]">
+                  {r.ticker}
+                </span>
+                <RatingBadge rating={r.rating} reportType={r.report_type} />
+                <span className={scoreTextClass(r.report_type)}>
                   {r.score > 0 ? `+${r.score}` : String(r.score)}
                 </span>
               </Link>
@@ -356,6 +411,7 @@ export function DashboardPage() {
           <Panel
             title="Holdings"
             subtitle={`${holdingsTickers.length} positions · ${freshnessLine}`}
+            actions={<SyncHoldingsButton />}
           >
             {holdingsPending ? (
               <LoadingState label="Loading holdings…" minHeight="12rem" />
@@ -426,6 +482,7 @@ export function DashboardPage() {
                           price={quotes[t]?.latest_close}
                           changePct={quotes[t]?.change_pct}
                           rating={(ratingMap[t]?.rating as Rating | undefined) ?? null}
+                          reportType={ratingMap[t]?.report_type}
                         />
                       ))}
                     </div>
@@ -445,6 +502,7 @@ export function DashboardPage() {
                           price={quotes[t]?.latest_close}
                           changePct={quotes[t]?.change_pct}
                           rating={(ratingMap[t]?.rating as Rating | undefined) ?? null}
+                          reportType={ratingMap[t]?.report_type}
                         />
                       ))}
                     </div>

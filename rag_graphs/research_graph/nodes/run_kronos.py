@@ -1,12 +1,23 @@
 """Kronos forecast node — local ML model inference (no LLM call)."""
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 import yfinance as yf
 
 from rag_graphs.research_graph.state import ResearchState
 from utils.logger import logger
+
+
+def is_kronos_enabled() -> bool:
+    """Return False when KRONOS_ENABLED is explicitly off (e.g. Render 512 MB).
+
+    Default is on so local / larger hosts keep the forecast. Falsy values:
+    0, false, no, off (case-insensitive).
+    """
+    raw = (os.getenv("KRONOS_ENABLED") or "true").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def run_kronos(state: ResearchState) -> Dict[str, Any]:
@@ -19,6 +30,21 @@ def run_kronos(state: ResearchState) -> Dict[str, Any]:
         "summary": "",
         "error": "",
     }
+    sections = state.get("sections_markdown", {})
+
+    # Skip before yfinance / torch — avoids OOM on 512 MB hosts (Render free/Starter).
+    if not is_kronos_enabled():
+        logger.info(f"Kronos disabled (KRONOS_ENABLED=false) — skipping {ticker}")
+        kronos_data["error"] = "Kronos disabled (KRONOS_ENABLED=false)"
+        kronos_data["summary"] = (
+            "Forecast unavailable — Kronos is disabled on this host "
+            "(set KRONOS_ENABLED=true where RAM allows)."
+        )
+        sections["kronos"] = (
+            "*Kronos forecast disabled on this host to stay within memory limits "
+            "(set `KRONOS_ENABLED=true` on a larger instance to enable).*"
+        )
+        return {"kronos_data": kronos_data, "sections_markdown": sections}
 
     # ── Get 200-day OHLCV ──
     try:
@@ -83,7 +109,18 @@ Kronos forecasts the close drifting from {last_actual:.2f} (last actual) to {las
         )
     except RuntimeError as exc:
         msg = str(exc)
-        if "dependencies not installed" in msg or "No module named" in msg:
+        if "KRONOS_ENABLED=false" in msg or "Kronos disabled" in msg:
+            logger.info(f"Kronos skipped for {ticker}: {exc}")
+            kronos_data["error"] = msg
+            kronos_data["summary"] = (
+                "Forecast unavailable — Kronos is disabled on this host "
+                "(set KRONOS_ENABLED=true where RAM allows)."
+            )
+            markdown = (
+                "*Kronos forecast disabled on this host to stay within memory limits "
+                "(set `KRONOS_ENABLED=true` on a larger instance to enable).*"
+            )
+        elif "dependencies not installed" in msg or "No module named" in msg:
             logger.warning(f"Kronos skipped for {ticker}: {exc}")
             kronos_data["error"] = msg
             kronos_data["summary"] = "Forecast unavailable — install PyTorch and run scripts/setup_kronos.sh."
@@ -106,7 +143,6 @@ Kronos forecasts the close drifting from {last_actual:.2f} (last actual) to {las
         kronos_data["summary"] = f"Forecast failed: {exc}"
         markdown = f"*Kronos forecast could not be generated: {exc}*"
 
-    sections = state.get("sections_markdown", {})
     sections["kronos"] = markdown
 
     return {"kronos_data": kronos_data, "sections_markdown": sections}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gc
+import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,11 @@ import numpy as np
 import pandas as pd
 
 from utils.logger import logger
+
+
+def _env_kronos_enabled() -> bool:
+    raw = (os.getenv("KRONOS_ENABLED") or "true").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 KRONOS_MODEL_ID = "NeoQuasar/Kronos-small"
 KRONOS_TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-base"
@@ -73,6 +79,11 @@ class KronosForecaster:
     def _load_predictor(self) -> None:
         if self._predictor is not None:
             return
+
+        if not _env_kronos_enabled():
+            raise RuntimeError(
+                "Kronos disabled (KRONOS_ENABLED=false) — refusing to load PyTorch model"
+            )
 
         _ensure_kronos_model_code()
         self._device = self._resolve_device()

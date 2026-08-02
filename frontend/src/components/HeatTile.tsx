@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import type { Rating } from '../api/types';
+import type { Rating, ReportType } from '../api/types';
 import { DeltaValue } from './DeltaValue';
 import { RatingBadge } from './RatingBadge';
 
@@ -8,11 +8,13 @@ export function HeatTile({
   price,
   changePct,
   rating,
+  reportType,
 }: {
   ticker: string;
   price?: number | null;
   changePct?: number | null;
   rating?: Rating | null;
+  reportType?: ReportType | null;
 }) {
   const pct = changePct ?? 0;
   const intensity = Math.min(Math.abs(pct) / 4, 1);
@@ -31,7 +33,7 @@ export function HeatTile({
     >
       <div className="flex items-center justify-between gap-1">
         <span className="font-mono text-sm font-semibold text-[var(--color-text-primary)]">{ticker}</span>
-        {rating && <RatingBadge rating={rating} />}
+        {rating && <RatingBadge rating={rating} reportType={reportType} />}
       </div>
       <div className="mt-1 flex items-baseline justify-between gap-2">
         <span className="font-mono text-xs text-[var(--color-text-secondary)]">

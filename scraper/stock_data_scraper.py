@@ -84,7 +84,8 @@ BANDS: dict[str, dict[str, Any]] = {
         "overlap": timedelta(days=5),
         "skip_age": timedelta(hours=12),
         "short_period": "5d",
-        "long_period": "1mo",
+        # Cold start: ~1y daily bars so SMA 200 is available for analysis.
+        "long_period": "1y",
     },
 }
 

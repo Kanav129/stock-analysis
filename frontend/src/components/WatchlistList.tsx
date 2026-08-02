@@ -62,8 +62,10 @@ export function WatchlistList({ items }: { items: WatchlistItem[] }) {
           <div className="flex shrink-0 flex-col gap-2 sm:pt-0.5">
             {item.rating ? (
               <div className="flex flex-wrap items-center gap-3">
-                <RatingBadge rating={item.rating} />
-                {item.score != null && <ScoreMeter value={item.score} />}
+                <RatingBadge rating={item.rating} reportType={item.report_type} />
+                {item.score != null && (
+                  <ScoreMeter value={item.score} reportType={item.report_type} />
+                )}
               </div>
             ) : (
               <span className="text-sm text-[var(--color-text-muted)]">No rating</span>

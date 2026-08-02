@@ -96,13 +96,39 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ key }),
     }),
-  getHoldings: () => request<{ holdings: import('./types').Holding[]; summary: import('./types').PortfolioSummary }>('/holdings'),
+  getHoldings: () =>
+    request<{
+      holdings: import('./types').Holding[];
+      summary: import('./types').PortfolioSummary;
+      holdings_synced_at?: string | null;
+      source?: string | null;
+    }>('/holdings'),
+  syncHoldings: () =>
+    request<import('./types').HoldingsSyncResult>('/holdings/sync', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   getRatings: (tickers?: string[]) => {
     const qs =
       tickers && tickers.length
         ? `?tickers=${encodeURIComponent(tickers.join(','))}`
         : '';
     return request<{ ratings: import('./types').StockRating[] }>(`/ratings${qs}`);
+  },
+  getRecentRatings: async (limit = 8) => {
+    const data = await request<{
+      ratings?: import('./types').StockRating[];
+      ticker?: string;
+      history?: unknown;
+    }>(`/ratings/recent?limit=${encodeURIComponent(String(limit))}`);
+    // Older APIs only have /ratings/{ticker}, so "recent" is captured as a ticker
+    // and returns { ticker, history } with no ratings array.
+    if (!Array.isArray(data?.ratings)) {
+      throw new Error(
+        'Recent analysis endpoint unavailable. Restart the API (or redeploy) so GET /ratings/recent is registered.',
+      );
+    }
+    return { ratings: data.ratings };
   },
   getRatingHistory: (ticker: string) => request<{ ticker: string; history: import('./types').StockRating[] }>(`/ratings/${ticker}`),
   runAnalysis: (tickers?: string[], opts?: { force?: boolean }) =>
