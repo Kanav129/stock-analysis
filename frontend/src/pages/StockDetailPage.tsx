@@ -134,23 +134,13 @@ export function StockDetailPage() {
     enabled: !!t,
     staleTime: 60_000,
   });
-  const deepQuery = useQuery({
-    queryKey: ['report', t, 'deep'],
-    queryFn: () => api.getReportIfExists(t, 'deep'),
+  // Chronologically latest report (core or deep) — matches desk ratings after weekly analysis.
+  const reportQuery = useQuery({
+    queryKey: ['report', t, 'latest'],
+    queryFn: () => api.getReportIfExists(t, 'latest'),
     enabled: !!t && !generating,
     retry: 2,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
-    staleTime: 60_000,
-  });
-
-  const deepSettled = deepQuery.isFetched || deepQuery.isError;
-  const deepMissing = deepSettled && !deepQuery.data;
-
-  const coreQuery = useQuery({
-    queryKey: ['report', t, 'core'],
-    queryFn: () => api.getReportIfExists(t, 'core'),
-    enabled: !!t && !generating && deepMissing,
-    retry: 1,
     staleTime: 60_000,
   });
 
@@ -159,7 +149,7 @@ export function StockDetailPage() {
     !!t &&
     !generating &&
     (quoteQ.isFetched || quoteQ.isError) &&
-    (deepQuery.isFetched || deepQuery.isError);
+    (reportQuery.isFetched || reportQuery.isError);
 
   const technicalsQ = useQuery({
     queryKey: ['technicals', t],
@@ -240,8 +230,8 @@ export function StockDetailPage() {
       qc.invalidateQueries({ queryKey: ['ratings'] });
       qc.invalidateQueries({ queryKey: ['ratings', t] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
-      coreQuery.refetch();
-      deepQuery.refetch();
+      qc.invalidateQueries({ queryKey: ['report', t] });
+      reportQuery.refetch();
     }
     if (taskStatus?.status === 'failed' || taskStatus?.status === 'cancelled') {
       setGenerating(false);
@@ -285,12 +275,12 @@ export function StockDetailPage() {
   const quote = quoteQ.data?.quotes?.[t];
   const tech = technicalsQ.data;
 
-  const report: ResearchReport | null =
-    deepQuery.data ?? (deepSettled ? coreQuery.data ?? null : null);
+  const report: ResearchReport | null = reportQuery.data ?? null;
   const reportPending =
     !generating &&
     !!t &&
-    (!deepSettled || (deepMissing && (coreQuery.isLoading || coreQuery.isFetching)));
+    (reportQuery.isLoading || reportQuery.isFetching) &&
+    !reportQuery.data;
   const hasDeep = report?.report_type === 'deep';
   const sections = report?.sections || {};
   const sectionIds = Object.keys(sections).filter(

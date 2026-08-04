@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from services.job_queue_service import JOB_CORE, JOB_DEEP, job_queue_service
-from services.report_service import ReportService
+from services.report_service import ReportService, resolve_report_type_filter
 from utils.logger import logger
 
 router = APIRouter(prefix="/research", tags=["Research"])
@@ -116,12 +116,25 @@ async def get_active_task(ticker: str):
 
 
 @router.get("/{ticker}")
-async def get_report(ticker: str, type: str = "core"):
-    """Get the latest saved report for a ticker."""
+async def get_report(ticker: str, type: str = "latest"):
+    """Get the most recent saved report for a ticker.
+
+    ``type=latest`` (default): newest row by ``created_at`` of any report_type.
+    ``type=core|deep``: newest row of that type only.
+
+    Preferring deep over a newer core report left stock pages showing stale deep
+    dives after weekly core analysis updated desk ratings — always use latest by
+    time unless the client explicitly filters.
+    """
+    try:
+        report_type = resolve_report_type_filter(type)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
     svc = ReportService()
-    report = svc.get_latest_report(ticker.upper(), type)
+    report = svc.get_latest_report(ticker.upper(), report_type)
     if not report:
-        raise HTTPException(404, detail=f"No {type} report found for {ticker}")
+        label = report_type or "saved"
+        raise HTTPException(404, detail=f"No {label} report found for {ticker}")
     return report
 
 

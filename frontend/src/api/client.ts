@@ -244,8 +244,10 @@ export const api = {
     }>('/settings/openrouter'),
   generateReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}`, { method: 'POST' }),
   generateDeepReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}/deep`, { method: 'POST' }),
-  getReport: (ticker: string, type: string = 'core') => request<import('./types').ResearchReport>(`/research/${ticker}?type=${type}`),
-  getReportIfExists: (ticker: string, type: string = 'core') =>
+  getReport: (ticker: string, type: string = 'latest') =>
+    request<import('./types').ResearchReport>(`/research/${ticker}?type=${type}`),
+  /** Latest report by created_at (any type). Pass `core`/`deep` to filter. */
+  getReportIfExists: (ticker: string, type: string = 'latest') =>
     requestOptional<import('./types').ResearchReport>(`/research/${ticker}?type=${type}`),
   getTaskStatus: (taskId: string) => request<import('./types').ReportTask>(`/research/task/${taskId}`),
   getActiveReportTask: (ticker: string) =>

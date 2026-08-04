@@ -9,6 +9,23 @@ from db.db_factory import get_db_client
 from utils.logger import logger
 
 
+def resolve_report_type_filter(value: str | None) -> str | None:
+    """Map API ``type`` query values to a DB filter.
+
+    Returns ``None`` for "any type / chronologically latest" (``latest``, ``any``,
+    empty, or omitted). Returns ``core`` / ``deep`` when filtered. Raises
+    ``ValueError`` for unknown values.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if raw in ("", "latest", "any"):
+        return None
+    if raw in ("core", "deep"):
+        return raw
+    raise ValueError("type must be core, deep, or latest")
+
+
 class ReportService:
     """CRUD for stock_reports — generated research artifacts stored as JSONB."""
 
@@ -52,7 +69,13 @@ class ReportService:
     def get_latest_report(
         self, ticker: str, report_type: str | None = "core"
     ) -> Optional[dict[str, Any]]:
-        """Return the most recent report for a ticker (+ optional type), or None."""
+        """Return the most recent report for a ticker.
+
+        When ``report_type`` is set (``core`` / ``deep``), filter to that type.
+        When ``report_type`` is ``None``, return the chronologically newest row
+        of any type (needed so weekly core analysis is not hidden by an older
+        deep dive on the stock page).
+        """
         if report_type:
             rows, cols = self._db.fetch_query(
                 "SELECT id, ticker, report_type, sections, rating, factor_scores, "
