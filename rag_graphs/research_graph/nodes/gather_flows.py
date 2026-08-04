@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from config.llm_config import get_research_llm
+from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
 from scraper.finnhub_scraper import FinnhubClient
 from utils.logger import logger
@@ -57,7 +57,6 @@ def gather_flows(state: ResearchState) -> Dict[str, Any]:
 
     # ── LLM narrative ──
     try:
-        llm = get_research_llm(temperature=0.2)
         prompt = ChatPromptTemplate.from_messages([
             ("system", FLOWS_SYSTEM),
             ("human", """Write the flows/positioning analysis for {ticker}. Data:
@@ -78,15 +77,18 @@ Live price: ${live_price}
 
 Output the analysis in markdown."""),
         ])
-        chain = prompt | llm
-        result = chain.invoke({
-            "ticker": ticker,
-            "insider_json": json.dumps(insider, indent=2),
-            "volume_json": json.dumps(volume_events, indent=2),
-            "recs_json": json.dumps(recommendations, indent=2),
-            "pt_json": json.dumps(price_target, indent=2),
-            "live_price": f"{state.get('live_price', 0):.2f}",
-        })
+        result, _ = invoke_research_llm(
+            prompt,
+            {
+                "ticker": ticker,
+                "insider_json": json.dumps(insider, indent=2),
+                "volume_json": json.dumps(volume_events, indent=2),
+                "recs_json": json.dumps(recommendations, indent=2),
+                "pt_json": json.dumps(price_target, indent=2),
+                "live_price": f"{state.get('live_price', 0):.2f}",
+            },
+            temperature=0.2,
+        )
         markdown = result.content if hasattr(result, "content") else str(result)
     except Exception as exc:
         logger.error(f"Flows LLM failed: {exc}")

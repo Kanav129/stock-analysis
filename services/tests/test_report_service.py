@@ -78,3 +78,55 @@ def test_get_latest_report_typed_still_filters(mock_db):
     sql, params = db.fetch_query.call_args.args
     assert "report_type=%s" in sql
     assert params == ("MSFT", "deep")
+
+
+@patch("services.report_service.get_db_client")
+def test_get_report_history_exposes_failed_decision_metadata(mock_db):
+    db = MagicMock()
+    db.fetch_query.return_value = (
+        [
+            (
+                2,
+                "AAPL",
+                "core",
+                "2026-08-04T11:00:00",
+                None,
+                None,
+                "false",
+                "Decision model unavailable",
+            ),
+            (
+                1,
+                "AAPL",
+                "core",
+                "2026-08-04T10:00:00",
+                "BUY",
+                "42",
+                None,
+                None,
+            ),
+        ],
+        [
+            "id",
+            "ticker",
+            "report_type",
+            "created_at",
+            "rating",
+            "score",
+            "decision_ok",
+            "analysis_error",
+        ],
+    )
+    mock_db.return_value = db
+
+    history = ReportService().get_report_history("aapl")
+
+    assert history[0]["decision_ok"] is False
+    assert history[0]["analysis_failed"] is True
+    assert history[0]["analysis_error"] == "Decision model unavailable"
+    assert history[1]["decision_ok"] is True
+    assert history[1]["analysis_failed"] is False
+    sql, params = db.fetch_query.call_args.args
+    assert "decision_ok" in sql
+    assert "error_message" in sql
+    assert params == ("AAPL",)

@@ -28,6 +28,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      throw new Error(
+        'API unreachable (Bad Gateway). Start local uvicorn on port 8001, then refresh.',
+      );
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(formatApiError(err, `${res.status} ${res.statusText}`));
   }
@@ -121,20 +126,38 @@ export const api = {
       ticker?: string;
       history?: unknown;
     }>(`/ratings/recent?limit=${encodeURIComponent(String(limit))}`);
-    // Older APIs only have /ratings/{ticker}, so "recent" is captured as a ticker
-    // and returns { ticker, history } with no ratings array.
-    if (!Array.isArray(data?.ratings)) {
+    if (Array.isArray(data?.ratings)) {
+      return { ratings: data.ratings };
+    }
+    // Stale API: /ratings/{ticker} captured "recent" before /ratings/recent existed.
+    if (
+      typeof data?.ticker === 'string' &&
+      data.ticker.toUpperCase() === 'RECENT' &&
+      Array.isArray(data?.history)
+    ) {
       throw new Error(
-        'Recent analysis endpoint unavailable. Restart the API (or redeploy) so GET /ratings/recent is registered.',
+        'Stale API on port 8001 — GET /ratings/recent is missing. Stop Docker/OrbStack on :8001, then run: uvicorn rest_api.main:app --reload --host 0.0.0.0 --port 8001',
       );
     }
-    return { ratings: data.ratings };
+    throw new Error(
+      'Recent analysis endpoint unavailable. Restart the API (or redeploy) so GET /ratings/recent is registered.',
+    );
   },
   getRatingHistory: (ticker: string) => request<{ ticker: string; history: import('./types').StockRating[] }>(`/ratings/${ticker}`),
   runAnalysis: (tickers?: string[], opts?: { force?: boolean }) =>
     request<import('./types').AnalysisProgress>('/analysis/run', {
       method: 'POST',
       body: JSON.stringify({ tickers: tickers ?? null, force: Boolean(opts?.force) }),
+    }),
+  retryFailedAnalysis: () =>
+    request<
+      Partial<import('./types').AnalysisProgress> & {
+        tickers: string[];
+        running: boolean;
+        message: string;
+      }
+    >('/analysis/retry-failed', {
+      method: 'POST',
     }),
   rescoreAnalysis: (tickers?: string[]) =>
     request<import('./types').AnalysisProgress>('/analysis/rescore', {
@@ -245,10 +268,19 @@ export const api = {
   generateReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}`, { method: 'POST' }),
   generateDeepReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}/deep`, { method: 'POST' }),
   getReport: (ticker: string, type: string = 'latest') =>
-    request<import('./types').ResearchReport>(`/research/${ticker}?type=${type}`),
+    request<import('./types').ResearchReportEnvelope>(`/research/${ticker}?type=${type}`),
   /** Latest report by created_at (any type). Pass `core`/`deep` to filter. */
-  getReportIfExists: (ticker: string, type: string = 'latest') =>
-    requestOptional<import('./types').ResearchReport>(`/research/${ticker}?type=${type}`),
+  getReportIfExists: async (ticker: string, type: string = 'latest') => {
+    const envelope = await requestOptional<import('./types').ResearchReportEnvelope>(
+      `/research/${ticker}?type=${type}`,
+    );
+    return envelope ?? {
+      report: null,
+      analysis_failed: false,
+      analysis_error: null,
+      failed_at: null,
+    };
+  },
   getTaskStatus: (taskId: string) => request<import('./types').ReportTask>(`/research/task/${taskId}`),
   getActiveReportTask: (ticker: string) =>
     request<{ task: import('./types').ReportTask | null }>(`/research/${ticker}/active`),

@@ -14,22 +14,18 @@ def test_assemble_debate_context_appends_portfolio():
     assert "NVDA" in out
 
 
-@patch("rag_graphs.research_graph.nodes.debate.get_research_llm")
+@patch("rag_graphs.research_graph.nodes.debate.invoke_research_llm")
 @patch(
     "rag_graphs.research_graph.nodes.debate.portfolio_markdown_for",
     return_value="## Personal Portfolio\n- held",
 )
-def test_debate_fetches_portfolio_context(mock_port, mock_llm):
+def test_debate_fetches_portfolio_context(mock_port, mock_invoke):
     """Minimum-bar: portfolio fetched; ≥2 invokes (neutral + manager) see it."""
     resp = MagicMock(content="ok")
-    chain = MagicMock()
-    chain.invoke.return_value = resp
-    prompt_obj = MagicMock()
-    prompt_obj.__or__ = MagicMock(return_value=chain)
-    mock_llm.return_value = MagicMock()
+    mock_invoke.return_value = (resp, "deepseek/deepseek-v4-flash")
     with patch(
         "rag_graphs.research_graph.nodes.debate.ChatPromptTemplate.from_messages",
-        return_value=prompt_obj,
+        return_value=MagicMock(),
     ):
         debate({
             "ticker": "AAPL",
@@ -38,11 +34,9 @@ def test_debate_fetches_portfolio_context(mock_port, mock_llm):
             "sections_markdown": {"news": "n"},
         })  # type: ignore[arg-type]
     mock_port.assert_called_once_with("AAPL")
-    # At least two invokes (neutral + manager) should include portfolio in context
     portfolio_hits = 0
-    for call in chain.invoke.call_args_list:
-        payload = call.args[0] if call.args else {}
-        blob = str(payload)
-        if "Personal Portfolio" in blob:
+    for call in mock_invoke.call_args_list:
+        inputs = call.args[1] if len(call.args) > 1 else call.kwargs.get("inputs", {})
+        if "Personal Portfolio" in str(inputs):
             portfolio_hits += 1
     assert portfolio_hits >= 2

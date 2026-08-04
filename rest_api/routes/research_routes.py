@@ -133,11 +133,11 @@ async def get_report(ticker: str, type: str = "latest"):
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc)) from exc
     svc = ReportService()
-    report = svc.get_latest_report(ticker.upper(), report_type)
-    if not report:
+    envelope = svc.get_latest_report_envelope(ticker.upper(), report_type)
+    if envelope["report"] is None and not envelope["analysis_failed"]:
         label = report_type or "saved"
         raise HTTPException(404, detail=f"No {label} report found for {ticker}")
-    return report
+    return envelope
 
 
 @router.get("/{ticker}/history")

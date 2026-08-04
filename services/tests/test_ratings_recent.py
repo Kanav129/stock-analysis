@@ -41,3 +41,15 @@ def test_get_recent_ratings_clamps_limit(mock_db):
 
     RatingsService().get_recent_ratings(0)
     assert db.fetch_query.call_args.args[1] == (5, 1)
+
+
+def test_failed_rating_row_preserves_null_decision():
+    out = RatingsService._row_to_dict(
+        ["rating", "score", "decision_ok", "error_message"],
+        (None, None, False, "decision providers unavailable"),
+    )
+
+    assert out["decision_ok"] is False
+    assert out["rating"] is None
+    assert out["score"] is None
+    assert out["error_message"] == "decision providers unavailable"

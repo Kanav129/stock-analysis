@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Dev server: http://localhost:5173 — proxies `/api` to `http://localhost:8001`.
+Dev server: http://localhost:5173 — proxies `/api` to `http://127.0.0.1:8001` (local uvicorn). Docker Compose uses host port **8002** so it does not steal 8001.
 
 ## Vercel
 

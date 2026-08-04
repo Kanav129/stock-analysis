@@ -28,8 +28,10 @@ class ResearchState(TypedDict, total=False):
     dimension_alignment: dict[str, Any]
 
     # ── Decision outputs ──
-    rating: str
-    score: int  # −100 (strong sell) … +100 (strong buy)
+    decision_ok: bool
+    error_message: str | None
+    rating: str | None
+    score: int | None  # −100 (strong sell) … +100 (strong buy)
     reasoning: str
     key_drivers: list[str]
     supporting_headlines: list[dict[str, str]]

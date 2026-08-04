@@ -2,9 +2,10 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useParams, Link, useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import type { ReportTask, ResearchReport } from '../api/types';
+import type { ReportTask } from '../api/types';
 import { RatingBadge } from '../components/RatingBadge';
 import { ScoreMeter } from '../components/ScoreMeter';
+import { AnalysisErrorIcon } from '../components/AnalysisErrorIcon';
 import { Panel } from '../components/Panel';
 import { DeltaValue } from '../components/DeltaValue';
 import { Sparkline } from '../components/Sparkline';
@@ -277,7 +278,9 @@ export function StockDetailPage() {
   const quote = quoteQ.data?.quotes?.[t];
   const tech = technicalsQ.data;
 
-  const report: ResearchReport | null = reportQuery.data ?? null;
+  const envelope = reportQuery.data;
+  const report = envelope?.report ?? null;
+  const analysisFailed = envelope?.analysis_failed ?? false;
   const reportPending =
     !generating &&
     !!t &&
@@ -288,6 +291,9 @@ export function StockDetailPage() {
   const sectionIds = Object.keys(sections).filter(
     (k) => sections[k] && !k.startsWith('_'),
   );
+  const displayRating = report?.rating?.rating ?? (!analysisFailed ? latest?.rating : null);
+  const displayScore = report?.rating?.score ?? (!analysisFailed ? latest?.score : null);
+  const displayReportType = report?.report_type ?? (!analysisFailed ? latest?.report_type : undefined);
 
   const toggleWatchlist = useMutation({
     mutationFn: async () => {
@@ -318,17 +324,24 @@ export function StockDetailPage() {
             {quote?.spark && <Sparkline data={quote.spark} width={80} height={24} />}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-3">
-            {(report?.rating?.rating || latest?.rating) && (
-              <RatingBadge
-                rating={(report?.rating?.rating || latest?.rating)!}
-                reportType={report?.report_type ?? latest?.report_type}
+            {analysisFailed && (
+              <AnalysisErrorIcon
+                analysisFailed
+                analysisError={envelope?.analysis_error}
+                failedAt={envelope?.failed_at}
               />
             )}
-            {(report?.rating?.score ?? latest?.score) != null && (
+            {displayRating && (
+              <RatingBadge
+                rating={displayRating}
+                reportType={displayReportType}
+              />
+            )}
+            {displayScore != null && (
               <ScoreMeter
-                value={(report?.rating?.score ?? latest?.score)!}
+                value={displayScore}
                 size="md"
-                reportType={report?.report_type ?? latest?.report_type}
+                reportType={displayReportType}
               />
             )}
             {report?.entry_levels && (
@@ -370,7 +383,7 @@ export function StockDetailPage() {
           {generating && taskId ? (
             <button
               type="button"
-              className="btn-terminal"
+              className="btn-terminal btn-terminal--danger"
               disabled={cancelJobMut.isPending}
               onClick={() => cancelJobMut.mutate(taskId)}
             >
@@ -453,6 +466,19 @@ export function StockDetailPage() {
                   : 'AI multi-factor analysis'
               }
             >
+              {analysisFailed && (
+                <div
+                  role="alert"
+                  className="mb-3 rounded border border-[var(--color-down)] bg-[color-mix(in_oklch,var(--color-down)_10%,transparent)] px-3 py-2 text-xs text-[var(--color-down)]"
+                >
+                  Latest analysis failed
+                  {envelope?.analysis_error ? `: ${envelope.analysis_error}` : ''}
+                  {envelope?.failed_at
+                    ? ` · ${new Date(envelope.failed_at).toLocaleString()}`
+                    : ''}
+                </div>
+              )}
+
               {generating && (
                 <div className="py-8 text-center">
                   <div className="mb-3 flex justify-center">
@@ -467,7 +493,7 @@ export function StockDetailPage() {
                   {taskId ? (
                     <button
                       type="button"
-                      className="btn-terminal mt-3"
+                      className="btn-terminal btn-terminal--danger mt-3"
                       disabled={cancelJobMut.isPending}
                       onClick={() => cancelJobMut.mutate(taskId)}
                     >
@@ -541,7 +567,9 @@ export function StockDetailPage() {
 
               {!generating && !report && !reportPending && (
                 <div className="py-6 text-center">
-                  <p className="text-sm text-[var(--color-text-secondary)]">No saved report yet.</p>
+                  <p className="text-sm text-[var(--color-text-secondary)]">
+                    {analysisFailed ? 'No successful report yet.' : 'No saved report yet.'}
+                  </p>
                   <p className="mt-1 text-xs text-[var(--color-text-muted)]">
                     {generateCore.isPending
                       ? 'Starting generation…'
@@ -574,12 +602,12 @@ export function StockDetailPage() {
             </div>
           </Panel>
 
-          {(report?.rating || latest) && (
+          {(report?.rating || (!analysisFailed && latest)) && displayRating && (
             <Panel title="AI decision" dense>
               <DecisionSnapshot
-                rating={(report?.rating?.rating || latest?.rating)!}
-                score={(report?.rating?.score ?? latest?.score) ?? 0}
-                reportType={report?.report_type ?? latest?.report_type}
+                rating={displayRating}
+                score={displayScore ?? 0}
+                reportType={displayReportType}
                 posture={report?.rating?.posture}
                 onJumpToThesis={
                   report?.rating?.reasoning

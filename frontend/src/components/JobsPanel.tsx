@@ -126,11 +126,11 @@ export function JobsPanel() {
         llmActive ? (
           <button
             type="button"
-            className="btn-ghost"
+            className="btn-terminal btn-terminal--danger"
             disabled={cancelAllMut.isPending}
             onClick={() => cancelAllMut.mutate()}
           >
-            Cancel all LLM
+            {cancelAllMut.isPending ? 'Cancelling…' : 'Cancel all LLM'}
           </button>
         ) : null
       }
@@ -158,7 +158,7 @@ export function JobsPanel() {
               <span className="jobs-queue__type">{jobTypeLabel(job.job_type)}</span>
               <button
                 type="button"
-                className="btn-ghost jobs-queue__remove"
+                className="btn-ghost btn-ghost--danger jobs-queue__remove"
                 disabled={cancelJobMut.isPending}
                 onClick={() => cancelJobMut.mutate(job.id)}
               >
@@ -199,8 +199,13 @@ function SyncJobRow({
         <strong>Sync</strong>
         {active ? <PipelineLiveBadge verb="Syncing" /> : null}
         {active ? (
-          <button type="button" className="btn-ghost" disabled={cancelling} onClick={onCancel}>
-            Cancel
+          <button
+            type="button"
+            className="btn-ghost btn-ghost--danger jobs-item__cancel"
+            disabled={cancelling}
+            onClick={onCancel}
+          >
+            {cancelling ? 'Cancelling…' : 'Cancel'}
           </button>
         ) : null}
       </div>
@@ -235,8 +240,13 @@ function LlmJobRow({
         </Link>
         <span className="jobs-item__badge">{jobTypeLabel(job.job_type)}</span>
         <PipelineLiveBadge verb="Running" />
-        <button type="button" className="btn-ghost" disabled={cancelling} onClick={onCancel}>
-          {job.cancel_requested ? 'Cancelling…' : 'Cancel'}
+        <button
+          type="button"
+          className="btn-ghost btn-ghost--danger jobs-item__cancel"
+          disabled={cancelling}
+          onClick={onCancel}
+        >
+          {job.cancel_requested || cancelling ? 'Cancelling…' : 'Cancel'}
         </button>
       </div>
       <p className="jobs-item__msg">{label}</p>

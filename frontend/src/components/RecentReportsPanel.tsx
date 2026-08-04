@@ -6,6 +6,7 @@ import { CompactTable } from './CompactTable';
 import { LoadingState } from './LoadingSpinner';
 import { Panel } from './Panel';
 import { RatingBadge } from './RatingBadge';
+import { AnalysisErrorIcon } from './AnalysisErrorIcon';
 
 function fmtShortDate(iso: string) {
   const d = new Date(iso);
@@ -105,7 +106,16 @@ export function RecentReportsPanel({ ticker }: { ticker: string }) {
                     : '—'}
                 </td>
                 <td>
-                  {item.rating ? (
+                  {item.analysis_failed ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-[var(--color-down)]">
+                      <AnalysisErrorIcon
+                        analysisFailed
+                        analysisError={item.analysis_error}
+                        failedAt={item.created_at}
+                      />
+                      Failed
+                    </span>
+                  ) : item.rating ? (
                     <RatingBadge rating={item.rating} reportType={item.report_type} />
                   ) : (
                     <span className="text-[var(--color-text-muted)]">—</span>

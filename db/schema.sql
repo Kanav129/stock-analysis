@@ -43,16 +43,18 @@ CREATE INDEX IF NOT EXISTS idx_holdings_ticker ON holdings_snapshot (ticker);
 CREATE TABLE IF NOT EXISTS stock_ratings (
     id SERIAL PRIMARY KEY,
     ticker VARCHAR(10) NOT NULL,
-    rating VARCHAR(16) NOT NULL CHECK (rating IN (
+    rating VARCHAR(16) CHECK (rating IS NULL OR rating IN (
         'STRONG_SELL', 'SELL', 'REDUCE', 'HOLD', 'ACCUMULATE', 'BUY', 'STRONG_BUY'
     )),
-    score INTEGER NOT NULL CHECK (score >= -100 AND score <= 100),
+    score INTEGER CHECK (score IS NULL OR (score >= -100 AND score <= 100)),
     reasoning TEXT NOT NULL,
     key_drivers JSONB DEFAULT '[]'::jsonb,
     supporting_headlines JSONB DEFAULT '[]'::jsonb,
     price_summary JSONB DEFAULT '{}'::jsonb,
     model VARCHAR(128),
     report_type VARCHAR(16) CHECK (report_type IS NULL OR report_type IN ('core', 'deep')),
+    decision_ok BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

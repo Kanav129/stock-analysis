@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import type { Rating, ReportType } from '../api/types';
+import { AnalysisErrorIcon } from './AnalysisErrorIcon';
 import { DeltaValue } from './DeltaValue';
 import { RatingBadge } from './RatingBadge';
 
@@ -9,12 +10,18 @@ export function HeatTile({
   changePct,
   rating,
   reportType,
+  analysisFailed,
+  analysisError,
+  failedAt,
 }: {
   ticker: string;
   price?: number | null;
   changePct?: number | null;
   rating?: Rating | null;
   reportType?: ReportType | null;
+  analysisFailed?: boolean;
+  analysisError?: string | null;
+  failedAt?: string | null;
 }) {
   const pct = changePct ?? 0;
   const intensity = Math.min(Math.abs(pct) / 4, 1);
@@ -33,7 +40,14 @@ export function HeatTile({
     >
       <div className="flex items-center justify-between gap-1">
         <span className="font-mono text-sm font-semibold text-[var(--color-text-primary)]">{ticker}</span>
-        {rating && <RatingBadge rating={rating} reportType={reportType} />}
+        <span className="flex items-center gap-1">
+          {rating ? <RatingBadge rating={rating} reportType={reportType} /> : null}
+          <AnalysisErrorIcon
+            analysisFailed={analysisFailed}
+            analysisError={analysisError}
+            failedAt={failedAt}
+          />
+        </span>
       </div>
       <div className="mt-1 flex items-baseline justify-between gap-2">
         <span className="font-mono text-xs text-[var(--color-text-secondary)]">

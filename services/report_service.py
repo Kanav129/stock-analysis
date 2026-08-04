@@ -26,6 +26,13 @@ def resolve_report_type_filter(value: str | None) -> str | None:
     raise ValueError("type must be core, deep, or latest")
 
 
+def _rating_decision_ok(rating: dict[str, Any] | None) -> bool:
+    """Treat legacy ratings as successful unless failure is explicit."""
+    if not rating:
+        return True
+    return rating.get("decision_ok") is not False
+
+
 class ReportService:
     """CRUD for stock_reports — generated research artifacts stored as JSONB."""
 
@@ -98,6 +105,53 @@ class ReportService:
             return None
         return self._row_to_dict(rows[0], cols)
 
+    def get_latest_report_envelope(
+        self, ticker: str, report_type: str | None
+    ) -> dict[str, Any]:
+        """Return the latest success plus metadata for a newer failed attempt."""
+        latest = self.get_latest_report(ticker, report_type)
+        empty_envelope = {
+            "report": None,
+            "analysis_failed": False,
+            "analysis_error": None,
+            "failed_at": None,
+        }
+        if latest is None:
+            return empty_envelope
+
+        rating = latest.get("rating")
+        if not isinstance(rating, dict) or _rating_decision_ok(rating):
+            return {**empty_envelope, "report": latest}
+
+        if report_type:
+            rows, cols = self._db.fetch_query(
+                "SELECT id, ticker, report_type, sections, rating, factor_scores, "
+                "entry_levels, live_price, model, created_at "
+                "FROM stock_reports "
+                "WHERE ticker=%s AND report_type=%s "
+                "AND (rating->>'decision_ok') IS DISTINCT FROM 'false' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (ticker.upper(), report_type),
+            )
+        else:
+            rows, cols = self._db.fetch_query(
+                "SELECT id, ticker, report_type, sections, rating, factor_scores, "
+                "entry_levels, live_price, model, created_at "
+                "FROM stock_reports "
+                "WHERE ticker=%s "
+                "AND (rating->>'decision_ok') IS DISTINCT FROM 'false' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (ticker.upper(),),
+            )
+
+        report = self._row_to_dict(rows[0], cols) if rows else None
+        return {
+            "report": report,
+            "analysis_failed": True,
+            "analysis_error": rating.get("error") or rating.get("error_message"),
+            "failed_at": latest.get("created_at"),
+        }
+
     def list_latest_reports_by_ticker(self) -> list[dict[str, Any]]:
         """Latest report per ticker (any type), for rescoring."""
         rows, cols = self._db.fetch_query(
@@ -163,7 +217,9 @@ class ReportService:
                 report_type,
                 created_at,
                 rating->>'rating' AS rating,
-                rating->>'score' AS score
+                rating->>'score' AS score,
+                rating->>'decision_ok' AS decision_ok,
+                COALESCE(rating->>'error', rating->>'error_message') AS analysis_error
             FROM stock_reports
             WHERE ticker=%s
             ORDER BY created_at DESC
@@ -183,6 +239,9 @@ class ReportService:
                     item["score"] = None
             if not item.get("rating"):
                 item["rating"] = None
+            raw_decision_ok = item.get("decision_ok")
+            item["decision_ok"] = raw_decision_ok not in (False, "false")
+            item["analysis_failed"] = not item["decision_ok"]
             items.append(item)
         return items
 

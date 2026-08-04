@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yfinance as yf
 from langchain_core.prompts import ChatPromptTemplate
 
-from config.llm_config import get_research_llm
+from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
 from scraper.finnhub_scraper import FinnhubClient
 from utils.logger import logger
@@ -56,7 +56,6 @@ def gather_lockup(state: ResearchState) -> Dict[str, Any]:
 
     # ── LLM narrative ──
     try:
-        llm = get_research_llm(temperature=0.2)
         prompt = ChatPromptTemplate.from_messages([
             ("system", LOCKUP_SYSTEM),
             ("human", """Write the lockup/overhang analysis for {ticker}. Data:
@@ -72,15 +71,18 @@ def gather_lockup(state: ResearchState) -> Dict[str, Any]:
 
 Output the analysis in markdown."""),
         ])
-        chain = prompt | llm
-        result = chain.invoke({
-            "ticker": ticker,
-            "insider_json": json.dumps(insider, indent=2),
-            "shares": f"{shares_out:,.0f}" if shares_out else "N/A",
-            "mcap": f"${overview.get('market_cap', 0):,.0f}" if overview.get("market_cap") else "N/A",
-            "fcf": str(lockup_data["fcf_margin"]),
-            "gm": str(lockup_data["gross_margin"]),
-        })
+        result, _ = invoke_research_llm(
+            prompt,
+            {
+                "ticker": ticker,
+                "insider_json": json.dumps(insider, indent=2),
+                "shares": f"{shares_out:,.0f}" if shares_out else "N/A",
+                "mcap": f"${overview.get('market_cap', 0):,.0f}" if overview.get("market_cap") else "N/A",
+                "fcf": str(lockup_data["fcf_margin"]),
+                "gm": str(lockup_data["gross_margin"]),
+            },
+            temperature=0.2,
+        )
         markdown = result.content if hasattr(result, "content") else str(result)
     except Exception as exc:
         logger.error(f"Lockup LLM failed: {exc}")

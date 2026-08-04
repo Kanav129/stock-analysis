@@ -1,5 +1,16 @@
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts';
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceDot,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import type { StockRating } from '../api/types';
+import { AnalysisErrorIcon } from './AnalysisErrorIcon';
 
 export function RatingHistoryChart({ history }: { history: StockRating[] }) {
   if (!history.length) {
@@ -12,11 +23,16 @@ export function RatingHistoryChart({ history }: { history: StockRating[] }) {
       date: new Date(h.created_at).toLocaleDateString(),
       score: h.score,
       rating: h.rating,
+      analysisFailed: h.analysis_failed ?? h.decision_ok === false,
+      analysisError: h.error_message ?? h.analysis_error,
+      createdAt: h.created_at,
     }));
+  const failedAttempts = chartData.filter((point) => point.analysisFailed);
 
   return (
-    <div className="h-64 w-full">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="w-full">
+      <div className="h-64 w-full">
+        <ResponsiveContainer width="100%" height="100%">
         <LineChart data={chartData}>
           <CartesianGrid stroke="oklch(0.25 0.035 260)" strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fill: 'oklch(0.55 0.02 260)', fontSize: 11 }} />
@@ -45,8 +61,45 @@ export function RatingHistoryChart({ history }: { history: StockRating[] }) {
             strokeWidth={2}
             dot
           />
+          {failedAttempts.map((point, index) => (
+            <ReferenceDot
+              key={`${point.createdAt}-${index}`}
+              yAxisId="score"
+              x={point.date}
+              y={0}
+              r={5}
+              fill="var(--color-down)"
+              stroke="var(--color-surface)"
+              strokeWidth={2}
+              label={{
+                value: '!',
+                position: 'top',
+                fill: 'var(--color-down)',
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            />
+          ))}
         </LineChart>
-      </ResponsiveContainer>
+        </ResponsiveContainer>
+      </div>
+      {failedAttempts.length ? (
+        <div
+          className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[var(--color-down)]"
+          aria-label="Failed analysis attempts"
+        >
+          {failedAttempts.map((point, index) => (
+            <span key={`${point.createdAt}-failure-${index}`} className="inline-flex items-center gap-1">
+              <AnalysisErrorIcon
+                analysisFailed
+                analysisError={point.analysisError}
+                failedAt={point.createdAt}
+              />
+              {point.date}: analysis failed
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

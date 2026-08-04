@@ -1,4 +1,5 @@
 import { RunAnalysisButton } from './RunAnalysisButton';
+import { RetryFailedAnalysisButton } from './RetryFailedAnalysisButton';
 import { SyncDataButton } from './SyncDataButton';
 
 type Props = {
@@ -12,7 +13,12 @@ export function DeskRunActions({ showAnalysis = true, className = '' }: Props) {
   return (
     <div className={`desk-run-actions ${className}`.trim()}>
       <SyncDataButton />
-      {showAnalysis ? <RunAnalysisButton /> : null}
+      {showAnalysis ? (
+        <>
+          <RunAnalysisButton />
+          <RetryFailedAnalysisButton />
+        </>
+      ) : null}
     </div>
   );
 }

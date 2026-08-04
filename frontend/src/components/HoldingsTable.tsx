@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Holding, Rating, StockQuote, StockRating } from '../api/types';
+import { AnalysisErrorIcon } from './AnalysisErrorIcon';
 import { RatingBadge } from './RatingBadge';
 import { ScoreMeter } from './ScoreMeter';
 import { Sparkline } from './Sparkline';
@@ -156,8 +157,8 @@ export function HoldingsTable({
           break;
         case 'rating':
           result = cmpNullable(
-            ra ? RATING_RANK[ra.rating] : null,
-            rb ? RATING_RANK[rb.rating] : null,
+            ra?.rating ? RATING_RANK[ra.rating] : null,
+            rb?.rating ? RATING_RANK[rb.rating] : null,
             sortDir,
           );
           break;
@@ -228,13 +229,26 @@ export function HoldingsTable({
               </SensitiveValue>
             </td>
             <td className="is-center">
-              {r ? (
-                <RatingBadge rating={r.rating} reportType={r.report_type} />
+              <span className="inline-flex items-center justify-center gap-1">
+                {r?.rating ? (
+                  <RatingBadge rating={r.rating} reportType={r.report_type} />
+                ) : !r?.analysis_failed ? (
+                  <span className="text-[var(--color-text-muted)]">—</span>
+                ) : null}
+                <AnalysisErrorIcon
+                  analysisFailed={r?.analysis_failed}
+                  analysisError={r?.analysis_error}
+                  failedAt={r?.failed_at}
+                />
+              </span>
+            </td>
+            <td>
+              {r?.score != null ? (
+                <ScoreMeter value={r.score} reportType={r.report_type} />
               ) : (
-                <span className="text-[var(--color-text-muted)]">—</span>
+                '—'
               )}
             </td>
-            <td>{r ? <ScoreMeter value={r.score} reportType={r.report_type} /> : '—'}</td>
           </tr>
         );
       })}

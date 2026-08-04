@@ -6,12 +6,14 @@ import { PortfolioSummaryCard } from '../components/PortfolioSummary';
 import { HoldingsTable } from '../components/HoldingsTable';
 import { SyncHoldingsButton } from '../components/SyncHoldingsButton';
 import { DeskRunActions } from '../components/DeskRunActions';
+import { LiveSessionIndicator } from '../components/LiveSessionIndicator';
 import { JobsPanel } from '../components/JobsPanel';
 import { Panel } from '../components/Panel';
 import { HeatTile } from '../components/HeatTile';
 import { DeltaValue } from '../components/DeltaValue';
 import { Sparkline } from '../components/Sparkline';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
+import { AnalysisErrorIcon } from '../components/AnalysisErrorIcon';
 import { RatingBadge } from '../components/RatingBadge';
 import type { Rating, StockQuote } from '../api/types';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
@@ -126,6 +128,9 @@ export function DashboardPage() {
     queryFn: () => api.getRecentRatings(RECENT_ANALYSIS_CAP),
     refetchInterval: syncing ? false : DESK_STALE_MS,
     staleTime: DESK_STALE_MS,
+    // Recover after local API restarts (Vite returns 502 while uvicorn is down).
+    retry: 3,
+    retryDelay: (n) => Math.min(1000 * 2 ** n, 8000),
     placeholderData: keepPrevious,
   });
 
@@ -293,7 +298,13 @@ export function DashboardPage() {
       ...(watchlistQ.data?.items ?? []).map((i) => i.ticker.toUpperCase()),
     ]);
     return ratings
-      .filter((r) => universe.has(r.ticker.toUpperCase()) && r.rating !== 'HOLD')
+      .filter(
+        (r): r is typeof r & { rating: Rating; score: number } =>
+          universe.has(r.ticker.toUpperCase()) &&
+          r.rating != null &&
+          r.score != null &&
+          r.rating !== 'HOLD',
+      )
       .sort((a, b) => {
         const p = (CALL_PRIORITY[b.rating] ?? 0) - (CALL_PRIORITY[a.rating] ?? 0);
         if (p !== 0) return p;
@@ -321,8 +332,8 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center">
+        <div className="min-w-0">
           <h2 className="font-display text-lg font-semibold">Trading Desk</h2>
           <p className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
             {analysisQ.isLoading ? (
@@ -337,7 +348,12 @@ export function DashboardPage() {
             )}
           </p>
         </div>
-        <DeskRunActions />
+        <div className="flex justify-center">
+          <LiveSessionIndicator />
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-3 sm:justify-end">
+          <DeskRunActions />
+        </div>
       </div>
 
       <JobsPanel />
@@ -362,9 +378,13 @@ export function DashboardPage() {
                 <span className="shrink-0 font-mono text-xs font-semibold text-[var(--color-accent)]">
                   {r.ticker}
                 </span>
-                <RatingBadge rating={r.rating} reportType={r.report_type} />
+                {r.rating ? (
+                  <RatingBadge rating={r.rating} reportType={r.report_type} />
+                ) : (
+                  <span className="text-[var(--color-text-muted)]">—</span>
+                )}
                 <span className={scoreTextClass(r.report_type)}>
-                  {r.score > 0 ? `+${r.score}` : String(r.score)}
+                  {r.score == null ? '—' : r.score > 0 ? `+${r.score}` : String(r.score)}
                 </span>
               </Link>
             ))}
@@ -396,9 +416,20 @@ export function DashboardPage() {
                 <span className="shrink-0 font-mono text-xs font-semibold text-[var(--color-accent)]">
                   {r.ticker}
                 </span>
-                <RatingBadge rating={r.rating} reportType={r.report_type} />
+                <span className="inline-flex items-center gap-1">
+                  {r.rating ? (
+                    <RatingBadge rating={r.rating} reportType={r.report_type} />
+                  ) : !r.analysis_failed ? (
+                    <span className="text-[var(--color-text-muted)]">—</span>
+                  ) : null}
+                  <AnalysisErrorIcon
+                    analysisFailed={r.analysis_failed}
+                    analysisError={r.analysis_error}
+                    failedAt={r.failed_at}
+                  />
+                </span>
                 <span className={scoreTextClass(r.report_type)}>
-                  {r.score > 0 ? `+${r.score}` : String(r.score)}
+                  {r.score == null ? '—' : r.score > 0 ? `+${r.score}` : String(r.score)}
                 </span>
               </Link>
             ))}
@@ -483,6 +514,9 @@ export function DashboardPage() {
                           changePct={quotes[t]?.change_pct}
                           rating={(ratingMap[t]?.rating as Rating | undefined) ?? null}
                           reportType={ratingMap[t]?.report_type}
+                          analysisFailed={ratingMap[t]?.analysis_failed}
+                          analysisError={ratingMap[t]?.analysis_error}
+                          failedAt={ratingMap[t]?.failed_at}
                         />
                       ))}
                     </div>
@@ -503,6 +537,9 @@ export function DashboardPage() {
                           changePct={quotes[t]?.change_pct}
                           rating={(ratingMap[t]?.rating as Rating | undefined) ?? null}
                           reportType={ratingMap[t]?.report_type}
+                          analysisFailed={ratingMap[t]?.analysis_failed}
+                          analysisError={ratingMap[t]?.analysis_error}
+                          failedAt={ratingMap[t]?.failed_at}
                         />
                       ))}
                     </div>

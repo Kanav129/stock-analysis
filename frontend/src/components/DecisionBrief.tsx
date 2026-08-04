@@ -80,7 +80,7 @@ function rewardRisk(
 
 export function DecisionBrief({ report }: { report: ResearchReport }) {
   const { rating } = report;
-  if (!rating) return null;
+  if (!rating?.rating) return null;
 
   const c = RATING_COLORS[rating.rating] || RATING_COLORS.HOLD;
   const levels = report.entry_levels;

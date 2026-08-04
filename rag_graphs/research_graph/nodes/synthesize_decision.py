@@ -1,13 +1,12 @@
 """Decision synthesis — structured LLM call producing rating tag + AI score (−100…+100)."""
 from __future__ import annotations
 
-import os
 from typing import Any, Dict
 
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from config.llm_config import get_analysis_llm, resolve_analysis_model
+from config.llm_config import call_with_retry_then_fallback
 from config.rating_config import RATING_TAGS, clamp_score, normalize_rating
 from config.report_config import compute_dimension_alignment, compute_factor_scores
 from rag_graphs.research_graph.state import ResearchState
@@ -163,34 +162,48 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
         portfolio_markdown=portfolio_md,
     )
 
-    try:
-        llm = get_analysis_llm(temperature=0.25)
-        structured_llm = llm.with_structured_output(DecisionOutput, method="function_calling")
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", DECISION_SYSTEM),
-            ("human", """Synthesize the decision for {ticker} based on this analysis:
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", DECISION_SYSTEM),
+        ("human", """Synthesize the decision for {ticker} based on this analysis:
 
 {context}
 
 Return your structured decision with rating tag + score (−100…+100)."""),
-        ])
+    ])
 
-        chain = prompt | structured_llm
-        result: DecisionOutput = chain.invoke({"ticker": ticker, "context": context})
+    def _invoke(llm):
+        structured_llm = llm.with_structured_output(DecisionOutput, method="function_calling")
+        return (prompt | structured_llm).invoke({"ticker": ticker, "context": context})
+
+    used_model = "analysis"
+    try:
+        result, used_model = call_with_retry_then_fallback(
+            role="analysis",
+            temperature=0.25,
+            call=_invoke,
+        )
     except Exception as exc:
         logger.error(f"Decision LLM failed: {exc}")
-        result = DecisionOutput(
-            rating="HOLD",
-            score=0,
-            reasoning=f"Decision generation failed: {exc}. Defaulting to HOLD / 0.",
-            key_drivers=["Analysis error"],
-            supporting_headlines=["N/A"],
-            entry=None,
-            stop=None,
-            target=None,
-            position_note="Unable to determine — review manually.",
-        )
+        return {
+            "decision_ok": False,
+            "error_message": str(exc)[:500],
+            "rating": None,
+            "score": None,
+            "reasoning": f"Decision generation failed: {exc}",
+            "key_drivers": [],
+            "supporting_headlines": [],
+            "entry_levels": {
+                "entry": None,
+                "stop": None,
+                "target": None,
+                "position_note": "Unable to determine — review manually.",
+            },
+            "factor_scores": factor_scores,
+            "dimension_alignment": {},
+            "calibration_note": "Analysis failed",
+            "model": used_model,
+            "posture": "",
+        }
 
     rating = normalize_rating(result.rating)
     score = clamp_score(result.score)
@@ -218,6 +231,8 @@ Return your structured decision with rating tag + score (−100…+100)."""),
     )
 
     return {
+        "decision_ok": True,
+        "error_message": None,
         "rating": rating,
         "score": score,
         "reasoning": result.reasoning,
@@ -227,6 +242,6 @@ Return your structured decision with rating tag + score (−100…+100)."""),
         "factor_scores": factor_scores,
         "dimension_alignment": dimension_alignment,
         "calibration_note": calibration_note,
-        "model": resolve_analysis_model(),
+        "model": used_model,
         "posture": result.posture,
     }

@@ -40,6 +40,11 @@ class WatchlistService:
             item["rating"] = rating["rating"] if rating else None
             item["score"] = rating["score"] if rating else None
             item["report_type"] = rating.get("report_type") if rating else None
+            item["analysis_failed"] = bool(
+                rating and rating.get("analysis_failed")
+            )
+            item["analysis_error"] = rating.get("analysis_error") if rating else None
+            item["failed_at"] = rating.get("failed_at") if rating else None
             item["latest_price"] = price["close"] if price else None
             item["price_date"] = price["date"] if price else None
             item["description"] = self._build_description(item, rating)

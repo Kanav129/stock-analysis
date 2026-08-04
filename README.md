@@ -42,6 +42,8 @@ Or with Docker (API only):
 docker compose up --build
 ```
 
+Docker publishes the API on **http://localhost:8002** so it does not block local uvicorn on **8001** (what the Vite `/api` proxy uses).
+
 ### 2. Frontend
 
 ```bash

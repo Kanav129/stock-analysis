@@ -2,7 +2,8 @@ services:
   api:
     build: .
     ports:
-      - "8001:8001"
+      # Host 8002 so local uvicorn can own 8001 (Vite /api proxy target).
+      - "8002:8001"
     env_file:
       - .env
     environment:

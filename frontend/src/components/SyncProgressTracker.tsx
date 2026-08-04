@@ -96,7 +96,7 @@ export function SyncProgressTracker() {
         active ? (
           <button
             type="button"
-            className="btn-terminal"
+            className="btn-terminal btn-terminal--danger"
             disabled={cancelMut.isPending || Boolean(data.message?.toLowerCase().includes('cancel'))}
             onClick={() => cancelMut.mutate()}
           >

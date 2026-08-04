@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from config.llm_config import get_research_llm
+from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
 from scraper.social_scraper import SocialScraper
 from utils.logger import logger
@@ -44,7 +44,6 @@ def gather_sentiment(state: ResearchState) -> Dict[str, Any]:
         markdown = f"*No social sentiment data found for {ticker} in the past week.*"
     else:
         try:
-            llm = get_research_llm(temperature=0.2)
             prompt = ChatPromptTemplate.from_messages([
                 ("system", SENTIMENT_SYSTEM),
                 ("human", """Write the sentiment analysis for {ticker}. Here is the data:
@@ -54,21 +53,24 @@ def gather_sentiment(state: ResearchState) -> Dict[str, Any]:
 
 Output the analysis in markdown."""),
             ])
-            chain = prompt | llm
-            result = chain.invoke({
-                "ticker": ticker,
-                "stocktwits_json": json.dumps({
-                    "total_messages": st.get("total", 0),
-                    "bullish": st.get("bullish", 0),
-                    "bearish": st.get("bearish", 0),
-                    "bullish_pct": st.get("bullish_pct", 0),
-                    "bearish_pct": st.get("bearish_pct", 0),
-                    "bull_bear_ratio": st.get("bull_bear_ratio"),
-                    "strongly_bullish": st.get("is_strongly_bullish", False),
-                    "sample": [{"body": m.get("body", ""), "sentiment": m.get("sentiment")}
-                               for m in st.get("sample", [])[:10]],
-                }, indent=2),
-            })
+            result, _ = invoke_research_llm(
+                prompt,
+                {
+                    "ticker": ticker,
+                    "stocktwits_json": json.dumps({
+                        "total_messages": st.get("total", 0),
+                        "bullish": st.get("bullish", 0),
+                        "bearish": st.get("bearish", 0),
+                        "bullish_pct": st.get("bullish_pct", 0),
+                        "bearish_pct": st.get("bearish_pct", 0),
+                        "bull_bear_ratio": st.get("bull_bear_ratio"),
+                        "strongly_bullish": st.get("is_strongly_bullish", False),
+                        "sample": [{"body": m.get("body", ""), "sentiment": m.get("sentiment")}
+                                   for m in st.get("sample", [])[:10]],
+                    }, indent=2),
+                },
+                temperature=0.2,
+            )
             markdown = result.content if hasattr(result, "content") else str(result)
         except Exception as exc:
             logger.error(f"Sentiment LLM failed: {exc}")

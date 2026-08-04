@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yfinance as yf
 from langchain_core.prompts import ChatPromptTemplate
 
-from config.llm_config import get_research_llm
+from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
 from utils.logger import logger
 
@@ -48,7 +48,6 @@ def gather_policy(state: ResearchState) -> Dict[str, Any]:
 
     # ── LLM narrative ──
     try:
-        llm = get_research_llm(temperature=0.2)
         prompt = ChatPromptTemplate.from_messages([
             ("system", POLICY_SYSTEM),
             ("human", """Write the policy analysis for {ticker} ({sector} / {industry}, market cap {mcap}).
@@ -58,14 +57,17 @@ News context:
 
 Output the analysis in markdown."""),
         ])
-        chain = prompt | llm
-        result = chain.invoke({
-            "ticker": ticker,
-            "sector": sector,
-            "industry": industry,
-            "mcap": f"${policy_data.get('market_cap', 0):,.0f}" if policy_data.get("market_cap") else "N/A",
-            "news": news_md,
-        })
+        result, _ = invoke_research_llm(
+            prompt,
+            {
+                "ticker": ticker,
+                "sector": sector,
+                "industry": industry,
+                "mcap": f"${policy_data.get('market_cap', 0):,.0f}" if policy_data.get("market_cap") else "N/A",
+                "news": news_md,
+            },
+            temperature=0.2,
+        )
         markdown = result.content if hasattr(result, "content") else str(result)
     except Exception as exc:
         logger.error(f"Policy LLM failed: {exc}")

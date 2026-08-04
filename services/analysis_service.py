@@ -12,6 +12,7 @@ from rag_graphs.research_graph.nodes.persist_report import persist_report
 from rag_graphs.research_graph.nodes.synthesize_decision import synthesize_decision
 from db.db_factory import get_db_client
 from services import run_checkpoint_service as rcs
+from services.analysis_failure_service import record_failed_analysis
 from services.report_service import ReportService
 from services.universe_service import UniverseService
 from utils.logger import logger
@@ -506,6 +507,18 @@ class AnalysisService:
                         logger.info("Core-report analysis cancelled by user.")
                         return
                     logger.error(f"Core report analysis failed for {ticker}: {exc}")
+                    try:
+                        record_failed_analysis(
+                            ticker,
+                            str(exc),
+                            report_type="core",
+                        )
+                    except Exception as persist_exc:
+                        logger.error(
+                            "Failed to record analysis failure for %s: %s",
+                            ticker,
+                            persist_exc,
+                        )
                     errors.append({"ticker": ticker, "error": str(exc)})
                     save_checkpoint("partial" if checkpoint_completed else "failed")
                     self._update(errors=list(errors))
@@ -666,6 +679,18 @@ class AnalysisService:
                         )
                         return
                     logger.error(f"Rescore failed for {ticker}: {exc}")
+                    try:
+                        record_failed_analysis(
+                            ticker,
+                            str(exc),
+                            report_type=report.get("report_type") or "core",
+                        )
+                    except Exception as persist_exc:
+                        logger.error(
+                            "Failed to record analysis failure for %s: %s",
+                            ticker,
+                            persist_exc,
+                        )
                     errors.append({"ticker": ticker, "error": str(exc)})
                     self._update(errors=list(errors))
 

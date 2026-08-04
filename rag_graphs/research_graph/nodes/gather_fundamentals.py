@@ -7,7 +7,7 @@ import numpy as np
 import yfinance as yf
 from langchain_core.prompts import ChatPromptTemplate
 
-from config.llm_config import get_research_llm
+from config.llm_config import invoke_research_llm
 from config.report_config import compute_factor_scores
 from rag_graphs.research_graph.state import ResearchState
 from scraper.alpha_vantage_scraper import AlphaVantageClient
@@ -159,7 +159,6 @@ def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:
 
     # ── LLM narrative ──
     try:
-        llm = get_research_llm(temperature=0.2)
         prompt = ChatPromptTemplate.from_messages([
             ("system", FUNDAMENTALS_SYSTEM),
             ("human", """Write the fundamentals analysis for {ticker}. Use this structured data:
@@ -194,23 +193,26 @@ AV data gaps: {av_errors}
 
 Output the analysis in markdown."""),
         ])
-        chain = prompt | llm
-        result = chain.invoke({
-            "ticker": ticker,
-            "overview_json": str(overview),
-            "income_annual_json": str(av_snapshot.get("income_annual", [])[:5]),
-            "income_quarterly_json": str(av_snapshot.get("income_quarterly", [])[:6]),
-            "balance_annual_json": str(av_snapshot.get("balance_annual", [])[:3]),
-            "cashflow_annual_json": str(av_snapshot.get("cashflow_annual", [])[:3]),
-            "cashflow_quarterly_json": str(av_snapshot.get("cashflow_quarterly", [])[:5]),
-            "revenue_growth": str(avg_revenue_growth),
-            "gross_margin": str(gross_margin),
-            "fcf_margin": str(fcf_margin),
-            "cash_exceeds_debt": str(cash_exceeds_debt),
-            "sbc_rev": str(sbc_to_rev),
-            "market_price": f"{market_price:.2f}" if market_price else "N/A",
-            "av_errors": str(av_errors) if av_errors else "None",
-        })
+        result, _ = invoke_research_llm(
+            prompt,
+            {
+                "ticker": ticker,
+                "overview_json": str(overview),
+                "income_annual_json": str(av_snapshot.get("income_annual", [])[:5]),
+                "income_quarterly_json": str(av_snapshot.get("income_quarterly", [])[:6]),
+                "balance_annual_json": str(av_snapshot.get("balance_annual", [])[:3]),
+                "cashflow_annual_json": str(av_snapshot.get("cashflow_annual", [])[:3]),
+                "cashflow_quarterly_json": str(av_snapshot.get("cashflow_quarterly", [])[:5]),
+                "revenue_growth": str(avg_revenue_growth),
+                "gross_margin": str(gross_margin),
+                "fcf_margin": str(fcf_margin),
+                "cash_exceeds_debt": str(cash_exceeds_debt),
+                "sbc_rev": str(sbc_to_rev),
+                "market_price": f"{market_price:.2f}" if market_price else "N/A",
+                "av_errors": str(av_errors) if av_errors else "None",
+            },
+            temperature=0.2,
+        )
         markdown = result.content if hasattr(result, "content") else str(result)
     except Exception as exc:
         logger.error(f"Fundamentals LLM failed: {exc}")

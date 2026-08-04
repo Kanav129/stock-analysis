@@ -35,6 +35,11 @@
   color: var(--color-text-muted);
 }
 
+.jobs-item__cancel {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .jobs-queue {
   margin-top: 8px;
   padding-top: 8px;

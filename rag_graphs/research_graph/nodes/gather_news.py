@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yfinance as yf
 from langchain_core.prompts import ChatPromptTemplate
 
-from config.llm_config import get_research_llm
+from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
 from scraper.finnhub_scraper import FinnhubClient
 from services.news_service import NewsService
@@ -105,7 +105,6 @@ def gather_news(state: ResearchState) -> Dict[str, Any]:
         markdown = f"*No recent news found for {ticker}.*"
     else:
         try:
-            llm = get_research_llm(temperature=0.2)
             prompt = ChatPromptTemplate.from_messages([
                 ("system", NEWS_SYSTEM),
                 ("human", """Write the news/macro analysis for {ticker}. Here are the recent articles:
@@ -114,15 +113,18 @@ def gather_news(state: ResearchState) -> Dict[str, Any]:
 
 Output the analysis in markdown."""),
             ])
-            chain = prompt | llm
             simplified = [
                 {"headline": a["headline"], "source": a.get("source", ""), "summary": a.get("summary", "")[:300]}
                 for a in deduped
             ]
-            result = chain.invoke({
-                "ticker": ticker,
-                "articles_json": json.dumps(simplified, indent=2),
-            })
+            result, _ = invoke_research_llm(
+                prompt,
+                {
+                    "ticker": ticker,
+                    "articles_json": json.dumps(simplified, indent=2),
+                },
+                temperature=0.2,
+            )
             markdown = result.content if hasattr(result, "content") else str(result)
         except Exception as exc:
             logger.error(f"News LLM failed: {exc}")

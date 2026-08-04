@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from config.llm_config import get_research_llm
+from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
 from services.portfolio_context_service import portfolio_markdown_for
 from utils.logger import logger
@@ -109,33 +109,28 @@ def debate(state: ResearchState) -> Dict[str, Any]:
 
     # ── Bull analyst ──
     try:
-        llm = get_research_llm(temperature=0.3)
         prompt = ChatPromptTemplate.from_messages([
             ("system", BULL_SYSTEM),
             ("human", f"Research on {ticker} (${live_price:.2f}):\n{{context}}"),
         ])
-        chain = prompt | llm
-        result = chain.invoke({"context": full_context})
+        result, _ = invoke_research_llm(prompt, {"context": full_context}, temperature=0.3)
         bull_case = result.content if hasattr(result, "content") else str(result)
     except Exception as exc:
         bull_case = f"*Bull case generation failed: {exc}*"
 
     # ── Bear analyst ──
     try:
-        llm = get_research_llm(temperature=0.3)
         prompt = ChatPromptTemplate.from_messages([
             ("system", BEAR_SYSTEM),
             ("human", f"Research on {ticker} (${live_price:.2f}):\n{{context}}"),
         ])
-        chain = prompt | llm
-        result = chain.invoke({"context": full_context})
+        result, _ = invoke_research_llm(prompt, {"context": full_context}, temperature=0.3)
         bear_case = result.content if hasattr(result, "content") else str(result)
     except Exception as exc:
         bear_case = f"*Bear case generation failed: {exc}*"
 
     # ── Neutral analyst (sees both) ──
     try:
-        llm = get_research_llm(temperature=0.2)
         prompt = ChatPromptTemplate.from_messages([
             ("system", NEUTRAL_SYSTEM),
             ("human", f"""Research on {ticker} (${live_price:.2f}):
@@ -153,15 +148,13 @@ def debate(state: ResearchState) -> Dict[str, Any]:
 
 Synthesize a balanced recommendation."""),
         ])
-        chain = prompt | llm
-        result = chain.invoke({"context": full_context})
+        result, _ = invoke_research_llm(prompt, {"context": full_context}, temperature=0.2)
         neutral_case = result.content if hasattr(result, "content") else str(result)
     except Exception as exc:
         neutral_case = f"*Neutral synthesis failed: {exc}*"
 
     # ── Research manager (final synthesis) ──
     try:
-        llm = get_research_llm(temperature=0.15)
         prompt = ChatPromptTemplate.from_messages([
             ("system", RESEARCH_MANAGER_SYSTEM),
             ("human", f"""Synthesize the final decision chain for {ticker} (${live_price:.2f}).
@@ -182,8 +175,7 @@ Synthesize a balanced recommendation."""),
 
 Output the Research Plan, Trader Proposal, and Portfolio Decision."""),
         ])
-        chain = prompt | llm
-        result = chain.invoke({"context": full_context})
+        result, _ = invoke_research_llm(prompt, {"context": full_context}, temperature=0.15)
         research_plan = result.content if hasattr(result, "content") else str(result)
     except Exception as exc:
         research_plan = f"*Research plan generation failed: {exc}*"

@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { WatchlistItem } from '../api/types';
 import { api } from '../api/client';
+import { AnalysisErrorIcon } from './AnalysisErrorIcon';
 import { RatingBadge } from './RatingBadge';
 import { ScoreMeter } from './ScoreMeter';
 
@@ -60,9 +61,16 @@ export function WatchlistList({ items }: { items: WatchlistItem[] }) {
           </div>
 
           <div className="flex shrink-0 flex-col gap-2 sm:pt-0.5">
-            {item.rating ? (
+            {item.rating || item.analysis_failed ? (
               <div className="flex flex-wrap items-center gap-3">
-                <RatingBadge rating={item.rating} reportType={item.report_type} />
+                {item.rating ? (
+                  <RatingBadge rating={item.rating} reportType={item.report_type} />
+                ) : null}
+                <AnalysisErrorIcon
+                  analysisFailed={item.analysis_failed}
+                  analysisError={item.analysis_error}
+                  failedAt={item.failed_at}
+                />
                 {item.score != null && (
                   <ScoreMeter value={item.score} reportType={item.report_type} />
                 )}

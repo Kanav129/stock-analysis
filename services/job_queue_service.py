@@ -13,6 +13,7 @@ from psycopg2.extras import Json
 
 from db.db_factory import get_db_client
 from services import run_checkpoint_service as rcs
+from services.analysis_failure_service import record_failed_analysis
 from services.universe_service import UniverseService
 from utils.logger import logger
 
@@ -690,6 +691,15 @@ class JobQueueService:
                 logger.info("Job %s cancelled %s %s", job_id[:8], job_type, ticker)
                 return
             logger.error("Job %s failed %s %s: %s", job_id[:8], job_type, ticker, exc)
+            report_type = "deep" if job_type == JOB_DEEP else "core"
+            try:
+                record_failed_analysis(ticker, str(exc), report_type=report_type)
+            except Exception as persist_exc:
+                logger.error(
+                    "Failed to record analysis failure for %s: %s",
+                    ticker,
+                    persist_exc,
+                )
             self._finish(job_id, "failed", error=str(exc), message=str(exc))
 
     def _run_core(self, job_id: str, ticker: str) -> dict[str, Any]:

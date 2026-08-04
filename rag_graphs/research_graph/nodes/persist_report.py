@@ -19,14 +19,18 @@ def persist_report(state: ResearchState) -> Dict[str, Any]:
     if kronos_data.get("forecast"):
         sections = dict(sections)
         sections["_kronos_data"] = kronos_data
+    decision_ok = state.get("decision_ok", True)
+    error_message = state.get("error_message")
     rating_dict = {
-        "rating": state.get("rating", "HOLD"),
-        "score": state.get("score", 0),
+        "rating": state.get("rating"),
+        "score": state.get("score"),
         "reasoning": state.get("reasoning", ""),
         "key_drivers": state.get("key_drivers", []),
         "supporting_headlines": state.get("supporting_headlines", []),
         "posture": state.get("posture", ""),
         "calibration_note": state.get("calibration_note", ""),
+        "decision_ok": bool(decision_ok),
+        "error": error_message,
     }
 
     report_id = state.get("report_id") or 0
@@ -61,6 +65,8 @@ def persist_report(state: ResearchState) -> Dict[str, Any]:
             "price_summary": {"live_price": state.get("live_price"), "source": "research_report"},
             "model": state.get("model"),
             "report_type": report_type,
+            "decision_ok": bool(decision_ok),
+            "error_message": error_message,
         })
     except Exception as exc:
         logger.error(f"Failed to persist report for {ticker}: {exc}")

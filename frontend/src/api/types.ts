@@ -13,9 +13,9 @@ export type ReportType = 'core' | 'deep';
 export interface StockRating {
   id: number;
   ticker: string;
-  rating: Rating;
+  rating: Rating | null;
   /** Overall AI score: −100 strong sell … +100 strong buy */
-  score: number;
+  score: number | null;
   reasoning: string;
   key_drivers: string[];
   supporting_headlines: { headline: string }[];
@@ -25,6 +25,11 @@ export interface StockRating {
   source?: string;
   /** Present when the rating came from a core/deep research report. */
   report_type?: ReportType | null;
+  analysis_failed?: boolean;
+  analysis_error?: string | null;
+  failed_at?: string | null;
+  decision_ok?: boolean;
+  error_message?: string | null;
 }
 
 export interface Holding {
@@ -109,6 +114,9 @@ export interface WatchlistItem {
   rating?: Rating | null;
   score?: number | null;
   report_type?: ReportType | null;
+  analysis_failed?: boolean;
+  analysis_error?: string | null;
+  failed_at?: string | null;
   latest_price?: number | null;
   price_date?: string | null;
   description?: string | null;
@@ -139,13 +147,15 @@ export interface ResearchReport {
   report_type: 'core' | 'deep';
   sections: Record<string, string>;
   rating: {
-    rating: Rating;
-    score: number;
+    rating: Rating | null;
+    score: number | null;
     reasoning: string;
     key_drivers: string[];
     supporting_headlines: { headline: string }[];
     posture?: string;
     calibration_note?: string;
+    decision_ok?: boolean;
+    error?: string | null;
   } | null;
   factor_scores: Record<string, number> | null;
   entry_levels: {
@@ -157,6 +167,13 @@ export interface ResearchReport {
   live_price: number | null;
   model: string | null;
   created_at: string;
+}
+
+export interface ResearchReportEnvelope {
+  report: ResearchReport | null;
+  analysis_failed: boolean;
+  analysis_error: string | null;
+  failed_at: string | null;
 }
 
 export interface ReportTask {
@@ -177,6 +194,9 @@ export interface ReportHistoryItem {
   created_at: string;
   rating?: Rating | string | null;
   score?: number | null;
+  decision_ok?: boolean;
+  analysis_failed?: boolean;
+  analysis_error?: string | null;
 }
 
 export interface ForecastPoint {
