@@ -6,17 +6,13 @@ import { CompactTable } from './CompactTable';
 import { LoadingState } from './LoadingSpinner';
 import { Panel } from './Panel';
 import { RatingBadge } from './RatingBadge';
-import { ScoreMeter } from './ScoreMeter';
 
-function fmtDate(iso: string) {
+function fmtShortDate(iso: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString(undefined, {
+  return d.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
   });
 }
 
@@ -78,7 +74,7 @@ export function RecentReportsPanel({ ticker }: { ticker: string }) {
   const items = historyQ.data?.items ?? [];
 
   return (
-    <Panel title="Recent reports" subtitle="Newest first · download any run as PDF" dense>
+    <Panel title="Recent reports" subtitle="Newest first" dense>
       {historyQ.isLoading ? (
         <LoadingState label="Loading reports…" compact minHeight="6rem" />
       ) : historyQ.isError ? (
@@ -93,24 +89,20 @@ export function RecentReportsPanel({ ticker }: { ticker: string }) {
         <div className="recent-reports">
           <CompactTable
             headers={['Date', 'Score', 'Rating', 'Type', 'Download']}
-            centerCols={[4]}
+            centerCols={[1, 4]}
             caption={`Recent research reports for ${t}`}
           >
             {items.map((item) => (
               <tr key={item.id}>
-                <td className="font-mono text-[12px] whitespace-nowrap">
-                  {fmtDate(item.created_at)}
+                <td className="font-mono text-[11px] whitespace-nowrap">
+                  {fmtShortDate(item.created_at)}
                 </td>
-                <td>
-                  {item.score != null ? (
-                    <ScoreMeter
-                      value={item.score}
-                      size="sm"
-                      reportType={item.report_type}
-                    />
-                  ) : (
-                    <span className="text-[var(--color-text-muted)]">—</span>
-                  )}
+                <td className="is-center font-mono text-[11px] tabular-nums">
+                  {item.score != null
+                    ? item.score > 0
+                      ? `+${item.score}`
+                      : item.score
+                    : '—'}
                 </td>
                 <td>
                   {item.rating ? (
@@ -119,7 +111,7 @@ export function RecentReportsPanel({ ticker }: { ticker: string }) {
                     <span className="text-[var(--color-text-muted)]">—</span>
                   )}
                 </td>
-                <td className="font-mono text-[12px] uppercase text-[var(--color-text-secondary)]">
+                <td className="font-mono text-[11px] uppercase text-[var(--color-text-secondary)]">
                   {typeLabel(item.report_type)}
                 </td>
                 <td className="is-center">
