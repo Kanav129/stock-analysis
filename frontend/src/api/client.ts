@@ -252,5 +252,43 @@ export const api = {
   getTaskStatus: (taskId: string) => request<import('./types').ReportTask>(`/research/task/${taskId}`),
   getActiveReportTask: (ticker: string) =>
     request<{ task: import('./types').ReportTask | null }>(`/research/${ticker}/active`),
-  getReportHistory: (ticker: string) => request<{ ticker: string; items: import('./types').ReportHistoryItem[] }>(`/research/${ticker}/history`),
+  getReportHistory: (ticker: string) =>
+    request<{ ticker: string; items: import('./types').ReportHistoryItem[] }>(
+      `/research/${ticker}/history`,
+    ),
+  downloadReportPdf: async (ticker: string, reportId: number) => {
+    const headers: Record<string, string> = {};
+    const token = getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${BASE}/research/${ticker}/reports/${reportId}/pdf`, {
+      headers,
+    });
+    if (res.status === 401) {
+      clearAuthToken();
+      if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+        window.location.assign('/login');
+      }
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(formatApiError(err, `${res.status} ${res.statusText}`));
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = /filename="([^"]+)"/i.exec(cd);
+    const filename = match?.[1] || `${ticker.toUpperCase()}_report_${reportId}.pdf`;
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  },
 };

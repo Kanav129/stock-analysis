@@ -18,6 +18,7 @@ import {
   chartRangeHint,
   type ChartRangeId,
 } from '../components/ChartRangeToggle';
+import { RecentReportsPanel } from '../components/RecentReportsPanel';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
 
 const PriceChart = lazy(() =>
@@ -231,6 +232,7 @@ export function StockDetailPage() {
       qc.invalidateQueries({ queryKey: ['ratings', t] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
       qc.invalidateQueries({ queryKey: ['report', t] });
+      qc.invalidateQueries({ queryKey: ['report-history', t] });
       reportQuery.refetch();
     }
     if (taskStatus?.status === 'failed' || taskStatus?.status === 'cancelled') {
@@ -621,6 +623,8 @@ export function StockDetailPage() {
           </Panel>
         </div>
       </div>
+
+      <RecentReportsPanel ticker={t} />
     </div>
   );
 }

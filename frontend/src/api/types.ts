@@ -175,6 +175,8 @@ export interface ReportHistoryItem {
   ticker: string;
   report_type: 'core' | 'deep';
   created_at: string;
+  rating?: Rating | string | null;
+  score?: number | null;
 }
 
 export interface ForecastPoint {

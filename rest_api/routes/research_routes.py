@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from services.job_queue_service import JOB_CORE, JOB_DEEP, job_queue_service
+from services.report_pdf_service import build_report_pdf
 from services.report_service import ReportService, resolve_report_type_filter
 from utils.logger import logger
 
@@ -140,7 +142,27 @@ async def get_report(ticker: str, type: str = "latest"):
 
 @router.get("/{ticker}/history")
 async def get_report_history(ticker: str):
-    """Get all report timestamps for a ticker."""
+    """Get report history for a ticker (newest first), including rating/score."""
     svc = ReportService()
     items = svc.get_report_history(ticker.upper())
     return {"ticker": ticker.upper(), "items": items}
+
+
+@router.get("/{ticker}/reports/{report_id}/pdf")
+async def download_report_pdf(ticker: str, report_id: int):
+    """Download one saved report as a PDF attachment."""
+    svc = ReportService()
+    report = svc.get_report_by_id(ticker.upper(), report_id)
+    if not report:
+        raise HTTPException(404, detail=f"Report {report_id} not found for {ticker}")
+    try:
+        pdf_bytes = build_report_pdf(report)
+    except Exception as exc:
+        logger.error("PDF build failed for %s report %s: %s", ticker, report_id, exc)
+        raise HTTPException(500, detail="Failed to build PDF") from exc
+    filename = f"{ticker.upper()}_{report.get('report_type', 'report')}_{report_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
