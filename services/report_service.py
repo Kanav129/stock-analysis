@@ -139,14 +139,52 @@ class ReportService:
             )
         logger.info(f"Updated rating on report {report_id}")
 
-    def get_report_history(self, ticker: str) -> list[dict[str, Any]]:
-        """List all report timestamps for a ticker."""
+    def get_report_by_id(self, ticker: str, report_id: int) -> Optional[dict[str, Any]]:
+        """Return one report scoped to ticker, or None."""
         rows, cols = self._db.fetch_query(
-            "SELECT id, ticker, report_type, created_at "
-            "FROM stock_reports WHERE ticker=%s ORDER BY created_at DESC",
+            "SELECT id, ticker, report_type, sections, rating, factor_scores, "
+            "entry_levels, live_price, model, created_at "
+            "FROM stock_reports "
+            "WHERE id=%s AND ticker=%s "
+            "LIMIT 1",
+            (int(report_id), ticker.upper()),
+        )
+        if not rows:
+            return None
+        return self._row_to_dict(rows[0], cols)
+
+    def get_report_history(self, ticker: str) -> list[dict[str, Any]]:
+        """List reports for a ticker newest-first, with rating/score for the desk tile."""
+        rows, cols = self._db.fetch_query(
+            """
+            SELECT
+                id,
+                ticker,
+                report_type,
+                created_at,
+                rating->>'rating' AS rating,
+                rating->>'score' AS score
+            FROM stock_reports
+            WHERE ticker=%s
+            ORDER BY created_at DESC
+            """,
             (ticker.upper(),),
         )
-        return [self._row_to_dict(r, cols) for r in rows]
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = self._row_to_dict(row, cols)
+            raw_score = item.get("score")
+            if raw_score is None or raw_score == "":
+                item["score"] = None
+            else:
+                try:
+                    item["score"] = int(float(raw_score))
+                except (TypeError, ValueError):
+                    item["score"] = None
+            if not item.get("rating"):
+                item["rating"] = None
+            items.append(item)
+        return items
 
     @staticmethod
     def _row_to_dict(row: tuple, cols: list[str]) -> dict[str, Any]:
