@@ -228,6 +228,8 @@ export const api = {
     request<{
       skipped: boolean;
       reason?: string;
+      rate_limited?: boolean;
+      pause_until?: string;
       results: Record<string, { upserted?: number; error?: string }>;
     }>('/stock/prices/live-refresh', {
       method: 'POST',

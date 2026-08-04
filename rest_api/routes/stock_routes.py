@@ -4,6 +4,7 @@ from db.db_factory import get_db_client
 from rag_graphs.stock_data_rag_graph.graph.graph import app as stock_data_graph
 from rest_api.schemas import LivePriceRefreshRequest
 from scraper.stock_data_scraper import StockDataScraper
+from services.live_refresh_service import is_yahoo_rate_limit, live_refresh_service
 from services.quotes_service import QuotesService
 from services.sync_service import sync_service
 from utils.logger import logger
@@ -51,14 +52,43 @@ def live_price_refresh(body: LivePriceRefreshRequest):
     if sync_service.is_running:
         return {"skipped": True, "reason": "sync_running", "results": {}}
 
+    pause_until = live_refresh_service.pause_until_iso()
+    if pause_until is not None:
+        logger.info("live-refresh paused until %s (Yahoo rate limit)", pause_until)
+        return {
+            "skipped": True,
+            "reason": "rate_limited",
+            "pause_until": pause_until,
+            "results": {},
+        }
+
+    if not live_refresh_service.try_begin():
+        return {"skipped": True, "reason": "refresh_in_progress", "results": {}}
+
     scraper = StockDataScraper()
     results: dict[str, object] = {}
-    for symbol in symbols:
-        try:
-            results[symbol] = {"upserted": scraper.refresh_live_1m(symbol)}
-        except Exception as exc:  # noqa: BLE001 — keep other tickers going
-            logger.warning(f"live-refresh {symbol} failed: {exc}")
-            results[symbol] = {"error": str(exc)}
+    try:
+        for symbol in symbols:
+            try:
+                results[symbol] = {"upserted": scraper.refresh_live_1m(symbol)}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"live-refresh {symbol} failed: {exc}")
+                results[symbol] = {"error": str(exc)}
+                if is_yahoo_rate_limit(exc):
+                    pause_until = live_refresh_service.record_rate_limit()
+                    logger.warning(
+                        "live-refresh paused until %s after Yahoo rate limit on %s",
+                        pause_until,
+                        symbol,
+                    )
+                    return {
+                        "skipped": False,
+                        "rate_limited": True,
+                        "pause_until": pause_until,
+                        "results": results,
+                    }
+    finally:
+        live_refresh_service.end()
 
     return {"skipped": False, "results": results}
 

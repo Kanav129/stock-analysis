@@ -26,6 +26,7 @@ type Registration = {
 type LivePriceContextValue = {
   lastLiveAt: number | null;
   nextRefreshAt: number | null;
+  pausedUntil: number | null;
   isRefreshing: boolean;
   register: (id: string, reg: Registration) => void;
   unregister: (id: string) => void;
@@ -66,6 +67,7 @@ export function LivePriceProvider({ children }: { children: ReactNode }) {
   const [regs, setRegs] = useState<Map<string, Registration>>(() => new Map());
   const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
   const [nextRefreshAt, setNextRefreshAt] = useState<number | null>(null);
+  const [pausedUntil, setPausedUntil] = useState<number | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const register = useCallback((id: string, reg: Registration) => {
@@ -91,6 +93,16 @@ export function LivePriceProvider({ children }: { children: ReactNode }) {
 
   const lastRunRef = useRef(0);
   const readyAtRef = useRef(0);
+  const pausedUntilRef = useRef(0);
+
+  const applyPause = useCallback((isoUntil: string | undefined) => {
+    if (!isoUntil) return;
+    const until = new Date(isoUntil).getTime();
+    if (!Number.isFinite(until)) return;
+    pausedUntilRef.current = until;
+    setPausedUntil(until);
+    setNextRefreshAt(until);
+  }, []);
 
   useEffect(() => {
     if (!listKey) return;
@@ -103,6 +115,7 @@ export function LivePriceProvider({ children }: { children: ReactNode }) {
     const run = async (force: boolean) => {
       if (cancelled) return;
       if (Date.now() < readyAtRef.current) return;
+      if (Date.now() < pausedUntilRef.current) return;
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
         return;
       }
@@ -117,13 +130,26 @@ export function LivePriceProvider({ children }: { children: ReactNode }) {
 
       try {
         const res = await api.livePriceRefresh(symbols);
-        if (cancelled || res.skipped) return;
+        if (cancelled) return;
+
+        if (res.skipped && res.reason === 'rate_limited') {
+          applyPause(res.pause_until);
+          return;
+        }
+        if (res.rate_limited) {
+          applyPause(res.pause_until);
+          return;
+        }
+        if (res.skipped) return;
+
         await Promise.all([
           qc.invalidateQueries({ queryKey: ['quotes'] }),
           qc.invalidateQueries({ queryKey: ['chart'] }),
         ]);
         const at = Date.now();
         setLastLiveAt(at);
+        pausedUntilRef.current = 0;
+        setPausedUntil(null);
         setNextRefreshAt(at + LIVE_REFRESH_INTERVAL_MS);
       } catch {
         setNextRefreshAt(lastRunRef.current + LIVE_REFRESH_INTERVAL_MS);
@@ -138,7 +164,14 @@ export function LivePriceProvider({ children }: { children: ReactNode }) {
     } else {
       void run(true);
     }
-    const id = window.setInterval(() => void run(false), GATE_CHECK_MS);
+    const id = window.setInterval(() => {
+      if (pausedUntilRef.current > 0 && Date.now() >= pausedUntilRef.current) {
+        pausedUntilRef.current = 0;
+        setPausedUntil(null);
+        setNextRefreshAt(Date.now() + LIVE_REFRESH_INTERVAL_MS);
+      }
+      void run(false);
+    }, GATE_CHECK_MS);
     const onVis = () => {
       if (document.visibilityState === 'visible') void run(false);
     };
@@ -150,11 +183,11 @@ export function LivePriceProvider({ children }: { children: ReactNode }) {
       window.clearInterval(id);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [listKey, qc, deferMs]);
+  }, [listKey, qc, deferMs, applyPause]);
 
   const value = useMemo(
-    () => ({ lastLiveAt, nextRefreshAt, isRefreshing, register, unregister }),
-    [lastLiveAt, nextRefreshAt, isRefreshing, register, unregister],
+    () => ({ lastLiveAt, nextRefreshAt, pausedUntil, isRefreshing, register, unregister }),
+    [lastLiveAt, nextRefreshAt, pausedUntil, isRefreshing, register, unregister],
   );
 
   return <LivePriceContext.Provider value={value}>{children}</LivePriceContext.Provider>;
