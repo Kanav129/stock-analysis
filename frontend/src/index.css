@@ -336,19 +336,7 @@ body {
 }
 
 .recent-reports .compact-table {
-  min-width: 0;
-  font-size: 11px;
-}
-
-.recent-reports .compact-table th,
-.recent-reports .compact-table td {
-  padding: 5px 4px;
-}
-
-.recent-reports .rating-badge {
-  min-width: 0;
-  padding: 2px 5px;
-  font-size: 9px;
+  min-width: 520px;
 }
 
 .recent-reports__download {
@@ -359,9 +347,9 @@ body {
 }
 
 .recent-reports__pdf-btn {
-  min-width: 2.75rem;
-  padding: 2px 6px;
-  font-size: 10px;
+  min-width: 3rem;
+  padding: 3px 8px;
+  font-size: 11px;
 }
 
 .recent-reports__err {

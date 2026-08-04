@@ -621,10 +621,10 @@ export function StockDetailPage() {
               </div>
             )}
           </Panel>
-
-          <RecentReportsPanel ticker={t} />
         </div>
       </div>
+
+      <RecentReportsPanel ticker={t} />
     </div>
   );
 }
