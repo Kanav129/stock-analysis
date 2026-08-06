@@ -76,13 +76,31 @@ export function DashboardPage() {
     queryFn: api.getSyncStatus,
     staleTime: 5_000,
   });
+  const jobsQ = useQuery({
+    queryKey: ['jobs'],
+    queryFn: api.getJobs,
+    staleTime: 5_000,
+  });
+  const analysisQ = useQuery({
+    queryKey: ['analysis-status'],
+    queryFn: api.getAnalysisStatus,
+    staleTime: 5_000,
+  });
   const syncing = Boolean(syncQ.data?.running) || syncQ.data?.status === 'running';
+  const deskBusy =
+    syncing ||
+    Boolean(analysisQ.data?.running) ||
+    analysisQ.data?.status === 'running' ||
+    analysisQ.data?.status === 'pending' ||
+    Boolean(
+      jobsQ.data?.jobs?.some((j) => j.status === 'queued' || j.status === 'running'),
+    );
 
   // Critical path — paint from session cache immediately, then refresh in background.
   const holdingsQ = useQuery({
     queryKey: ['holdings'],
     queryFn: api.getHoldings,
-    refetchInterval: syncing ? false : DESK_STALE_MS,
+    refetchInterval: deskBusy ? false : DESK_STALE_MS,
     staleTime: DESK_STALE_MS,
     placeholderData: keepPrevious,
     initialData: sessionCache?.holdings as Awaited<ReturnType<typeof api.getHoldings>> | undefined,
@@ -110,7 +128,7 @@ export function DashboardPage() {
     queryKey: ['ratings', 'desk', deskTickerKey],
     queryFn: () => api.getRatings(deskTickers),
     enabled: deskTickers.length > 0,
-    refetchInterval: syncing ? false : DESK_STALE_MS,
+    refetchInterval: deskBusy ? false : DESK_STALE_MS,
     staleTime: DESK_STALE_MS,
     placeholderData: keepPrevious,
     initialData:
@@ -126,18 +144,12 @@ export function DashboardPage() {
   const recentRatingsQ = useQuery({
     queryKey: ['ratings', 'recent', RECENT_ANALYSIS_CAP],
     queryFn: () => api.getRecentRatings(RECENT_ANALYSIS_CAP),
-    refetchInterval: syncing ? false : DESK_STALE_MS,
+    refetchInterval: deskBusy ? false : DESK_STALE_MS,
     staleTime: DESK_STALE_MS,
     // Recover after local API restarts (Vite returns 502 while uvicorn is down).
     retry: 3,
     retryDelay: (n) => Math.min(1000 * 2 ** n, 8000),
     placeholderData: keepPrevious,
-  });
-
-  const analysisQ = useQuery({
-    queryKey: ['analysis-status'],
-    queryFn: api.getAnalysisStatus,
-    staleTime: 5_000,
   });
 
   const wasRunning = useRef(false);
@@ -210,7 +222,7 @@ export function DashboardPage() {
     queryKey: ['quotes', 'market', MARKET_TICKERS.join(',')],
     queryFn: () => api.getQuotes(MARKET_TICKERS, MARKET_SPARK_DAYS),
     staleTime: DESK_STALE_MS,
-    refetchInterval: syncing ? false : DESK_STALE_MS,
+    refetchInterval: deskBusy ? false : DESK_STALE_MS,
     placeholderData: keepPrevious,
     initialData: sessionCache?.marketQuotes as
       | { quotes: Record<string, StockQuote> }
@@ -223,7 +235,7 @@ export function DashboardPage() {
     queryFn: () => api.getQuotes(heatQuoteTickers, HEAT_SPARK_DAYS),
     enabled: heatQuoteTickers.length > 0,
     staleTime: DESK_STALE_MS,
-    refetchInterval: syncing ? false : DESK_STALE_MS,
+    refetchInterval: deskBusy ? false : DESK_STALE_MS,
     placeholderData: keepPrevious,
     initialData:
       sessionCache?.heatQuoteKey === heatQuoteKey
@@ -243,7 +255,7 @@ export function DashboardPage() {
       Boolean(holdingsQ.data) &&
       (heatQuoteTickers.length === 0 || heatQuotesQ.isSuccess),
     staleTime: DESK_STALE_MS,
-    refetchInterval: syncing ? false : DESK_STALE_MS,
+    refetchInterval: deskBusy ? false : DESK_STALE_MS,
     placeholderData: keepPrevious,
     initialData:
       sessionCache?.holdingsRestQuoteKey === holdingsRestQuoteKey

@@ -159,6 +159,12 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 | `VITE_API_BASE_URL` | Vercel | Render API origin for the SPA |
 | `PORT` | Render | Injected automatically |
 | `AUTO_PIPELINE_ENABLED` | Render | Prefer `false` on free tier |
+| `JOB_QUEUE_CLAIM_DELAY_SECONDS` | Render (`45`) / local (`0`) | Seconds a job must sit queued before this worker may claim it (local preferred) |
+| `JOB_LEASE_SECONDS` / `JOB_HEARTBEAT_SECONDS` | Both | Job ownership lease TTL (60) and renew interval (30) |
+| `JOB_RECLAIM_INTERVAL_SECONDS` | Both | Idle reclaim cadence for expired leases (default 20) |
+| `SYNC_MAX_CONCURRENT` | Render (`1`) / local | Parallel tickers during news/price sync |
+| `JOB_MAX_CONCURRENT` | Render (`1`) / local | Parallel LLM analysis jobs |
+| `JOB_WORKER_ID` | Optional | Stable worker identity; default `{hostname}-{pid}` |
 | `KRONOS_ENABLED` | Render | `false` on free/Starter (512 MB); `true` locally / Standard+ |
 | `SYNC_INTERVAL` | Render | Seconds between in-process syncs (default 86400) |
 | `ANALYSIS_INTERVAL` | Render | Seconds between in-process analyses (default 604800) |

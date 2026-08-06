@@ -1,6 +1,7 @@
 """Unit tests for JobQueueService (mocked DB)."""
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from services.job_queue_service import (
     JOB_CORE,
     JOB_DEEP,
     JobQueueService,
+    OwnershipLostError,
+    _row_to_job,
 )
 
 
@@ -20,19 +23,8 @@ def _reset_singleton():
     JobQueueService._instance = None
 
 
-def _svc_with_db(db: MagicMock) -> JobQueueService:
-    with patch("services.job_queue_service.get_db_client", return_value=db):
-        with patch("services.job_queue_service.UniverseService") as uni:
-            uni.return_value.get_tickers.return_value = ["AAPL", "MSFT"]
-            svc = JobQueueService()
-            svc._started = True  # skip worker start
-            return svc
-
-
-def test_enqueue_dedupes_active_job():
-    db = MagicMock()
-    existing_id = str(uuid4())
-    cols = [
+def _job_cols() -> list[str]:
+    return [
         "id",
         "job_type",
         "ticker",
@@ -41,25 +33,48 @@ def test_enqueue_dedupes_active_job():
         "progress",
         "result",
         "error",
+        "worker_id",
+        "lease_until",
         "created_at",
         "started_at",
         "finished_at",
         "updated_at",
     ]
-    row = (
-        existing_id,
-        JOB_DEEP,
-        "AAPL",
-        "queued",
-        False,
+
+
+def _job_row(
+    job_id: str,
+    *,
+    job_type: str = JOB_CORE,
+    ticker: str = "AAPL",
+    status: str = "queued",
+    cancel_requested: bool = False,
+    worker_id: str | None = None,
+    lease_until=None,
+):
+    return (
+        job_id,
+        job_type,
+        ticker,
+        status,
+        cancel_requested,
         {},
         {},
         None,
+        worker_id,
+        lease_until,
         None,
         None,
         None,
         None,
     )
+
+
+def test_enqueue_dedupes_active_job():
+    db = MagicMock()
+    existing_id = str(uuid4())
+    cols = _job_cols()
+    row = _job_row(existing_id, job_type=JOB_DEEP, ticker="AAPL", status="queued")
     # find_active then limits()
     db.fetch_query.side_effect = [
         ([row], cols),
@@ -82,48 +97,9 @@ def test_enqueue_dedupes_active_job():
 def test_cancel_queued_marks_cancelled():
     db = MagicMock()
     job_id = str(uuid4())
-    cols = [
-        "id",
-        "job_type",
-        "ticker",
-        "status",
-        "cancel_requested",
-        "progress",
-        "result",
-        "error",
-        "created_at",
-        "started_at",
-        "finished_at",
-        "updated_at",
-    ]
-    queued = (
-        job_id,
-        JOB_CORE,
-        "MSFT",
-        "queued",
-        False,
-        {},
-        {},
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
-    cancelled = (
-        job_id,
-        JOB_CORE,
-        "MSFT",
-        "cancelled",
-        False,
-        {},
-        {},
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    cols = _job_cols()
+    queued = _job_row(job_id, status="queued", ticker="MSFT")
+    cancelled = _job_row(job_id, status="cancelled", ticker="MSFT")
     db.fetch_query.side_effect = [
         ([queued], cols),
         ([cancelled], cols),
@@ -143,47 +119,10 @@ def test_cancel_queued_marks_cancelled():
 def test_cancel_running_sets_flag():
     db = MagicMock()
     job_id = str(uuid4())
-    cols = [
-        "id",
-        "job_type",
-        "ticker",
-        "status",
-        "cancel_requested",
-        "progress",
-        "result",
-        "error",
-        "created_at",
-        "started_at",
-        "finished_at",
-        "updated_at",
-    ]
-    running = (
-        job_id,
-        JOB_CORE,
-        "GOOGL",
-        "running",
-        False,
-        {},
-        {},
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
-    flagged = (
-        job_id,
-        JOB_CORE,
-        "GOOGL",
-        "running",
-        True,
-        {},
-        {},
-        None,
-        None,
-        None,
-        None,
-        None,
+    cols = _job_cols()
+    running = _job_row(job_id, status="running", ticker="GOOGL")
+    flagged = _job_row(
+        job_id, status="running", ticker="GOOGL", cancel_requested=True
     )
     db.fetch_query.side_effect = [
         ([running], cols),
@@ -202,17 +141,51 @@ def test_cancel_running_sets_flag():
     assert "cancel_requested = TRUE" in sql
 
 
-def test_heal_requeues_running_without_cancel():
+def test_reclaim_only_expired_leases():
+    db = MagicMock()
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc._reclaim_expired_jobs()
+
+    assert db.execute_query.call_count >= 2
+    sqls = " ".join(c.args[0] for c in db.execute_query.call_args_list)
+    assert "lease_until IS NULL OR lease_until < NOW()" in sqls
+    assert "status = 'queued'" in sqls
+    assert "cancel_requested = TRUE" in sqls or "cancelled" in sqls
+    # Must not blindly requeue all running jobs
+    assert "WHERE status = 'running' AND cancel_requested = FALSE\n" not in sqls or (
+        "lease_until" in sqls
+    )
+
+
+def test_maybe_reclaim_respects_interval():
+    db = MagicMock()
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            with patch(
+                "services.job_queue_service._reclaim_interval_seconds",
+                return_value=20,
+            ):
+                svc = JobQueueService()
+                svc._last_reclaim_at = time.monotonic()
+                with patch.object(svc, "_reclaim_expired_jobs") as reclaim:
+                    svc._maybe_reclaim()
+                    reclaim.assert_not_called()
+                    svc._last_reclaim_at = time.monotonic() - 21
+                    svc._maybe_reclaim()
+                    reclaim.assert_called_once()
+
+
+def test_heal_alias_calls_reclaim():
     db = MagicMock()
     with patch("services.job_queue_service.get_db_client", return_value=db):
         with patch("services.job_queue_service.UniverseService"):
             svc = JobQueueService()
             svc._heal_running_jobs()
 
-    assert db.execute_query.call_count >= 2
     sqls = " ".join(c.args[0] for c in db.execute_query.call_args_list)
-    assert "cancel_requested = TRUE" in sqls or "cancelled" in sqls
-    assert "status = 'queued'" in sqls
+    assert "lease_until" in sqls
 
 
 def test_claim_returns_none_when_at_max_concurrent():
@@ -232,13 +205,12 @@ def test_claim_returns_none_when_at_max_concurrent():
                 claimed = svc._claim_next()
 
     assert claimed is None
-    # Should not try to select queued jobs when at capacity
     select_sqls = [c.args[0] for c in cur.execute.call_args_list if c.args]
     assert any("COUNT(*)" in s for s in select_sqls)
     assert not any("FOR UPDATE SKIP LOCKED" in s for s in select_sqls)
 
 
-def test_claim_promotes_queued_when_under_capacity():
+def test_claim_sets_worker_id_and_lease():
     db = MagicMock()
     job_id = str(uuid4())
     cur = MagicMock()
@@ -258,6 +230,8 @@ def test_claim_promotes_queued_when_under_capacity():
         "progress": {},
         "result": {},
         "error": None,
+        "worker_id": "test-worker",
+        "lease_until": "2026-08-06T00:00:00+00:00",
         "created_at": None,
         "started_at": None,
         "finished_at": None,
@@ -267,13 +241,180 @@ def test_claim_promotes_queued_when_under_capacity():
     with patch("services.job_queue_service.get_db_client", return_value=db):
         with patch("services.job_queue_service.UniverseService"):
             with patch("services.job_queue_service._max_concurrent", return_value=1):
-                svc = JobQueueService()
-                svc._started = True
-                with patch.object(svc, "get_job", return_value=job_row):
-                    claimed = svc._claim_next()
+                with patch(
+                    "services.job_queue_service._worker_id",
+                    return_value="test-worker",
+                ):
+                    with patch(
+                        "services.job_queue_service._lease_seconds",
+                        return_value=60,
+                    ):
+                        with patch(
+                            "services.job_queue_service._claim_delay_seconds",
+                            return_value=0,
+                        ):
+                            svc = JobQueueService()
+                            svc._started = True
+                            with patch.object(svc, "get_job", return_value=job_row):
+                                claimed = svc._claim_next()
 
     assert claimed is not None
     assert claimed["id"] == job_id
     sqls = " ".join(c.args[0] for c in cur.execute.call_args_list)
     assert "FOR UPDATE SKIP LOCKED" in sqls
-    assert "status = 'running'" in sqls
+    assert "worker_id = %s" in sqls
+    assert "lease_until = NOW()" in sqls
+    # claim delay param passed as 0
+    claim_select = [
+        c for c in cur.execute.call_args_list if "FOR UPDATE SKIP LOCKED" in c.args[0]
+    ]
+    assert claim_select
+    assert claim_select[0].args[1] == (0,)
+
+
+def test_claim_delay_filter_uses_env_seconds():
+    db = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.side_effect = [(0,), None]  # under capacity, no eligible job
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    db.checkout.return_value.__enter__.return_value = conn
+    db.checkout.return_value.__exit__.return_value = None
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            with patch("services.job_queue_service._max_concurrent", return_value=1):
+                with patch(
+                    "services.job_queue_service._claim_delay_seconds",
+                    return_value=45,
+                ):
+                    svc = JobQueueService()
+                    svc._started = True
+                    claimed = svc._claim_next()
+
+    assert claimed is None
+    claim_select = [
+        c for c in cur.execute.call_args_list if "FOR UPDATE SKIP LOCKED" in c.args[0]
+    ]
+    assert claim_select
+    assert "created_at <= NOW()" in claim_select[0].args[0]
+    assert claim_select[0].args[1] == (45,)
+
+
+def test_row_to_job_includes_lease_fields():
+    cols = _job_cols()
+    row = _job_row(
+        str(uuid4()),
+        status="running",
+        worker_id="local-1",
+        lease_until="2026-08-06T12:00:00+00:00",
+    )
+    job = _row_to_job(row, cols)
+    assert job["worker_id"] == "local-1"
+    assert job["lease_until"] == "2026-08-06T12:00:00+00:00"
+
+
+def test_set_progress_raises_when_ownership_lost():
+    db = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = None  # no RETURNING row
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    db.checkout.return_value.__enter__.return_value = conn
+    db.checkout.return_value.__exit__.return_value = None
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            with patch(
+                "services.job_queue_service._worker_id", return_value="me"
+            ):
+                svc = JobQueueService()
+                svc._started = True
+                with pytest.raises(OwnershipLostError):
+                    svc._set_progress(str(uuid4()), message="x")
+
+
+def test_renew_lease_returns_false_when_lost():
+    db = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = None
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    db.checkout.return_value.__enter__.return_value = conn
+    db.checkout.return_value.__exit__.return_value = None
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            with patch(
+                "services.job_queue_service._worker_id", return_value="me"
+            ):
+                svc = JobQueueService()
+                svc._started = True
+                ok = svc._renew_lease(str(uuid4()))
+
+    assert ok is False
+    sql = cur.execute.call_args.args[0]
+    assert "lease_until = NOW()" in sql
+    assert "worker_id = %s" in sql
+
+
+def test_should_stop_when_worker_mismatch():
+    db = MagicMock()
+    job_id = str(uuid4())
+    db.fetch_query.return_value = (
+        [(False, "other-worker", "running")],
+        ["cancel_requested", "worker_id", "status"],
+    )
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            with patch(
+                "services.job_queue_service._worker_id", return_value="me"
+            ):
+                svc = JobQueueService()
+                svc._started = True
+                assert svc._should_stop(job_id) is True
+
+
+def test_should_stop_false_when_owned_and_running():
+    db = MagicMock()
+    job_id = str(uuid4())
+    db.fetch_query.return_value = (
+        [(False, "me", "running")],
+        ["cancel_requested", "worker_id", "status"],
+    )
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            with patch(
+                "services.job_queue_service._worker_id", return_value="me"
+            ):
+                svc = JobQueueService()
+                svc._started = True
+                assert svc._should_stop(job_id) is False
+
+
+def test_finish_skips_checkpoint_when_ownership_lost():
+    db = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = None
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    db.checkout.return_value.__enter__.return_value = conn
+    db.checkout.return_value.__exit__.return_value = None
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            with patch(
+                "services.job_queue_service._worker_id", return_value="me"
+            ):
+                svc = JobQueueService()
+                svc._started = True
+                with patch.object(svc, "_append_analysis_checkpoint") as append:
+                    svc._finish(
+                        str(uuid4()),
+                        "done",
+                        result={"ticker": "AAPL", "rating": "HOLD"},
+                        message="Done",
+                    )
+                append.assert_not_called()

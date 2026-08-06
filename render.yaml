@@ -17,6 +17,17 @@ services:
     envVars:
       - key: AUTO_PIPELINE_ENABLED
         value: "false"
+      # Prefer local workers when both share the job DB (claim only after grace).
+      - key: JOB_QUEUE_CLAIM_DELAY_SECONDS
+        value: "45"
+      - key: JOB_LEASE_SECONDS
+        value: "60"
+      - key: JOB_HEARTBEAT_SECONDS
+        value: "30"
+      - key: SYNC_MAX_CONCURRENT
+        value: "1"
+      - key: JOB_MAX_CONCURRENT
+        value: "1"
       # PyTorch/Kronos OOM on 512 MB (free/Starter). Enable on Standard+ or local.
       - key: KRONOS_ENABLED
         value: "false"

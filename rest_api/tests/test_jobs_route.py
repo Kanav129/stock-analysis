@@ -58,6 +58,26 @@ def test_enqueue_list_cancel_flow():
             return_value={"running": False, "status": "idle"},
         ),
         patch(
+            "rest_api.routes.jobs_routes.analysis_service.get_status",
+            return_value={
+                "running": False,
+                "status": "idle",
+                "tickers": [],
+                "total": 0,
+                "current_index": 0,
+                "current_ticker": None,
+                "stage": None,
+                "stage_label": None,
+                "completed": [],
+                "errors": [],
+                "percent": 0,
+                "message": "",
+                "started_at": None,
+                "finished_at": None,
+                "last_run": None,
+            },
+        ),
+        patch(
             "rest_api.routes.jobs_routes.job_queue_service.cancel",
             return_value={"ok": True, "job": {**job, "status": "cancelled"}},
         ) as cancel,
@@ -75,6 +95,7 @@ def test_enqueue_list_cancel_flow():
         body = list_resp.json()
         assert body["jobs"][0]["ticker"] == "AAPL"
         assert body["limits"]["max_concurrent"] == 1
+        assert body["analysis"]["status"] == "idle"
 
         cancel_resp = client.post(f"/jobs/{job_id}/cancel")
         assert cancel_resp.status_code == 200

@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS desk_jobs (
     progress JSONB NOT NULL DEFAULT '{}'::jsonb,
     result JSONB NOT NULL DEFAULT '{}'::jsonb,
     error TEXT,
+    worker_id TEXT,
+    lease_until TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
@@ -105,3 +107,5 @@ CREATE INDEX IF NOT EXISTS idx_desk_jobs_status_created
     ON desk_jobs (status, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_desk_jobs_ticker_type_status
     ON desk_jobs (ticker, job_type, status);
+CREATE INDEX IF NOT EXISTS idx_desk_jobs_status_lease
+    ON desk_jobs (status, lease_until);

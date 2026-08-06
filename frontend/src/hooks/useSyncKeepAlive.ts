@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { AnalysisProgress, JobsSnapshot, SyncProgress } from '../api/types';
 import {
@@ -12,73 +12,66 @@ import {
 /** Render free dynos sleep after ~15m without HTTP; keep a heartbeat while long jobs run. */
 const KEEPALIVE_MS = 10 * 60 * 1000;
 
-function isActiveJob(
-  sync?: SyncProgress,
-  analysis?: AnalysisProgress,
-  jobs?: JobsSnapshot,
-): boolean {
+function isDeskBusy(snap?: JobsSnapshot | null): boolean {
+  if (!snap) return false;
+  const sync = snap.sync;
   const syncing = Boolean(sync?.running) || sync?.status === 'running';
+  const analysis = snap.analysis;
   const analyzing =
     Boolean(analysis?.running) ||
     analysis?.status === 'running' ||
     analysis?.status === 'pending';
-  const queued =
-    Boolean(jobs?.jobs?.some((j) => j.status === 'queued' || j.status === 'running')) ||
-    Boolean(jobs?.sync?.running);
+  const queued = Boolean(
+    snap.jobs?.some((j) => j.status === 'queued' || j.status === 'running'),
+  );
   return syncing || analyzing || queued;
 }
 
 /**
- * Sole owner of sync / analysis / jobs refetch intervals for the desk.
- * Other components should useQuery the same keys without refetchInterval.
+ * Sole owner of desk status refetch intervals.
+ * Polls GET /jobs (sync + jobs + analysis) and fans out into shared query keys
+ * so other components subscribe without extra HTTP.
  *
- * - sync: poll while active; slow refresh when idle (cheap in-memory endpoint)
- * - analysis / jobs: poll only while work is active; one fetch on mount when idle
+ * - Busy: poll every POLL_ACTIVE_MS
+ * - Idle: poll every POLL_IDLE_MS
  * - Polling pauses when the tab is hidden
  */
 export function useSyncKeepAlive() {
-  const syncQ = useQuery({
-    queryKey: ['sync-status'],
-    queryFn: api.getSyncStatus,
-    refetchInterval: (q) => {
-      const d = q.state.data as SyncProgress | undefined;
-      const busy = Boolean(d?.running) || d?.status === 'running';
-      return visiblePollInterval(busy ? POLL_ACTIVE_MS : POLL_IDLE_MS);
-    },
-    refetchIntervalInBackground: false,
-    staleTime: POLL_STALE_MS,
-  });
+  const qc = useQueryClient();
 
-  const analysisQ = useQuery({
-    queryKey: ['analysis-status'],
-    queryFn: api.getAnalysisStatus,
-    refetchInterval: (q) => {
-      const d = q.state.data as AnalysisProgress | undefined;
-      const busy =
-        Boolean(d?.running) ||
-        d?.status === 'running' ||
-        d?.status === 'pending';
-      return visiblePollInterval(busy ? POLL_ACTIVE_MS : false);
-    },
-    refetchIntervalInBackground: false,
-    staleTime: 60_000,
-  });
-
-  const jobsQ = useQuery({
+  const deskQ = useQuery({
     queryKey: ['jobs'],
     queryFn: api.getJobs,
     refetchInterval: (q) => {
       const d = q.state.data as JobsSnapshot | undefined;
-      const busy =
-        Boolean(d?.jobs?.some((j) => j.status === 'queued' || j.status === 'running')) ||
-        Boolean(d?.sync?.running);
-      return visiblePollInterval(busy ? POLL_ACTIVE_MS : false);
+      return visiblePollInterval(isDeskBusy(d) ? POLL_ACTIVE_MS : POLL_IDLE_MS);
     },
     refetchIntervalInBackground: false,
     staleTime: POLL_STALE_MS,
   });
 
-  const active = isActiveJob(syncQ.data, analysisQ.data, jobsQ.data);
+  useEffect(() => {
+    const snap = deskQ.data;
+    if (!snap) return;
+    if (snap.sync) {
+      qc.setQueryData(['sync-status'], snap.sync);
+    } else {
+      // Keep subscribers from seeing stale "running" when snapshot omits idle sync
+      const prev = qc.getQueryData<SyncProgress>(['sync-status']);
+      if (prev?.running || prev?.status === 'running') {
+        qc.setQueryData(['sync-status'], {
+          ...prev,
+          running: false,
+          status: prev.status === 'running' ? 'idle' : prev.status,
+        });
+      }
+    }
+    if (snap.analysis) {
+      qc.setQueryData(['analysis-status'], snap.analysis as AnalysisProgress);
+    }
+  }, [deskQ.data, qc]);
+
+  const active = isDeskBusy(deskQ.data);
 
   useEffect(() => {
     if (!active) return;

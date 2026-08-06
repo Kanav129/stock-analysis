@@ -241,6 +241,8 @@ export interface DeskJob {
     score?: number | null;
   };
   error?: string | null;
+  worker_id?: string | null;
+  lease_until?: string | null;
   created_at?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
@@ -255,6 +257,7 @@ export interface JobsSnapshot {
     running: number;
     queued: number;
   };
+  analysis?: AnalysisProgress;
 }
 
 export interface AnalysisProgress {

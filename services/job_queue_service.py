@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import time
 from datetime import datetime, timezone
@@ -46,6 +47,18 @@ CORE_STAGES = [
     "persist",
 ]
 
+_JOB_SELECT_COLS = """
+    id, job_type, ticker, status, cancel_requested,
+    progress, result, error, worker_id, lease_until,
+    created_at, started_at, finished_at, updated_at
+"""
+
+_WORKER_ID: str | None = None
+
+
+class OwnershipLostError(RuntimeError):
+    """Raised when this process no longer owns the desk_jobs row."""
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -67,6 +80,46 @@ def _max_concurrent() -> int:
         return 1
 
 
+def _lease_seconds() -> int:
+    raw = os.getenv("JOB_LEASE_SECONDS", "60")
+    try:
+        return max(5, int(raw))
+    except ValueError:
+        return 60
+
+
+def _heartbeat_seconds() -> int:
+    raw = os.getenv("JOB_HEARTBEAT_SECONDS", "30")
+    try:
+        return max(5, int(raw))
+    except ValueError:
+        return 30
+
+
+def _claim_delay_seconds() -> int:
+    raw = os.getenv("JOB_QUEUE_CLAIM_DELAY_SECONDS", "0")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def _reclaim_interval_seconds() -> int:
+    raw = os.getenv("JOB_RECLAIM_INTERVAL_SECONDS", "20")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 20
+
+
+def _worker_id() -> str:
+    global _WORKER_ID
+    if _WORKER_ID is None:
+        env = (os.getenv("JOB_WORKER_ID") or "").strip()
+        _WORKER_ID = env or f"{socket.gethostname()}-{os.getpid()}"
+    return _WORKER_ID
+
+
 def _row_to_job(row: tuple, cols: list[str]) -> dict[str, Any]:
     data = dict(zip(cols, row))
     progress = data.get("progress") or {}
@@ -84,6 +137,8 @@ def _row_to_job(row: tuple, cols: list[str]) -> dict[str, Any]:
         "progress": progress if isinstance(progress, dict) else {},
         "result": result if isinstance(result, dict) else {},
         "error": data.get("error"),
+        "worker_id": data.get("worker_id"),
+        "lease_until": _iso(data.get("lease_until")),
         "created_at": _iso(data.get("created_at")),
         "started_at": _iso(data.get("started_at")),
         "finished_at": _iso(data.get("finished_at")),
@@ -112,14 +167,16 @@ class JobQueueService:
         self._worker_stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._started = False
+        self._last_reclaim_at = 0.0
         self._initialized = True
 
     def ensure_started(self) -> None:
-        """Heal interrupted rows and start the drain worker (idempotent)."""
+        """Reclaim expired leases and start the drain worker (idempotent)."""
         with self._lock:
             if self._started:
                 return
-            self._heal_running_jobs()
+            self._reclaim_expired_jobs()
+            self._last_reclaim_at = time.monotonic()
             self._worker_stop.clear()
             self._worker = threading.Thread(
                 target=self._worker_loop,
@@ -129,21 +186,42 @@ class JobQueueService:
             self._worker.start()
             self._started = True
             logger.info(
-                "Job queue worker started (max_concurrent=%s)",
+                "Job queue worker started (max_concurrent=%s lease=%ss "
+                "heartbeat=%ss claim_delay=%ss reclaim_interval=%ss worker_id=%s)",
                 _max_concurrent(),
+                _lease_seconds(),
+                _heartbeat_seconds(),
+                _claim_delay_seconds(),
+                _reclaim_interval_seconds(),
+                _worker_id(),
             )
 
     def _heal_running_jobs(self) -> None:
+        """Back-compat alias — expire-only reclaim (does not steal valid leases)."""
+        self._reclaim_expired_jobs()
+
+    def _maybe_reclaim(self) -> None:
+        now = time.monotonic()
+        if now - self._last_reclaim_at < _reclaim_interval_seconds():
+            return
+        self._reclaim_expired_jobs()
+        self._last_reclaim_at = time.monotonic()
+
+    def _reclaim_expired_jobs(self) -> None:
+        """Requeue/cancel only running jobs whose lease has expired (or is NULL)."""
         db = get_db_client()
-        # Soft-cancel in progress → cancelled; others re-queue for resume.
         db.execute_query(
             """
             UPDATE desk_jobs
             SET status = 'cancelled',
                 finished_at = NOW(),
                 updated_at = NOW(),
-                error = COALESCE(error, 'Interrupted on restart (cancel was requested)')
-            WHERE status = 'running' AND cancel_requested = TRUE
+                worker_id = NULL,
+                lease_until = NULL,
+                error = COALESCE(error, 'Interrupted (cancel was requested; lease expired)')
+            WHERE status = 'running'
+              AND cancel_requested = TRUE
+              AND (lease_until IS NULL OR lease_until < NOW())
             """
         )
         db.execute_query(
@@ -152,15 +230,22 @@ class JobQueueService:
             SET status = 'queued',
                 started_at = NULL,
                 updated_at = NOW(),
+                worker_id = NULL,
+                lease_until = NULL,
                 progress = COALESCE(progress, '{}'::jsonb) || '{"healed": true}'::jsonb
-            WHERE status = 'running' AND cancel_requested = FALSE
+            WHERE status = 'running'
+              AND cancel_requested = FALSE
+              AND (lease_until IS NULL OR lease_until < NOW())
             """
         )
         # Legacy interrupted → queued
         db.execute_query(
             """
             UPDATE desk_jobs
-            SET status = 'queued', updated_at = NOW()
+            SET status = 'queued',
+                updated_at = NOW(),
+                worker_id = NULL,
+                lease_until = NULL
             WHERE status = 'interrupted'
             """
         )
@@ -206,10 +291,8 @@ class JobQueueService:
     def list_jobs(self) -> list[dict[str, Any]]:
         db = get_db_client()
         rows, cols = db.fetch_query(
-            """
-            SELECT id, job_type, ticker, status, cancel_requested,
-                   progress, result, error,
-                   created_at, started_at, finished_at, updated_at
+            f"""
+            SELECT {_JOB_SELECT_COLS}
             FROM desk_jobs
             WHERE status IN ('queued', 'running')
                OR (
@@ -231,10 +314,8 @@ class JobQueueService:
     def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         db = get_db_client()
         rows, cols = db.fetch_query(
-            """
-            SELECT id, job_type, ticker, status, cancel_requested,
-                   progress, result, error,
-                   created_at, started_at, finished_at, updated_at
+            f"""
+            SELECT {_JOB_SELECT_COLS}
             FROM desk_jobs WHERE id = %s
             """,
             (job_id,),
@@ -246,10 +327,8 @@ class JobQueueService:
     def find_active(self, ticker: str, job_type: str) -> Optional[dict[str, Any]]:
         db = get_db_client()
         rows, cols = db.fetch_query(
-            """
-            SELECT id, job_type, ticker, status, cancel_requested,
-                   progress, result, error,
-                   created_at, started_at, finished_at, updated_at
+            f"""
+            SELECT {_JOB_SELECT_COLS}
             FROM desk_jobs
             WHERE ticker = %s AND job_type = %s AND status IN ('queued', 'running')
             ORDER BY created_at DESC
@@ -421,6 +500,8 @@ class JobQueueService:
                 SET status = 'cancelled',
                     finished_at = NOW(),
                     updated_at = NOW(),
+                    worker_id = NULL,
+                    lease_until = NULL,
                     progress = COALESCE(progress, '{}'::jsonb) || '{"message": "Cancelled (queued)"}'::jsonb
                 WHERE id = %s AND status = 'queued'
                 """,
@@ -452,6 +533,8 @@ class JobQueueService:
             SET status = 'cancelled',
                 finished_at = NOW(),
                 updated_at = NOW(),
+                worker_id = NULL,
+                lease_until = NULL,
                 progress = COALESCE(progress, '{}'::jsonb) || '{"message": "Cancelled (queued)"}'::jsonb
             WHERE status = 'queued'
             """
@@ -468,26 +551,90 @@ class JobQueueService:
         )
         return {"ok": True, "limits": self.limits(), "jobs": self.list_jobs()}
 
-    def _cancel_requested(self, job_id: str) -> bool:
+    def _should_stop(self, job_id: str) -> bool:
+        """True if cancel requested or this worker no longer owns the job."""
         db = get_db_client()
         rows, _ = db.fetch_query(
-            "SELECT cancel_requested FROM desk_jobs WHERE id = %s",
+            """
+            SELECT cancel_requested, worker_id, status
+            FROM desk_jobs WHERE id = %s
+            """,
             (job_id,),
         )
-        return bool(rows and rows[0][0])
+        if not rows:
+            return True
+        cancel_requested, wid, status = rows[0]
+        if cancel_requested:
+            return True
+        if status != "running":
+            return True
+        if wid != _worker_id():
+            return True
+        return False
+
+    def _cancel_requested(self, job_id: str) -> bool:
+        """Back-compat: treat ownership loss like cancel for stage loops."""
+        return self._should_stop(job_id)
+
+    def _renew_lease(self, job_id: str) -> bool:
+        """Extend lease if we still own the row. Returns False if ownership lost."""
+        db = get_db_client()
+        lease = _lease_seconds()
+        with db.checkout() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    UPDATE desk_jobs
+                    SET lease_until = NOW() + (%s * INTERVAL '1 second'),
+                        updated_at = NOW()
+                    WHERE id = %s
+                      AND worker_id = %s
+                      AND status = 'running'
+                    RETURNING id
+                    """,
+                    (lease, job_id, _worker_id()),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return bool(row)
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cur.close()
 
     def _set_progress(self, job_id: str, **fields: Any) -> None:
         progress = {k: v for k, v in fields.items() if v is not None}
+        lease = _lease_seconds()
         db = get_db_client()
-        db.execute_query(
-            """
-            UPDATE desk_jobs
-            SET progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
-                updated_at = NOW()
-            WHERE id = %s
-            """,
-            (Json(progress), job_id),
-        )
+        with db.checkout() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    UPDATE desk_jobs
+                    SET progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
+                        lease_until = NOW() + (%s * INTERVAL '1 second'),
+                        updated_at = NOW()
+                    WHERE id = %s
+                      AND worker_id = %s
+                      AND status = 'running'
+                    RETURNING id
+                    """,
+                    (Json(progress), lease, job_id, _worker_id()),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                if not row:
+                    raise OwnershipLostError("Job ownership lost")
+            except OwnershipLostError:
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cur.close()
 
     def _finish(
         self,
@@ -501,33 +648,57 @@ class JobQueueService:
         progress = {"message": message, "percent": 100 if status == "done" else None}
         progress = {k: v for k, v in progress.items() if v is not None}
         db = get_db_client()
-        if result is not None:
-            db.execute_query(
-                """
-                UPDATE desk_jobs
-                SET status = %s,
-                    finished_at = NOW(),
-                    updated_at = NOW(),
-                    error = %s,
-                    result = %s,
-                    progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb
-                WHERE id = %s
-                """,
-                (status, error, Json(result), Json(progress), job_id),
+        wid = _worker_id()
+        with db.checkout() as conn:
+            cur = conn.cursor()
+            try:
+                if result is not None:
+                    cur.execute(
+                        """
+                        UPDATE desk_jobs
+                        SET status = %s,
+                            finished_at = NOW(),
+                            updated_at = NOW(),
+                            error = %s,
+                            result = %s,
+                            progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
+                            worker_id = NULL,
+                            lease_until = NULL
+                        WHERE id = %s AND worker_id = %s
+                        RETURNING id
+                        """,
+                        (status, error, Json(result), Json(progress), job_id, wid),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE desk_jobs
+                        SET status = %s,
+                            finished_at = NOW(),
+                            updated_at = NOW(),
+                            error = %s,
+                            progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
+                            worker_id = NULL,
+                            lease_until = NULL
+                        WHERE id = %s AND worker_id = %s
+                        RETURNING id
+                        """,
+                        (status, error, Json(progress), job_id, wid),
+                    )
+                owned = cur.fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cur.close()
+        if not owned:
+            logger.warning(
+                "Job %s finish skipped — ownership lost (status=%s)",
+                job_id[:8],
+                status,
             )
-        else:
-            db.execute_query(
-                """
-                UPDATE desk_jobs
-                SET status = %s,
-                    finished_at = NOW(),
-                    updated_at = NOW(),
-                    error = %s,
-                    progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb
-                WHERE id = %s
-                """,
-                (status, error, Json(progress), job_id),
-            )
+            return
         job = self.get_job(job_id)
         if status == "done" and job and job["job_type"] == JOB_CORE:
             self._append_analysis_checkpoint(job["ticker"], result or {})
@@ -553,7 +724,6 @@ class JobQueueService:
         universe = tickers or [str(t).upper() for t in self.universe.get_tickers()]
         done = {str(c.get("ticker", "")).upper() for c in completed if isinstance(c, dict)}
         # Still running if other core jobs queued/running
-        limits = self.limits()
         active_core = self._count_active_type(JOB_CORE)
         if active_core == 0 and universe and all(t in done for t in universe):
             checkpoint["status"] = "completed"
@@ -577,6 +747,9 @@ class JobQueueService:
     def _claim_next(self) -> Optional[dict[str, Any]]:
         db = get_db_client()
         max_c = _max_concurrent()
+        delay = _claim_delay_seconds()
+        lease = _lease_seconds()
+        wid = _worker_id()
         with db.checkout() as conn:
             cur = conn.cursor()
             try:
@@ -591,10 +764,12 @@ class JobQueueService:
                     """
                     SELECT id FROM desk_jobs
                     WHERE status = 'queued'
+                      AND created_at <= NOW() - (%s * INTERVAL '1 second')
                     ORDER BY created_at ASC
                     LIMIT 1
                     FOR UPDATE SKIP LOCKED
-                    """
+                    """,
+                    (delay,),
                 )
                 row = cur.fetchone()
                 if not row:
@@ -607,12 +782,14 @@ class JobQueueService:
                     SET status = 'running',
                         started_at = NOW(),
                         updated_at = NOW(),
+                        worker_id = %s,
+                        lease_until = NOW() + (%s * INTERVAL '1 second'),
                         progress = COALESCE(progress, '{}'::jsonb)
                           || '{"message": "Starting…", "percent": 0}'::jsonb
                     WHERE id = %s AND status = 'queued'
                     RETURNING id
                     """,
-                    (job_id,),
+                    (wid, lease, job_id),
                 )
                 claimed = cur.fetchone()
                 conn.commit()
@@ -630,6 +807,7 @@ class JobQueueService:
             try:
                 job = self._claim_next()
                 if job is None:
+                    self._maybe_reclaim()
                     time.sleep(0.5)
                     continue
                 # Run in this worker thread (concurrency = number of claim loops
@@ -651,13 +829,48 @@ class JobQueueService:
                 logger.error("Job queue worker error: %s", exc)
                 time.sleep(1.0)
 
+    def _start_heartbeat(self, job_id: str) -> tuple[threading.Event, threading.Thread]:
+        stop = threading.Event()
+
+        def _beat() -> None:
+            while not stop.wait(_heartbeat_seconds()):
+                try:
+                    if not self._renew_lease(job_id):
+                        logger.warning(
+                            "Job %s heartbeat lost ownership",
+                            job_id[:8],
+                        )
+                        return
+                except Exception as exc:
+                    logger.error(
+                        "Job %s heartbeat error: %s",
+                        job_id[:8],
+                        exc,
+                    )
+                    return
+
+        t = threading.Thread(
+            target=_beat,
+            name=f"desk-job-hb-{job_id[:8]}",
+            daemon=True,
+        )
+        t.start()
+        return stop, t
+
     def _execute_job(self, job: dict[str, Any]) -> None:
         job_id = job["id"]
         ticker = job["ticker"]
         job_type = job["job_type"]
-        logger.info("Job %s starting %s %s", job_id[:8], job_type, ticker)
+        logger.info(
+            "Job %s starting %s %s (worker=%s)",
+            job_id[:8],
+            job_type,
+            ticker,
+            _worker_id(),
+        )
+        stop_hb, _hb_thread = self._start_heartbeat(job_id)
         try:
-            if self._cancel_requested(job_id):
+            if self._should_stop(job_id):
                 self._finish(job_id, "cancelled", message="Cancelled before start")
                 return
             if job_type == JOB_CORE:
@@ -669,7 +882,7 @@ class JobQueueService:
             else:
                 raise ValueError(f"Unknown job_type {job_type}")
 
-            if self._cancel_requested(job_id):
+            if self._should_stop(job_id):
                 self._finish(job_id, "cancelled", message="Cancelled", result=result)
                 return
             self._finish(
@@ -685,10 +898,25 @@ class JobQueueService:
                 ticker,
                 (result or {}).get("rating"),
             )
+        except OwnershipLostError:
+            logger.info(
+                "Job %s ownership lost %s %s — aborting local run",
+                job_id[:8],
+                job_type,
+                ticker,
+            )
         except Exception as exc:
-            if self._cancel_requested(job_id) or "cancelled" in str(exc).lower():
+            if self._should_stop(job_id) or "cancelled" in str(exc).lower():
                 self._finish(job_id, "cancelled", message="Cancelled", error=str(exc))
                 logger.info("Job %s cancelled %s %s", job_id[:8], job_type, ticker)
+                return
+            if "ownership lost" in str(exc).lower():
+                logger.info(
+                    "Job %s ownership lost %s %s — aborting local run",
+                    job_id[:8],
+                    job_type,
+                    ticker,
+                )
                 return
             logger.error("Job %s failed %s %s: %s", job_id[:8], job_type, ticker, exc)
             report_type = "deep" if job_type == JOB_DEEP else "core"
@@ -701,6 +929,8 @@ class JobQueueService:
                     persist_exc,
                 )
             self._finish(job_id, "failed", error=str(exc), message=str(exc))
+        finally:
+            stop_hb.set()
 
     def _run_core(self, job_id: str, ticker: str) -> dict[str, Any]:
         from rag_graphs.research_graph.graph import app as research_graph
@@ -713,7 +943,7 @@ class JobQueueService:
             "errors": [],
         }
         for event in research_graph.stream(initial, stream_mode="updates"):
-            if self._cancel_requested(job_id):
+            if self._should_stop(job_id):
                 raise RuntimeError("Job cancelled")
             if not isinstance(event, dict):
                 continue
@@ -750,7 +980,7 @@ class JobQueueService:
         }
         stages_seen = 0
         for event in research_graph.stream(initial, stream_mode="updates"):
-            if self._cancel_requested(job_id):
+            if self._should_stop(job_id):
                 raise RuntimeError("Job cancelled")
             if not isinstance(event, dict):
                 continue
@@ -787,7 +1017,7 @@ class JobQueueService:
             message=f"Rescore {ticker}…",
             percent=40,
         )
-        if self._cancel_requested(job_id):
+        if self._should_stop(job_id):
             raise RuntimeError("Job cancelled")
         result = analysis_service._rescore_ticker(report)
         self._set_progress(

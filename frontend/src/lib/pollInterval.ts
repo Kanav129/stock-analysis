@@ -5,7 +5,7 @@
  */
 
 /** Active sync / jobs / analysis progress. */
-export const POLL_ACTIVE_MS = 2_500;
+export const POLL_ACTIVE_MS = 5_000;
 
 /** Idle desk status refresh. */
 export const POLL_IDLE_MS = 60_000;

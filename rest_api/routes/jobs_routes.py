@@ -12,6 +12,7 @@ from services.job_queue_service import (
     JOB_RESCORE,
     job_queue_service,
 )
+from services.analysis_service import analysis_service
 from services.sync_service import sync_service
 from services.universe_service import UniverseService
 
@@ -28,7 +29,7 @@ class EnqueueJobsRequest(BaseModel):
 
 @router.get("")
 def list_jobs():
-    """Active + recent LLM jobs, optional sync snapshot, concurrency limits."""
+    """Active + recent LLM jobs, sync snapshot, analysis status, concurrency limits."""
     job_queue_service.ensure_started()
     jobs = job_queue_service.list_jobs()
     sync_status = sync_service.get_status()
@@ -50,6 +51,7 @@ def list_jobs():
         "sync": sync_payload,
         "jobs": jobs,
         "limits": job_queue_service.limits(),
+        "analysis": analysis_service.get_status(),
     }
 
 

@@ -15,7 +15,9 @@ intervals. Legacy ``5m`` rows are migrated once then deleted.
 from __future__ import annotations
 
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
@@ -24,6 +26,7 @@ import yfinance as yf
 from dotenv import load_dotenv
 
 from db.postgres_db import PostgresDBClient
+from scraper.concurrency import sync_max_concurrent
 from utils.logger import logger
 
 BAR_1D = "1d"
@@ -597,20 +600,65 @@ class StockDataScraper:
         should_continue: Optional[Callable[[], bool]] = None,
     ) -> None:
         total = len(tickers)
-        for index, ticker in enumerate(tickers, start=1):
-            if should_continue is not None and not should_continue():
-                logger.info("Price scrape stopped early (cancel requested)")
-                return
-            try:
-                logger.info(f"Syncing prices for {ticker} ({index}/{total})...")
+        max_c = sync_max_concurrent()
+        if max_c <= 1:
+            for index, ticker in enumerate(tickers, start=1):
+                if should_continue is not None and not should_continue():
+                    logger.info("Price scrape stopped early (cancel requested)")
+                    return
+                try:
+                    logger.info(f"Syncing prices for {ticker} ({index}/{total})...")
+                    if on_progress:
+                        on_progress(ticker, index, total)
+                    result = self.scrape_ticker(ticker, on_detail=on_detail)
+                    logger.info(f"Price sync done for {ticker}: {result}")
+                    if on_ticker_done:
+                        on_ticker_done(ticker)
+                except Exception as exc:
+                    logger.error(f"Error syncing prices for {ticker}: {exc}")
+            return
+
+        done_count = 0
+        lock = threading.Lock()
+
+        def _one(ticker: str) -> str:
+            logger.info(f"Syncing prices for {ticker}...")
+            result = self.scrape_ticker(ticker, on_detail=on_detail)
+            logger.info(f"Price sync done for {ticker}: {result}")
+            return ticker
+
+        with ThreadPoolExecutor(max_workers=max_c) as pool:
+            futures = {}
+            for ticker in tickers:
+                if should_continue is not None and not should_continue():
+                    logger.info("Price scrape stopped early (cancel requested)")
+                    break
+                futures[pool.submit(_one, ticker)] = ticker
+            for fut in as_completed(futures):
+                if should_continue is not None and not should_continue():
+                    for pending in futures:
+                        pending.cancel()
+                    logger.info("Price scrape stopped early (cancel requested)")
+                    break
+                ticker = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    logger.error(f"Error syncing prices for {ticker}: {exc}")
+                    continue
+                with lock:
+                    done_count += 1
+                    n = done_count
                 if on_progress:
-                    on_progress(ticker, index, total)
-                result = self.scrape_ticker(ticker, on_detail=on_detail)
-                logger.info(f"Price sync done for {ticker}: {result}")
+                    try:
+                        on_progress(ticker, n, total)
+                    except Exception:
+                        pass
                 if on_ticker_done:
-                    on_ticker_done(ticker)
-            except Exception as exc:
-                logger.error(f"Error syncing prices for {ticker}: {exc}")
+                    try:
+                        on_ticker_done(ticker)
+                    except Exception:
+                        pass
 
 
 if __name__ == "__main__":

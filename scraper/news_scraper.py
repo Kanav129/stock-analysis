@@ -1,4 +1,6 @@
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -6,6 +8,7 @@ import yfinance as yf
 from dotenv import load_dotenv
 
 from db.mongo_db import MongoDBClient
+from scraper.concurrency import sync_max_concurrent
 from scraper.generic_scraper import GenericScraper
 from utils.logger import logger
 
@@ -82,26 +85,70 @@ class NewsScraper(GenericScraper):
         should_continue=None,
     ):
         total = len(tickers)
-        for index, ticker in enumerate(tickers, start=1):
-            if should_continue is not None and not should_continue():
-                logger.info("News scrape stopped early (cancel requested)")
-                return
-            logger.info(f"Scraping news for ticker: {ticker} ({index}/{total})")
-            if on_progress:
+        max_c = sync_max_concurrent()
+        if max_c <= 1:
+            for index, ticker in enumerate(tickers, start=1):
+                if should_continue is not None and not should_continue():
+                    logger.info("News scrape stopped early (cancel requested)")
+                    return
+                logger.info(f"Scraping news for ticker: {ticker} ({index}/{total})")
+                if on_progress:
+                    try:
+                        on_progress(ticker, index, total)
+                    except Exception:
+                        pass
                 try:
-                    on_progress(ticker, index, total)
-                except Exception:
-                    pass
-            try:
-                self.scrape_articles(ticker)
-            except Exception as e:
-                logger.error(f"Error while scraping news for {ticker}: {e}")
-                continue
-            if on_ticker_done:
+                    self.scrape_articles(ticker)
+                except Exception as e:
+                    logger.error(f"Error while scraping news for {ticker}: {e}")
+                    continue
+                if on_ticker_done:
+                    try:
+                        on_ticker_done(ticker)
+                    except Exception:
+                        pass
+            return
+
+        done_count = 0
+        lock = threading.Lock()
+
+        def _one(ticker: str) -> str:
+            logger.info(f"Scraping news for ticker: {ticker}")
+            self.scrape_articles(ticker)
+            return ticker
+
+        with ThreadPoolExecutor(max_workers=max_c) as pool:
+            futures = {}
+            for ticker in tickers:
+                if should_continue is not None and not should_continue():
+                    logger.info("News scrape stopped early (cancel requested)")
+                    break
+                futures[pool.submit(_one, ticker)] = ticker
+            for fut in as_completed(futures):
+                if should_continue is not None and not should_continue():
+                    for pending in futures:
+                        pending.cancel()
+                    logger.info("News scrape stopped early (cancel requested)")
+                    break
+                ticker = futures[fut]
                 try:
-                    on_ticker_done(ticker)
-                except Exception:
-                    pass
+                    fut.result()
+                except Exception as e:
+                    logger.error(f"Error while scraping news for {ticker}: {e}")
+                    continue
+                with lock:
+                    done_count += 1
+                    n = done_count
+                if on_progress:
+                    try:
+                        on_progress(ticker, n, total)
+                    except Exception:
+                        pass
+                if on_ticker_done:
+                    try:
+                        on_ticker_done(ticker)
+                    except Exception:
+                        pass
 
 
 if __name__ == "__main__":
