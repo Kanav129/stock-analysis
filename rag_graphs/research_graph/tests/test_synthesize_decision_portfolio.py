@@ -109,7 +109,9 @@ def test_synthesize_decision_retries_primary_then_falls_back(
     out = synthesize_decision(_base_state())  # type: ignore[arg-type]
 
     assert mock_analysis_llm.call_count == 2
-    mock_chat_llm.assert_called_once_with("deepseek/deepseek-v4-flash", 0.25)
+    mock_chat_llm.assert_called_once_with(
+        "deepseek/deepseek-v4-flash", 0.25, enable_thinking=False
+    )
     assert out["rating"] == "BUY"
     assert out["score"] == 42
     assert out["model"] == "deepseek/deepseek-v4-flash"
@@ -179,7 +181,9 @@ def test_synthesize_decision_failure_sets_decision_ok_false_not_hold(
     out = synthesize_decision(_base_state())  # type: ignore[arg-type]
 
     assert mock_analysis_llm.call_count == 2
-    mock_chat_llm.assert_called_once_with("deepseek/deepseek-v4-flash", 0.25)
+    mock_chat_llm.assert_called_once_with(
+        "deepseek/deepseek-v4-flash", 0.25, enable_thinking=False
+    )
     assert out.get("decision_ok") is False
     assert out.get("rating") is None
     assert out.get("score") is None

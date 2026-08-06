@@ -33,7 +33,9 @@ def test_retries_primary_before_fallback(mock_model, mock_fb, mock_analysis, moc
     assert used == "deepseek/deepseek-v4-flash"
     assert calls == ["analysis", "analysis", "research-fb"]
     assert mock_analysis.call_count == 2
-    mock_chat.assert_called_once_with("deepseek/deepseek-v4-flash", 0.25)
+    mock_chat.assert_called_once_with(
+        "deepseek/deepseek-v4-flash", 0.25, enable_thinking=False
+    )
 
 
 @patch("config.llm_config._record_usage")
@@ -92,7 +94,7 @@ def test_research_retries_then_falls_back_to_analysis(
     assert result == "ok"
     assert used == "openai/gpt-4o"
     assert calls == ["research", "research", "analysis-fb"]
-    mock_chat.assert_called_once_with("openai/gpt-4o", 0.2)
+    mock_chat.assert_called_once_with("openai/gpt-4o", 0.2, enable_thinking=None)
 
 
 @patch("config.llm_config._record_usage")
@@ -150,4 +152,6 @@ def test_falls_back_to_env_models_when_cross_role_fails(
     assert used == "deepseek/deepseek-v4-pro"
     assert calls == ["analysis", "analysis", "cross-fb", "env-fb"]
     assert mock_chat.call_args_list[0].args == ("openai/gpt-5.6-luna", 0.25)
+    assert mock_chat.call_args_list[0].kwargs.get("enable_thinking") is False
     assert mock_chat.call_args_list[1].args == ("deepseek/deepseek-v4-pro", 0.25)
+    assert mock_chat.call_args_list[1].kwargs.get("enable_thinking") is False

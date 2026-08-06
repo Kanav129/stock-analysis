@@ -135,22 +135,37 @@ def _llm_base_url() -> str:
     return resolve_llm_base_url()
 
 
-def _chat_llm(model: str, temperature: float) -> ChatOpenAI:
-    return ChatOpenAI(
-        model=model,
-        temperature=temperature,
-        api_key=_llm_api_key(),
-        base_url=_llm_base_url(),
-    )
+def _chat_llm(
+    model: str,
+    temperature: float,
+    *,
+    enable_thinking: bool | None = None,
+) -> ChatOpenAI:
+    """Build a ChatOpenAI client.
+
+    Qwen thinking mode rejects tool_choice=required (used by structured output /
+    function calling). Pass enable_thinking=False for analysis / tool calls.
+    """
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "api_key": _llm_api_key(),
+        "base_url": _llm_base_url(),
+    }
+    if enable_thinking is not None:
+        kwargs["extra_body"] = {"enable_thinking": enable_thinking}
+    return ChatOpenAI(**kwargs)
 
 
 def get_chat_llm(temperature: float = 0) -> ChatOpenAI:
     """General chat model (OPENAI_MODEL) for RAG helpers."""
+    # Graders use with_structured_output → needs tool_choice; disable thinking.
     return ChatOpenAI(
         model=os.getenv("OPENAI_MODEL", DEFAULT_CHAT_MODEL),
         temperature=temperature,
         api_key=_llm_api_key(),
         base_url=_llm_base_url(),
+        extra_body={"enable_thinking": False},
     )
 
 
@@ -164,8 +179,8 @@ def get_embeddings() -> OpenAIEmbeddings:
 
 
 def get_analysis_llm(temperature: float = 0.2) -> ChatOpenAI:
-    """Decision synthesis model (ANALYSIS_MODEL)."""
-    return _chat_llm(resolve_analysis_model(), temperature)
+    """Decision synthesis model (ANALYSIS_MODEL). Thinking off for structured output."""
+    return _chat_llm(resolve_analysis_model(), temperature, enable_thinking=False)
 
 
 def get_research_llm(temperature: float = 0.2) -> ChatOpenAI:
@@ -220,7 +235,14 @@ def call_with_retry_then_fallback(
 
     for fallback_name in _fallback_chain(role, primary_name):
         try:
-            result = call(_chat_llm(fallback_name, temperature))
+            # Analysis uses function calling / structured output → disable thinking.
+            result = call(
+                _chat_llm(
+                    fallback_name,
+                    temperature,
+                    enable_thinking=False if role == "analysis" else None,
+                )
+            )
             logger.info(f"{role} succeeded via fallback model {fallback_name}")
             _record_usage(role, fallback_name, result)
             return result, fallback_name

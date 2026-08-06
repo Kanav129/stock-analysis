@@ -35,7 +35,8 @@ def test_get_analysis_llm_has_no_openrouter_model_list(mock_a, mock_key):
     """Model fallbacks are app-level (retry then fallback), not provider model lists."""
     llm = get_analysis_llm()
     assert llm.model_name == "qwen3.7-max" or llm.model == "qwen3.7-max"
-    assert not getattr(llm, "extra_body", None)
+    # Thinking must be off so Qwen accepts tool_choice=required for structured output.
+    assert getattr(llm, "extra_body", None) == {"enable_thinking": False}
 
 
 @patch("config.llm_config._llm_api_key", return_value="test-key")
@@ -43,6 +44,7 @@ def test_get_analysis_llm_has_no_openrouter_model_list(mock_a, mock_key):
 def test_get_research_llm_has_no_openrouter_model_list(mock_r, mock_key):
     llm = get_research_llm()
     assert llm.model_name == "qwen3.7-flash" or llm.model == "qwen3.7-flash"
+    # Research is free-text; do not force thinking off by default.
     assert not getattr(llm, "extra_body", None)
 
 
