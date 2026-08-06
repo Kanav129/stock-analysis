@@ -15,6 +15,8 @@ export type DeskSessionCache = {
   heatQuoteKey?: string;
   holdingsRestQuotes?: unknown;
   holdingsRestQuoteKey?: string;
+  holdingsSortKey?: string;
+  holdingsSortDir?: 'asc' | 'desc';
 };
 
 export function readDeskCache(): DeskSessionCache | null {

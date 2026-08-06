@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Holding, Rating, StockQuote, StockRating } from '../api/types';
+import { patchDeskCache, readDeskCache } from '../lib/deskCache';
 import { AnalysisErrorIcon } from './AnalysisErrorIcon';
 import { RatingBadge } from './RatingBadge';
 import { ScoreMeter } from './ScoreMeter';
@@ -51,6 +52,18 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
   rating: 'desc',
   score: 'desc',
 };
+
+const SORT_KEYS = new Set<string>(COLUMNS.map((c) => c.key));
+
+function readHoldingsSort(): { sortKey: SortKey; sortDir: SortDir } {
+  const cached = readDeskCache();
+  const key = cached?.holdingsSortKey;
+  const dir = cached?.holdingsSortDir;
+  if (key && SORT_KEYS.has(key) && (dir === 'asc' || dir === 'desc')) {
+    return { sortKey: key as SortKey, sortDir: dir };
+  }
+  return { sortKey: 'value', sortDir: 'desc' };
+}
 
 function sparkReturn(spark: number[] | undefined): number | null {
   if (!spark || spark.length < 2) return null;
@@ -114,8 +127,12 @@ export function HoldingsTable({
     () => Object.fromEntries(ratings.map((r) => [r.ticker, r])),
     [ratings],
   );
-  const [sortKey, setSortKey] = useState<SortKey>('value');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortKey, setSortKey] = useState<SortKey>(() => readHoldingsSort().sortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(() => readHoldingsSort().sortDir);
+
+  useEffect(() => {
+    patchDeskCache({ holdingsSortKey: sortKey, holdingsSortDir: sortDir });
+  }, [sortKey, sortDir]);
 
   const sorted = useMemo(() => {
     const rows = [...holdings];
