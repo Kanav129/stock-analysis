@@ -75,7 +75,7 @@ Regenerate a deep report after setup to refresh the Kronos section and chart.
 1. Push this repo to GitHub.
 2. In [Render](https://render.com): **New → Blueprint** and select the repo (`render.yaml`),  
    or **New → Web Service** → connect repo → **Docker** runtime → root `Dockerfile`.
-3. Set environment variables from `.env.example` (at minimum Postgres, Mongo, OpenRouter, and API keys you use).
+3. Set environment variables from `.env.example` (at minimum Postgres, Mongo, Qwen/DashScope API key, and other API keys you use).
 4. Set `CORS_ORIGINS` to your Vercel URL, e.g. `https://your-app.vercel.app`  
    (keep local origins too if you still develop against the hosted API).
 5. Keep `AUTO_PIPELINE_ENABLED=false` on free tier.
@@ -168,7 +168,7 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 | `KRONOS_ENABLED` | Render | `false` on free/Starter (512 MB); `true` locally / Standard+ |
 | `SYNC_INTERVAL` | Render | Seconds between in-process syncs (default 86400) |
 | `ANALYSIS_INTERVAL` | Render | Seconds between in-process analyses (default 604800) |
-| `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | OpenRouter models |
+| `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | Qwen models (`qwen3.7-flash`, `qwen3.7-max`, etc.) |
 | `API_BASE_URL` | GitHub Actions | Render origin for scheduled cron |
 
 ## Testing

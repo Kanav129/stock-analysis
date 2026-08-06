@@ -41,10 +41,14 @@ services:
         sync: false
       - key: ADMIN_KEY
         sync: false
-      - key: OPENROUTER_API_KEY
+      - key: QWEN_API_KEY
         sync: false
       - key: OPENAI_BASE_URL
-        value: https://openrouter.ai/api/v1
+        value: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+      - key: OPENAI_MODEL
+        value: qwen3.7-flash
+      - key: OPENAI_EMBEDDING_MODEL
+        value: text-embedding-v4
       - key: POSTGRES_HOST
         sync: false
       - key: POSTGRES_PORT
@@ -70,6 +74,6 @@ services:
       - key: ALPHA_VANTAGE_API_KEY
         sync: false
       - key: ANALYSIS_MODEL
-        sync: false
+        value: qwen3.7-max
       - key: RESEARCH_MODEL
-        sync: false
+        value: qwen3.7-flash

@@ -4,13 +4,12 @@ import { api } from '../api/client';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 
 const MODEL_PRESETS = [
-  'deepseek/deepseek-v4-pro',
-  'deepseek/deepseek-v4-flash',
-  'openai/gpt-4o-mini',
-  'openai/gpt-4o',
-  'anthropic/claude-sonnet-4',
-  'google/gemini-2.5-flash',
-  'meta-llama/llama-4-maverick',
+  'qwen3.7-max',
+  'qwen3.7-flash',
+  'qwen3.7-plus',
+  'qwen3.8-max',
+  'qwen3.5-flash',
+  'text-embedding-v4',
 ];
 
 function fmtCredits(n: number | null | undefined): string {
@@ -21,9 +20,9 @@ function fmtCredits(n: number | null | undefined): string {
 export function SettingsPage() {
   const qc = useQueryClient();
   const settingsQ = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
-  const openrouterQ = useQuery({
-    queryKey: ['openrouter-status'],
-    queryFn: api.getOpenRouterStatus,
+  const llmQ = useQuery({
+    queryKey: ['llm-status'],
+    queryFn: api.getLlmStatus,
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
@@ -53,20 +52,20 @@ export function SettingsPage() {
         analysis_interval: Number(analysisInterval),
       };
       if (apiKey.trim()) {
-        payload.openrouter_api_key = apiKey.trim();
+        payload.llm_api_key = apiKey.trim();
       }
       return api.updateSettings(payload);
     },
     onSuccess: () => {
       setApiKey('');
       qc.invalidateQueries({ queryKey: ['settings'] });
-      qc.invalidateQueries({ queryKey: ['openrouter-status'] });
+      qc.invalidateQueries({ queryKey: ['llm-status'] });
     },
   });
 
-  const or = openrouterQ.data;
-  const key = or?.key;
-  const credits = or?.credits;
+  const llm = llmQ.data;
+  const key = llm?.key;
+  const credits = llm?.credits;
 
   if (settingsQ.isLoading && !settingsQ.data) {
     return (
@@ -74,7 +73,7 @@ export function SettingsPage() {
         <div>
           <h2 className="font-display text-2xl font-semibold">Settings</h2>
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-            OpenRouter API, models, and scheduling.
+            Qwen API, models, and scheduling.
           </p>
         </div>
         <LoadingState label="Loading settings…" minHeight="16rem" />
@@ -87,37 +86,37 @@ export function SettingsPage() {
       <div>
         <h2 className="font-display text-2xl font-semibold">Settings</h2>
         <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-          OpenRouter API, models, and scheduling.
+          Qwen API, models, and scheduling.
         </p>
       </div>
 
-      {/* ── API (OpenRouter) ── */}
       <section className="rounded-[var(--panel-radius)] border border-[var(--color-surface-3)] bg-[var(--color-surface-1)] p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="font-display text-lg font-medium">API</h3>
             <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
-              OpenRouter powers research (flash) and decision (pro) models.
+              Qwen (DashScope) powers research ({researchModel || 'flash'}) and decision (
+              {analysisModel || 'max'}) models.
             </p>
           </div>
           <span
             className={`inline-flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[length:var(--text-label)] font-semibold ${
-              or?.connected
+              llm?.connected
                 ? 'bg-[color-mix(in_oklch,var(--color-up)_18%,transparent)] text-[var(--color-up)]'
                 : 'bg-[var(--color-surface-2)] text-[var(--color-text-muted)]'
             }`}
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                or?.connected ? 'bg-[var(--color-up)]' : 'bg-[var(--color-text-muted)]'
+                llm?.connected ? 'bg-[var(--color-up)]' : 'bg-[var(--color-text-muted)]'
               }`}
             />
-            {openrouterQ.isLoading ? (
+            {llmQ.isLoading ? (
               <span className="inline-flex items-center gap-1.5">
                 <LoadingSpinner size="sm" />
                 Checking…
               </span>
-            ) : or?.connected ? (
+            ) : llm?.connected ? (
               'Connected'
             ) : (
               'Not connected'
@@ -125,97 +124,81 @@ export function SettingsPage() {
           </span>
         </div>
 
-        {/* Credits / usage */}
-        <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-3">
           <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
             <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              Remaining
+              Balance
             </p>
             <p
               className={`mt-1 font-mono text-lg font-semibold tabular-nums ${
-                or?.low_balance ? 'text-[var(--color-sell)]' : 'text-[var(--color-text-primary)]'
+                llm?.low_balance ? 'text-[var(--color-sell)]' : 'text-[var(--color-text-primary)]'
               }`}
             >
-              {credits?.remaining != null
-                ? fmtCredits(credits.remaining)
-                : key?.limit_remaining != null
-                  ? fmtCredits(key.limit_remaining)
-                  : or?.connected
-                    ? 'Unlimited'
-                    : '—'}
+              {credits?.remaining != null ? fmtCredits(credits.remaining) : llm?.connected ? '—' : '—'}
             </p>
             <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
-              {credits?.remaining != null
-                ? 'Account balance'
-                : key?.limit_remaining != null
-                  ? 'Key limit left'
-                  : 'Key / account'}
+              Account credit
             </p>
           </div>
           <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
             <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              Today
+              Models
             </p>
             <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-[var(--color-text-primary)]">
-              {fmtCredits(key?.usage_daily)}
+              {key?.models_available != null ? key.models_available : '—'}
             </p>
-            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">Usage</p>
+            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
+              Available via API
+            </p>
           </div>
-          <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
+          <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5 sm:col-span-1 col-span-2">
             <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              This month
+              Provider
             </p>
-            <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-[var(--color-text-primary)]">
-              {fmtCredits(key?.usage_monthly)}
+            <p className="mt-1 font-mono text-lg font-semibold text-[var(--color-text-primary)]">
+              Qwen
             </p>
-            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">Usage</p>
-          </div>
-          <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
-            <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              All time
+            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
+              DashScope compatible-mode
             </p>
-            <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-[var(--color-text-primary)]">
-              {fmtCredits(key?.usage)}
-            </p>
-            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">Usage</p>
           </div>
         </div>
 
-        {or?.message && (
+        {llm?.message && (
           <p
             className={`mb-4 text-xs ${
-              or.low_balance
+              llm.low_balance
                 ? 'text-[var(--color-sell)]'
-                : or.connected
+                : llm.connected
                   ? 'text-[var(--color-text-secondary)]'
                   : 'text-[var(--color-text-muted)]'
             }`}
           >
-            {or.message}
-            {key?.label ? ` · Key: ${key.label}` : ''}
-            {settingsQ.data?.openrouter_api_key_source === 'env' ? ' · from .env' : ''}
-            {settingsQ.data?.openrouter_api_key_masked
-              ? ` · ${settingsQ.data.openrouter_api_key_masked}`
-              : ''}
+            {llm.message}
+            {key?.label ? ` · ${key.label}` : ''}
+            {settingsQ.data?.llm_api_key_source === 'env' ? ' · from .env' : ''}
+            {settingsQ.data?.llm_api_key_masked ? ` · ${settingsQ.data.llm_api_key_masked}` : ''}
           </p>
         )}
 
-        {or?.credits_note && or.connected && (
-          <p className="mb-4 text-[length:var(--text-label)] text-[var(--color-text-muted)]">{or.credits_note}</p>
+        {llm?.credits_note && llm.connected && (
+          <p className="mb-4 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
+            {llm.credits_note}
+          </p>
         )}
 
         <div className="flex flex-col gap-4">
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-[var(--color-text-secondary)]">OpenRouter API key</span>
+            <span className="text-[var(--color-text-secondary)]">Qwen API key</span>
             <div className="flex gap-2">
               <input
                 type={showKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder={
-                  settingsQ.data?.openrouter_api_key_set === 'true'
+                  settingsQ.data?.llm_api_key_set === 'true'
                     ? 'Leave blank to keep current key'
-                    : 'sk-or-v1-…'
+                    : 'sk-…'
                 }
                 autoComplete="off"
                 className="min-w-0 flex-1 rounded-md bg-[var(--color-surface-2)] px-3 py-2 font-mono text-sm outline-none ring-[var(--color-accent)] focus:ring-2"
@@ -231,21 +214,21 @@ export function SettingsPage() {
             <span className="text-[length:var(--text-label)] text-[var(--color-text-muted)]">
               Stored in app settings (overrides .env). Get a key at{' '}
               <a
-                href="https://openrouter.ai/keys"
+                href="https://www.qwencloud.com/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[var(--color-accent)] underline"
               >
-                openrouter.ai/keys
+                qwencloud.com
               </a>
-              . Top up credits at{' '}
+              . Manage billing in the{' '}
               <a
-                href="https://openrouter.ai/credits"
+                href="https://dashscope.console.aliyun.com/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[var(--color-accent)] underline"
               >
-                openrouter.ai/credits
+                DashScope console
               </a>
               .
             </span>
@@ -328,10 +311,10 @@ export function SettingsPage() {
             <button
               type="button"
               className="btn-terminal"
-              disabled={openrouterQ.isFetching}
-              onClick={() => qc.invalidateQueries({ queryKey: ['openrouter-status'] })}
+              disabled={llmQ.isFetching}
+              onClick={() => qc.invalidateQueries({ queryKey: ['llm-status'] })}
             >
-              {openrouterQ.isFetching ? 'Refreshing…' : 'Refresh credits'}
+              {llmQ.isFetching ? 'Refreshing…' : 'Refresh status'}
             </button>
             {save.isSuccess && (
               <span className="text-xs text-[var(--color-up)]">Saved</span>

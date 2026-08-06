@@ -16,6 +16,61 @@ function jobTypeLabel(jobType: string): string {
   return 'Analysis';
 }
 
+const CORE_ANALYSIS_STAGES = [
+  'gather_prices',
+  'gather_fundamentals',
+  'gather_news',
+  'gather_sentiment',
+  'synthesize_decision',
+  'persist',
+] as const;
+
+const RESCORE_STAGES = ['synthesize_decision', 'persist'] as const;
+
+function jobStageOrder(jobType: string): readonly string[] | null {
+  if (jobType === 'core_analysis') return CORE_ANALYSIS_STAGES;
+  if (jobType === 'rescore') return RESCORE_STAGES;
+  return null;
+}
+
+function jobStepIndex(
+  jobType: string,
+  stage: string | null | undefined,
+): { current: number; total: number } | null {
+  const order = jobStageOrder(jobType);
+  if (!order || !stage) return null;
+  const idx = order.indexOf(stage);
+  if (idx < 0) return null;
+  return { current: idx + 1, total: order.length };
+}
+
+function stripTickerFromProgressText(text: string, ticker: string): string {
+  const escaped = ticker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text
+    .replace(new RegExp(`^${escaped}\\s*[:·]\\s*`, 'i'), '')
+    .replace(/\s*…$/, '')
+    .trim();
+}
+
+function runningJobStatus(job: DeskJob): { step: string | null; label: string } {
+  const progress = job.progress || {};
+  const stepInfo = jobStepIndex(job.job_type, progress.stage);
+  const step = stepInfo ? `${stepInfo.current}/${stepInfo.total}` : null;
+
+  const stageLabel = progress.stage_label?.trim();
+  if (stageLabel) {
+    return { step, label: stageLabel };
+  }
+
+  const rawMessage = progress.message?.trim();
+  if (rawMessage) {
+    const cleaned = stripTickerFromProgressText(rawMessage, job.ticker);
+    if (cleaned) return { step, label: cleaned };
+  }
+
+  return { step, label: jobTypeLabel(job.job_type) };
+}
+
 export function JobsPanel() {
   const qc = useQueryClient();
   const [dismissedSyncAt, setDismissedSyncAt] = useState<string | null>(null);
@@ -137,14 +192,18 @@ export function JobsPanel() {
     >
       {(syncActive || syncDone) && sync ? <SyncJobRow sync={sync} onCancel={() => cancelSyncMut.mutate()} cancelling={cancelSyncMut.isPending} /> : null}
 
-      {running.map((job) => (
-        <LlmJobRow
-          key={job.id}
-          job={job}
-          onCancel={() => cancelJobMut.mutate(job.id)}
-          cancelling={cancelJobMut.isPending}
-        />
-      ))}
+      {running.length > 0 ? (
+        <div className="jobs-running">
+          {running.map((job) => (
+            <LlmJobRow
+              key={job.id}
+              job={job}
+              onCancel={() => cancelJobMut.mutate(job.id)}
+              cancelling={cancelJobMut.isPending}
+            />
+          ))}
+        </div>
+      ) : null}
 
       {queued.length > 0 ? (
         <div className="jobs-queue">
@@ -231,31 +290,37 @@ function LlmJobRow({
 }) {
   const progress = job.progress || {};
   const percent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
-  const label = progress.message || progress.stage_label || `${jobTypeLabel(job.job_type)}…`;
+  const { step, label } = runningJobStatus(job);
+  const statusLabel = step ? `Step ${step} · ${label}` : label;
   return (
-    <div className="jobs-item">
-      <div className="jobs-item__head">
-        <Link to={`/stock/${job.ticker}`} className="jobs-item__ticker">
-          {job.ticker}
-        </Link>
-        <span className="jobs-item__badge">{jobTypeLabel(job.job_type)}</span>
-        <PipelineLiveBadge verb="Running" />
-        <button
-          type="button"
-          className="btn-ghost btn-ghost--danger jobs-item__cancel"
-          disabled={cancelling}
-          onClick={onCancel}
-        >
-          {job.cancel_requested || cancelling ? 'Cancelling…' : 'Cancel'}
-        </button>
+    <div className="jobs-item jobs-item--running">
+      <Link to={`/stock/${job.ticker}`} className="jobs-item__ticker">
+        {job.ticker}
+      </Link>
+      <span className="jobs-item__badge">{jobTypeLabel(job.job_type)}</span>
+      <p className="jobs-item__status">
+        <span className="jobs-item__live-dot" aria-hidden="true" />
+        {step ? <span className="jobs-item__step">{step}</span> : null}
+        <span className="jobs-item__stage">{label}</span>
+      </p>
+      <div className="jobs-item__track">
+        <PipelineProgressMeter
+          percent={percent}
+          active
+          tone="accent"
+          size="compact"
+          label={`${job.ticker} ${jobTypeLabel(job.job_type)} ${percent}% — ${statusLabel}`}
+        />
+        <span className="jobs-item__pct">{percent}%</span>
       </div>
-      <p className="jobs-item__msg">{label}</p>
-      <PipelineProgressMeter
-        percent={percent}
-        active
-        tone="accent"
-        label={`${job.ticker} ${jobTypeLabel(job.job_type)} ${percent}%`}
-      />
+      <button
+        type="button"
+        className="btn-ghost btn-ghost--danger jobs-item__cancel"
+        disabled={cancelling}
+        onClick={onCancel}
+      >
+        {job.cancel_requested || cancelling ? 'Cancelling…' : 'Cancel'}
+      </button>
     </div>
   );
 }

@@ -956,7 +956,7 @@ class JobQueueService:
                     job_id,
                     stage=stage if stage in CORE_STAGES else None,
                     stage_label=label,
-                    message=f"{ticker}: {label}…",
+                    message=f"{label}…",
                     percent=percent,
                 )
                 if isinstance(payload, dict):
@@ -991,7 +991,7 @@ class JobQueueService:
                     job_id,
                     stage=stage,
                     stage_label=label,
-                    message=f"{ticker}: {label}…",
+                    message=f"{label}…",
                     percent=min(95, stages_seen * 8),
                 )
                 if isinstance(payload, dict):
@@ -1014,7 +1014,7 @@ class JobQueueService:
             job_id,
             stage="synthesize_decision",
             stage_label="Re-scoring decision",
-            message=f"Rescore {ticker}…",
+            message="Re-scoring decision…",
             percent=40,
         )
         if self._should_stop(job_id):
@@ -1024,7 +1024,7 @@ class JobQueueService:
             job_id,
             stage="persist",
             stage_label="Saving score & rating",
-            message=f"Saving {ticker}…",
+            message="Saving score & rating…",
             percent=90,
         )
         return {

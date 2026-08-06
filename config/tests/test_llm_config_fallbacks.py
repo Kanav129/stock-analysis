@@ -29,31 +29,31 @@ def test_no_fallback_when_models_identical(mock_a, mock_r):
     assert resolve_research_fallbacks() == []
 
 
-@patch("config.llm_config._openrouter_api_key", return_value="test-key")
-@patch("config.llm_config.resolve_analysis_model", return_value="openai/gpt-4o")
+@patch("config.llm_config._llm_api_key", return_value="test-key")
+@patch("config.llm_config.resolve_analysis_model", return_value="qwen3.7-max")
 def test_get_analysis_llm_has_no_openrouter_model_list(mock_a, mock_key):
-    """Model fallbacks are app-level (retry then fallback), not OpenRouter models[]."""
+    """Model fallbacks are app-level (retry then fallback), not provider model lists."""
     llm = get_analysis_llm()
-    assert llm.model_name == "openai/gpt-4o" or llm.model == "openai/gpt-4o"
+    assert llm.model_name == "qwen3.7-max" or llm.model == "qwen3.7-max"
     assert not getattr(llm, "extra_body", None)
 
 
-@patch("config.llm_config._openrouter_api_key", return_value="test-key")
-@patch("config.llm_config.resolve_research_model", return_value="deepseek/deepseek-v4-flash")
+@patch("config.llm_config._llm_api_key", return_value="test-key")
+@patch("config.llm_config.resolve_research_model", return_value="qwen3.7-flash")
 def test_get_research_llm_has_no_openrouter_model_list(mock_r, mock_key):
     llm = get_research_llm()
-    assert llm.model_name == "deepseek/deepseek-v4-flash" or llm.model == "deepseek/deepseek-v4-flash"
+    assert llm.model_name == "qwen3.7-flash" or llm.model == "qwen3.7-flash"
     assert not getattr(llm, "extra_body", None)
 
 
-@patch.dict("os.environ", {"ANALYSIS_MODEL": "deepseek/deepseek-v4-pro", "RESEARCH_MODEL": "deepseek/deepseek-v4-flash"})
+@patch.dict("os.environ", {"ANALYSIS_MODEL": "qwen3.7-max", "RESEARCH_MODEL": "qwen3.7-flash"})
 def test_env_fallback_models_skip_primary():
-    assert resolve_env_fallback_models("openai/gpt-5.6-luna-pro") == [
-        "deepseek/deepseek-v4-pro",
-        "deepseek/deepseek-v4-flash",
+    assert resolve_env_fallback_models("openai/gpt-4o") == [
+        "qwen3.7-max",
+        "qwen3.7-flash",
     ]
 
 
-@patch.dict("os.environ", {"ANALYSIS_MODEL": "deepseek/deepseek-v4-pro", "RESEARCH_MODEL": "deepseek/deepseek-v4-pro"})
+@patch.dict("os.environ", {"ANALYSIS_MODEL": "qwen3.7-max", "RESEARCH_MODEL": "qwen3.7-max"})
 def test_env_fallback_deduplicates_identical_models():
-    assert resolve_env_fallback_models("openai/gpt-5.6-luna-pro") == ["deepseek/deepseek-v4-pro"]
+    assert resolve_env_fallback_models("openai/gpt-4o") == ["qwen3.7-max"]

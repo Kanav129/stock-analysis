@@ -9,6 +9,19 @@ from utils.logger import logger
 
 load_dotenv()
 
+DEFAULT_LLM_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+DEFAULT_CHAT_MODEL = "qwen3.7-flash"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-v4"
+DEFAULT_ANALYSIS_MODEL = "qwen3.7-max"
+DEFAULT_RESEARCH_MODEL = "qwen3.7-flash"
+
+_LLM_API_KEY_ENV_KEYS = [
+    "QWEN_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+]
+
 
 def _setting(key: str, env_keys: list[str], default: str = "") -> str:
     """Prefer DB app_settings, then env vars."""
@@ -27,19 +40,21 @@ def _setting(key: str, env_keys: list[str], default: str = "") -> str:
     return default
 
 
+def resolve_llm_api_key() -> str:
+    """API key for the configured OpenAI-compatible LLM provider (Qwen / DashScope by default)."""
+    return _setting("llm_api_key", _LLM_API_KEY_ENV_KEYS, "")
+
+
 def resolve_openrouter_api_key() -> str:
-    return _setting(
-        "openrouter_api_key",
-        ["OPENROUTER_API_KEY", "OPENAI_API_KEY"],
-        "",
-    )
+    """Back-compat alias for older imports."""
+    return resolve_llm_api_key()
 
 
 def resolve_analysis_model() -> str:
     return _setting(
         "analysis_model",
         ["ANALYSIS_MODEL", "OPENAI_MODEL"],
-        "deepseek/deepseek-v4-pro",
+        DEFAULT_ANALYSIS_MODEL,
     )
 
 
@@ -47,7 +62,7 @@ def resolve_research_model() -> str:
     return _setting(
         "research_model",
         ["RESEARCH_MODEL", "ANALYSIS_MODEL"],
-        "deepseek/deepseek-v4-flash",
+        DEFAULT_RESEARCH_MODEL,
     )
 
 
@@ -108,39 +123,43 @@ def _fallback_chain(role: Literal["analysis", "research"], primary_name: str) ->
     return chain
 
 
-def _openrouter_api_key() -> str:
-    return resolve_openrouter_api_key()
+def resolve_llm_base_url() -> str:
+    return (os.getenv("OPENAI_BASE_URL") or DEFAULT_LLM_BASE_URL).strip()
 
 
-def _openrouter_base_url() -> str:
-    return os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+def _llm_api_key() -> str:
+    return resolve_llm_api_key()
+
+
+def _llm_base_url() -> str:
+    return resolve_llm_base_url()
 
 
 def _chat_llm(model: str, temperature: float) -> ChatOpenAI:
     return ChatOpenAI(
         model=model,
         temperature=temperature,
-        api_key=_openrouter_api_key(),
-        base_url=_openrouter_base_url(),
+        api_key=_llm_api_key(),
+        base_url=_llm_base_url(),
     )
 
 
 def get_chat_llm(temperature: float = 0) -> ChatOpenAI:
-    """Chat model configured for OpenRouter (OpenAI-compatible API)."""
+    """General chat model (OPENAI_MODEL) for RAG helpers."""
     return ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "openai/gpt-4o-mini"),
+        model=os.getenv("OPENAI_MODEL", DEFAULT_CHAT_MODEL),
         temperature=temperature,
-        api_key=_openrouter_api_key(),
-        base_url=_openrouter_base_url(),
+        api_key=_llm_api_key(),
+        base_url=_llm_base_url(),
     )
 
 
 def get_embeddings() -> OpenAIEmbeddings:
-    """Embedding model configured for OpenRouter (OpenAI-compatible API)."""
+    """Embedding model for news vector store."""
     return OpenAIEmbeddings(
-        model=os.getenv("OPENAI_EMBEDDING_MODEL", "openai/text-embedding-3-small"),
-        api_key=_openrouter_api_key(),
-        base_url=_openrouter_base_url(),
+        model=os.getenv("OPENAI_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+        api_key=_llm_api_key(),
+        base_url=_llm_base_url(),
     )
 
 

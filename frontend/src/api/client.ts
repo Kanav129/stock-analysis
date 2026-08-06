@@ -247,29 +247,26 @@ export const api = {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
-  getOpenRouterStatus: () =>
+  getLlmStatus: () =>
     request<{
       connected: boolean;
+      provider?: string;
       message: string;
       low_balance?: boolean;
+      analysis_model?: string;
+      research_model?: string;
       key?: {
         label?: string;
-        limit?: number | null;
-        limit_remaining?: number | null;
-        limit_reset?: string | null;
-        usage?: number;
-        usage_daily?: number;
-        usage_weekly?: number;
-        usage_monthly?: number;
-        is_free_tier?: boolean;
+        models_available?: number;
       } | null;
       credits?: {
-        total_credits?: number;
-        total_usage?: number;
         remaining?: number | null;
+        raw?: unknown;
       } | null;
       credits_note?: string | null;
-    }>('/settings/openrouter'),
+    }>('/settings/llm'),
+  /** @deprecated Use getLlmStatus */
+  getOpenRouterStatus: () => api.getLlmStatus(),
   generateReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}`, { method: 'POST' }),
   generateDeepReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}/deep`, { method: 'POST' }),
   getReport: (ticker: string, type: string = 'latest') =>

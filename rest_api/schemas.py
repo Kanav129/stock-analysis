@@ -17,9 +17,13 @@ class SettingsUpdate(BaseModel):
     analysis_model: Optional[str] = None
     research_model: Optional[str] = None
     analysis_interval: Optional[int] = None
+    llm_api_key: Optional[str] = Field(
+        default=None,
+        description="Qwen / DashScope API key. Leave blank to keep the existing key.",
+    )
     openrouter_api_key: Optional[str] = Field(
         default=None,
-        description="OpenRouter API key. Leave blank to keep the existing key.",
+        description="Deprecated alias for llm_api_key.",
     )
 
 

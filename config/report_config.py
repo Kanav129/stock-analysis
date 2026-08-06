@@ -7,7 +7,7 @@ from typing import Any
 
 # ── Report model (section generation; decision uses ANALYSIS_MODEL separately) ──
 
-REPORT_MODEL = os.getenv("RESEARCH_MODEL", os.getenv("ANALYSIS_MODEL", "deepseek/deepseek-v4-flash"))
+REPORT_MODEL = os.getenv("RESEARCH_MODEL", os.getenv("ANALYSIS_MODEL", "qwen3.7-flash"))
 REPORT_TEMPERATURE = 0.2
 
 # ── Section definitions ──────────────────────────────────────────

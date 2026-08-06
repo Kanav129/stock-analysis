@@ -6,18 +6,21 @@ export function PipelineProgressMeter({
   active,
   tone = 'accent',
   label,
+  size = 'default',
 }: {
   percent: number;
   active: boolean;
   tone?: 'accent' | 'error' | 'done';
   label: string;
+  size?: 'default' | 'compact';
 }) {
   const pct = Math.max(0, Math.min(100, Number(percent) || 0));
   const fillScale = Math.max(active ? 0.02 : 0, pct / 100);
+  const sizeMod = size === 'compact' ? ' pipeline-meter--compact' : '';
 
   return (
     <div
-      className={`pipeline-meter${active ? ' pipeline-meter--active' : ''}`}
+      className={`pipeline-meter${sizeMod}${active ? ' pipeline-meter--active' : ''}`}
       role="progressbar"
       aria-valuenow={pct}
       aria-valuemin={0}

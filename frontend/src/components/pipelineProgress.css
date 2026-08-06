@@ -8,6 +8,14 @@
   background: var(--color-surface-3);
 }
 
+.pipeline-meter--compact {
+  height: 4px;
+}
+
+.pipeline-meter--compact.pipeline-meter--active {
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent) 18%, transparent);
+}
+
 .pipeline-meter__fill {
   position: absolute;
   inset: 0;

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from rest_api.schemas import SettingsUpdate
-from services.openrouter_service import OpenRouterService
+from services.qwen_service import QwenService
 from services.settings_service import SettingsService
 
 router = APIRouter()
@@ -21,10 +21,19 @@ def update_settings(body: SettingsUpdate):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.get("/settings/openrouter")
-def openrouter_status():
-    """OpenRouter connection, remaining credits (if available), and key usage."""
+@router.get("/settings/llm")
+def llm_status():
+    """Qwen / DashScope connection, balance, and configured models."""
     try:
-        return OpenRouterService().get_status()
+        status = QwenService().get_status()
+        status["analysis_model"] = settings_service.get_raw("analysis_model")
+        status["research_model"] = settings_service.get_raw("research_model")
+        return status
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/settings/openrouter")
+def openrouter_status():
+    """Deprecated alias — returns Qwen provider status."""
+    return llm_status()
