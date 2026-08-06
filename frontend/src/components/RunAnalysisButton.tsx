@@ -22,7 +22,7 @@ export function RunAnalysisButton() {
 
   const jobsQ = useQuery({
     queryKey: ['jobs'],
-    queryFn: api.getJobs,
+    queryFn: () => api.getJobs(),
     staleTime: 5_000,
   });
 

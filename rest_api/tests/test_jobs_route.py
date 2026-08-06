@@ -103,6 +103,34 @@ def test_enqueue_list_cancel_flow():
         cancel.assert_called_once_with(job_id)
 
 
+def test_list_jobs_lite_skips_analysis_when_idle():
+    limits = {"max_concurrent": 1, "running": 0, "queued": 0}
+    with (
+        patch("rest_api.routes.jobs_routes.job_queue_service.ensure_started"),
+        patch(
+            "rest_api.routes.jobs_routes.job_queue_service.list_jobs",
+            return_value=[],
+        ),
+        patch(
+            "rest_api.routes.jobs_routes.job_queue_service.limits",
+            return_value=limits,
+        ),
+        patch(
+            "rest_api.routes.jobs_routes.sync_service.get_status",
+            return_value={"running": False, "status": "idle"},
+        ),
+        patch(
+            "rest_api.routes.jobs_routes.analysis_service.get_status",
+        ) as analysis,
+    ):
+        lite_resp = client.get("/jobs?lite=1")
+    assert lite_resp.status_code == 200
+    body = lite_resp.json()
+    assert body["jobs"] == []
+    assert "analysis" not in body
+    analysis.assert_not_called()
+
+
 def test_enqueue_rejects_bad_job_type():
     resp = client.post("/jobs", json={"job_type": "sync", "tickers": ["AAPL"]})
     assert resp.status_code == 400

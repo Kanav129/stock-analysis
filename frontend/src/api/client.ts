@@ -175,7 +175,10 @@ export const api = {
   /** Unauthenticated; used to keep the Render free dyno awake during long syncs. */
   health: () => request<{ status: string }>('/health'),
   getAnalysisStatus: () => request<import('./types').AnalysisProgress>('/analysis/status'),
-  getJobs: () => request<import('./types').JobsSnapshot>('/jobs'),
+  getJobs: (opts?: { lite?: boolean }) => {
+    const q = opts?.lite ? '?lite=1' : '';
+    return request<import('./types').JobsSnapshot>(`/jobs${q}`);
+  },
   enqueueJobs: (
     jobType: 'core_analysis' | 'deep_dive' | 'rescore',
     tickers?: string[],

@@ -15,7 +15,7 @@ import { Sparkline } from '../components/Sparkline';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 import { AnalysisErrorIcon } from '../components/AnalysisErrorIcon';
 import { RatingBadge } from '../components/RatingBadge';
-import type { Rating, StockQuote } from '../api/types';
+import type { JobsSnapshot, Rating, StockQuote } from '../api/types';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
 import { isUsRegularSession } from '../lib/usMarketHours';
 import { patchDeskCache, readDeskCache } from '../lib/deskCache';
@@ -70,20 +70,28 @@ function fmtLiveAt(ms: number | null, liveEnabled: boolean): string {
 export function DashboardPage() {
   const qc = useQueryClient();
 
-  // Polling owned by useSyncKeepAlive — subscribe only.
+  // Polling owned by useSyncKeepAlive — subscribe only; prefer jobs snapshot cache.
   const syncQ = useQuery({
     queryKey: ['sync-status'],
-    queryFn: api.getSyncStatus,
+    queryFn: async () => {
+      const snap = qc.getQueryData<JobsSnapshot>(['jobs']);
+      if (snap?.sync) return snap.sync;
+      return api.getSyncStatus();
+    },
     staleTime: 5_000,
   });
   const jobsQ = useQuery({
     queryKey: ['jobs'],
-    queryFn: api.getJobs,
+    queryFn: () => api.getJobs(),
     staleTime: 5_000,
   });
   const analysisQ = useQuery({
     queryKey: ['analysis-status'],
-    queryFn: api.getAnalysisStatus,
+    queryFn: async () => {
+      const snap = qc.getQueryData<JobsSnapshot>(['jobs']);
+      if (snap?.analysis) return snap.analysis;
+      return api.getAnalysisStatus();
+    },
     staleTime: 5_000,
   });
   const syncing = Boolean(syncQ.data?.running) || syncQ.data?.status === 'running';

@@ -3,16 +3,16 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from services.analysis_service import analysis_service
 from services.job_queue_service import (
     JOB_CORE,
     JOB_DEEP,
     JOB_RESCORE,
     job_queue_service,
 )
-from services.analysis_service import analysis_service
 from services.sync_service import sync_service
 from services.universe_service import UniverseService
 
@@ -28,8 +28,8 @@ class EnqueueJobsRequest(BaseModel):
 
 
 @router.get("")
-def list_jobs():
-    """Active + recent LLM jobs, sync snapshot, analysis status, concurrency limits."""
+def list_jobs(lite: bool = Query(False, description="Skip heavy analysis status (idle polls)")):
+    """Active + recent LLM jobs, sync snapshot, optional analysis, concurrency limits."""
     job_queue_service.ensure_started()
     jobs = job_queue_service.list_jobs()
     sync_status = sync_service.get_status()
@@ -47,12 +47,20 @@ def list_jobs():
             sync_payload = sync_status
         elif sync_status.get("finished_at"):
             sync_payload = sync_status
-    return {
+
+    payload = {
         "sync": sync_payload,
         "jobs": jobs,
         "limits": job_queue_service.limits(),
-        "analysis": analysis_service.get_status(),
     }
+    # Full analysis status hits universe/DB — omit on idle lite polls.
+    # Still include when work is active so clients can promote lite→full.
+    has_active = any(
+        isinstance(j, dict) and j.get("status") in ("queued", "running") for j in jobs
+    ) or bool(sync_payload and (sync_payload.get("running") or sync_st == "running"))
+    if not lite or has_active:
+        payload["analysis"] = analysis_service.get_status()
+    return payload
 
 
 @router.post("")

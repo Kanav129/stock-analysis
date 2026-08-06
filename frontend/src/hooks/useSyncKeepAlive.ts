@@ -29,19 +29,21 @@ function isDeskBusy(snap?: JobsSnapshot | null): boolean {
 
 /**
  * Sole owner of desk status refetch intervals.
- * Polls GET /jobs (sync + jobs + analysis) and fans out into shared query keys
- * so other components subscribe without extra HTTP.
- *
- * - Busy: poll every POLL_ACTIVE_MS
- * - Idle: poll every POLL_IDLE_MS
- * - Polling pauses when the tab is hidden
+ * Busy: full GET /jobs (sync + jobs + analysis) every POLL_ACTIVE_MS.
+ * Idle: lite GET /jobs?lite=1 (skips heavy analysis status) every POLL_IDLE_MS.
+ * Fans out into shared query keys; polling pauses when the tab is hidden.
  */
 export function useSyncKeepAlive() {
   const qc = useQueryClient();
 
   const deskQ = useQuery({
     queryKey: ['jobs'],
-    queryFn: api.getJobs,
+    queryFn: async () => {
+      const prev = qc.getQueryData<JobsSnapshot>(['jobs']);
+      // First paint / busy desk → full snapshot. Idle refresh stays skinny.
+      const lite = Boolean(prev) && !isDeskBusy(prev);
+      return api.getJobs({ lite });
+    },
     refetchInterval: (q) => {
       const d = q.state.data as JobsSnapshot | undefined;
       return visiblePollInterval(isDeskBusy(d) ? POLL_ACTIVE_MS : POLL_IDLE_MS);
@@ -66,6 +68,7 @@ export function useSyncKeepAlive() {
         });
       }
     }
+    // Lite idle polls omit analysis — preserve last full snapshot in cache
     if (snap.analysis) {
       qc.setQueryData(['analysis-status'], snap.analysis as AnalysisProgress);
     }

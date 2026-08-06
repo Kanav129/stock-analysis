@@ -20,10 +20,10 @@ export function JobsPanel() {
   const qc = useQueryClient();
   const [dismissedSyncAt, setDismissedSyncAt] = useState<string | null>(null);
 
-  // Polling owned by useSyncKeepAlive — subscribe only.
+  // Polling owned by useSyncKeepAlive — subscribe only (full snapshot on demand).
   const jobsQ = useQuery({
     queryKey: ['jobs'],
-    queryFn: api.getJobs,
+    queryFn: () => api.getJobs(),
     staleTime: 5_000,
   });
 
