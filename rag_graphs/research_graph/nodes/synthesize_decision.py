@@ -172,8 +172,14 @@ Return your structured decision with rating tag + score (−100…+100)."""),
     ])
 
     def _invoke(llm):
-        structured_llm = llm.with_structured_output(DecisionOutput, method="function_calling")
-        return (prompt | structured_llm).invoke({"ticker": ticker, "context": context})
+        structured_llm = llm.with_structured_output(
+            DecisionOutput,
+            method="function_calling",
+            include_raw=True,
+        )
+        out = (prompt | structured_llm).invoke({"ticker": ticker, "context": context})
+        # include_raw → {"raw": AIMessage, "parsed": DecisionOutput}; keep both for usage tracking
+        return out
 
     used_model = "analysis"
     try:
@@ -190,6 +196,30 @@ Return your structured decision with rating tag + score (−100…+100)."""),
             "rating": None,
             "score": None,
             "reasoning": f"Decision generation failed: {exc}",
+            "key_drivers": [],
+            "supporting_headlines": [],
+            "entry_levels": {
+                "entry": None,
+                "stop": None,
+                "target": None,
+                "position_note": "Unable to determine — review manually.",
+            },
+            "factor_scores": factor_scores,
+            "dimension_alignment": {},
+            "calibration_note": "Analysis failed",
+            "model": used_model,
+            "posture": "",
+        }
+
+    if isinstance(result, dict) and "parsed" in result:
+        result = result["parsed"]
+    if result is None:
+        return {
+            "decision_ok": False,
+            "error_message": "Structured decision parse returned empty",
+            "rating": None,
+            "score": None,
+            "reasoning": "Decision generation failed: empty structured output",
             "key_drivers": [],
             "supporting_headlines": [],
             "entry_levels": {

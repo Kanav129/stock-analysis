@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api/client';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { api, type LlmUsagePeriod } from '../api/client';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 
 const MODEL_PRESETS = [
@@ -12,9 +22,50 @@ const MODEL_PRESETS = [
   'text-embedding-v4',
 ];
 
-function fmtCredits(n: number | null | undefined): string {
+function fmtUsd(n: number | null | undefined, digits = 2): string {
   if (n == null || Number.isNaN(Number(n))) return '—';
-  return `$${Number(n).toFixed(2)}`;
+  const v = Number(n);
+  if (v > 0 && v < 0.01) return `$${v.toFixed(4)}`;
+  return `$${v.toFixed(digits)}`;
+}
+
+function fmtTokens(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(Number(n))) return '—';
+  const v = Number(n);
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
+  return String(Math.round(v));
+}
+
+function PeriodTile({
+  label,
+  period,
+}: {
+  label: string;
+  period: LlmUsagePeriod | undefined;
+}) {
+  const total = period?.total;
+  const analysis = period?.analysis;
+  const research = period?.research;
+  return (
+    <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
+      <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+        {label}
+      </p>
+      <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-[var(--color-text-primary)]">
+        {fmtUsd(total?.cost_usd)}
+      </p>
+      <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
+        {fmtTokens(total?.total_tokens)} tokens
+      </p>
+      <p className="mt-2 text-[length:var(--text-label)] text-[var(--color-text-secondary)]">
+        Analysis {fmtUsd(analysis?.cost_usd, 4)} · {fmtTokens(analysis?.total_tokens)}
+      </p>
+      <p className="text-[length:var(--text-label)] text-[var(--color-text-secondary)]">
+        Research {fmtUsd(research?.cost_usd, 4)} · {fmtTokens(research?.total_tokens)}
+      </p>
+    </div>
+  );
 }
 
 export function SettingsPage() {
@@ -23,6 +74,13 @@ export function SettingsPage() {
   const llmQ = useQuery({
     queryKey: ['llm-status'],
     queryFn: api.getLlmStatus,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  const [chartRange, setChartRange] = useState<'week' | 'month'>('week');
+  const usageQ = useQuery({
+    queryKey: ['llm-usage', chartRange],
+    queryFn: () => api.getLlmUsage(chartRange),
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
@@ -60,12 +118,15 @@ export function SettingsPage() {
       setApiKey('');
       qc.invalidateQueries({ queryKey: ['settings'] });
       qc.invalidateQueries({ queryKey: ['llm-status'] });
+      qc.invalidateQueries({ queryKey: ['llm-usage'] });
     },
   });
 
   const llm = llmQ.data;
   const key = llm?.key;
-  const credits = llm?.credits;
+  const usage = usageQ.data;
+  const periods = usage?.periods;
+  const hasSpend = (usage?.daily ?? []).some((d) => (d.total_cost ?? 0) > 0 || (d.total_tokens ?? 0) > 0);
 
   if (settingsQ.isLoading && !settingsQ.data) {
     return (
@@ -124,22 +185,7 @@ export function SettingsPage() {
           </span>
         </div>
 
-        <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
-            <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-              Balance
-            </p>
-            <p
-              className={`mt-1 font-mono text-lg font-semibold tabular-nums ${
-                llm?.low_balance ? 'text-[var(--color-sell)]' : 'text-[var(--color-text-primary)]'
-              }`}
-            >
-              {credits?.remaining != null ? fmtCredits(credits.remaining) : llm?.connected ? '—' : '—'}
-            </p>
-            <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
-              Account credit
-            </p>
-          </div>
+        <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-2">
           <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
             <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               Models
@@ -151,12 +197,12 @@ export function SettingsPage() {
               Available via API
             </p>
           </div>
-          <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5 sm:col-span-1 col-span-2">
+          <div className="rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] px-3 py-2.5">
             <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               Provider
             </p>
             <p className="mt-1 font-mono text-lg font-semibold text-[var(--color-text-primary)]">
-              Qwen
+              Qwen PAYG
             </p>
             <p className="mt-0.5 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
               DashScope compatible-mode
@@ -164,26 +210,130 @@ export function SettingsPage() {
           </div>
         </div>
 
+        {/* Usage tiles */}
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h4 className="font-display text-sm font-medium text-[var(--color-text-primary)]">
+            Estimated usage
+          </h4>
+          <button
+            type="button"
+            className="btn-terminal"
+            disabled={usageQ.isFetching}
+            onClick={() => {
+              qc.invalidateQueries({ queryKey: ['llm-usage'] });
+              qc.invalidateQueries({ queryKey: ['llm-status'] });
+            }}
+          >
+            {usageQ.isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+        <div className="mb-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {usageQ.isLoading && !usage ? (
+            <div className="col-span-full">
+              <LoadingState label="Loading usage…" minHeight="6rem" />
+            </div>
+          ) : (
+            <>
+              <PeriodTile label="Today" period={periods?.today} />
+              <PeriodTile label="Past 7 days" period={periods?.week} />
+              <PeriodTile label="Past 30 days" period={periods?.month} />
+            </>
+          )}
+        </div>
+
+        {/* Daily chart */}
+        <div className="mb-5 rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-2)] p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[length:var(--text-label)] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+              Daily spend
+            </p>
+            <div className="chart-range" role="group" aria-label="Usage chart range">
+              {(['week', 'month'] as const).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="chart-range__btn"
+                  aria-pressed={chartRange === id}
+                  onClick={() => setChartRange(id)}
+                >
+                  {id === 'week' ? 'Week' : 'Month'}
+                </button>
+              ))}
+            </div>
+          </div>
+          {!hasSpend ? (
+            <p className="py-8 text-center text-sm text-[var(--color-text-muted)]">
+              Usage tracked from this deploy onward. Run a report to see spend.
+            </p>
+          ) : (
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={usage?.daily ?? []} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke="var(--color-surface-3)" strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: 'var(--color-text-muted)', fontSize: 10 }}
+                    tickFormatter={(d: string) => d.slice(5)}
+                    interval={chartRange === 'month' ? 4 : 0}
+                  />
+                  <YAxis
+                    tick={{ fill: 'var(--color-text-muted)', fontSize: 10 }}
+                    tickFormatter={(v: number) => `$${Number(v).toFixed(2)}`}
+                    width={48}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'var(--color-surface-1)',
+                      border: '1px solid var(--color-surface-3)',
+                      borderRadius: 6,
+                      fontSize: 12,
+                    }}
+                    formatter={(value, name) => {
+                      const n = typeof value === 'number' ? value : Number(value ?? 0);
+                      const label = String(name ?? '');
+                      if (label.includes('tokens')) return [fmtTokens(n), label];
+                      return [fmtUsd(n, 4), label];
+                    }}
+                    labelFormatter={(label) => String(label)}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar
+                    dataKey="analysis_cost"
+                    name="Analysis $"
+                    stackId="cost"
+                    fill="var(--color-accent)"
+                    radius={[0, 0, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="research_cost"
+                    name="Research $"
+                    stackId="cost"
+                    fill="var(--color-up)"
+                    radius={[2, 2, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {usage?.note && (
+            <p className="mt-2 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
+              {usage.note}
+            </p>
+          )}
+        </div>
+
         {llm?.message && (
           <p
             className={`mb-4 text-xs ${
-              llm.low_balance
-                ? 'text-[var(--color-sell)]'
-                : llm.connected
-                  ? 'text-[var(--color-text-secondary)]'
-                  : 'text-[var(--color-text-muted)]'
+              llm.connected
+                ? 'text-[var(--color-text-secondary)]'
+                : 'text-[var(--color-text-muted)]'
             }`}
           >
             {llm.message}
             {key?.label ? ` · ${key.label}` : ''}
             {settingsQ.data?.llm_api_key_source === 'env' ? ' · from .env' : ''}
             {settingsQ.data?.llm_api_key_masked ? ` · ${settingsQ.data.llm_api_key_masked}` : ''}
-          </p>
-        )}
-
-        {llm?.credits_note && llm.connected && (
-          <p className="mb-4 text-[length:var(--text-label)] text-[var(--color-text-muted)]">
-            {llm.credits_note}
           </p>
         )}
 
@@ -212,23 +362,14 @@ export function SettingsPage() {
               </button>
             </div>
             <span className="text-[length:var(--text-label)] text-[var(--color-text-muted)]">
-              Stored in app settings (overrides .env). Get a key at{' '}
+              Stored in app settings (overrides .env). Official PAYG invoices:{' '}
               <a
                 href="https://www.qwencloud.com/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[var(--color-accent)] underline"
               >
-                qwencloud.com
-              </a>
-              . Manage billing in the{' '}
-              <a
-                href="https://dashscope.console.aliyun.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[var(--color-accent)] underline"
-              >
-                DashScope console
+                QwenCloud console
               </a>
               .
             </span>
@@ -307,14 +448,6 @@ export function SettingsPage() {
               className="btn-terminal btn-terminal--accent"
             >
               {save.isPending ? 'Saving…' : 'Save API settings'}
-            </button>
-            <button
-              type="button"
-              className="btn-terminal"
-              disabled={llmQ.isFetching}
-              onClick={() => qc.invalidateQueries({ queryKey: ['llm-status'] })}
-            >
-              {llmQ.isFetching ? 'Refreshing…' : 'Refresh status'}
             </button>
             {save.isSuccess && (
               <span className="text-xs text-[var(--color-up)]">Saved</span>

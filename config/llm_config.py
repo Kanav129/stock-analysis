@@ -1,6 +1,6 @@
 import os
 from collections.abc import Callable
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -176,6 +176,15 @@ def get_research_llm(temperature: float = 0.2) -> ChatOpenAI:
 T = TypeVar("T")
 
 
+def _record_usage(role: Literal["analysis", "research", "other"], model: str, result: Any) -> None:
+    try:
+        from services.llm_usage_service import LlmUsageService
+
+        LlmUsageService().record_from_result(role=role, model=model, result=result)
+    except Exception as exc:
+        logger.warning(f"LLM usage tracking skipped: {exc}")
+
+
 def call_with_retry_then_fallback(
     *,
     role: Literal["analysis", "research"],
@@ -200,7 +209,9 @@ def call_with_retry_then_fallback(
     last_exc: Exception | None = None
     for attempt in range(1, primary_attempts + 1):
         try:
-            return call(make_primary(temperature)), primary_name
+            result = call(make_primary(temperature))
+            _record_usage(role, primary_name, result)
+            return result, primary_name
         except Exception as exc:
             last_exc = exc
             logger.warning(
@@ -211,6 +222,7 @@ def call_with_retry_then_fallback(
         try:
             result = call(_chat_llm(fallback_name, temperature))
             logger.info(f"{role} succeeded via fallback model {fallback_name}")
+            _record_usage(role, fallback_name, result)
             return result, fallback_name
         except Exception as exc:
             last_exc = exc

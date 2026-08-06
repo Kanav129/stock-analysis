@@ -3,6 +3,32 @@ import { clearAuthToken, getAuthToken } from '../auth';
 /** Local Vite proxies `/api` → backend. Production uses full Render URL. */
 const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 
+export type LlmUsageBucket = {
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+};
+
+export type LlmUsagePeriod = {
+  total: LlmUsageBucket;
+  analysis: LlmUsageBucket;
+  research: LlmUsageBucket;
+  other?: LlmUsageBucket;
+};
+
+export type LlmUsageDaily = {
+  date: string;
+  analysis_cost: number;
+  research_cost: number;
+  other_cost?: number;
+  total_cost: number;
+  analysis_tokens: number;
+  research_tokens: number;
+  other_tokens?: number;
+  total_tokens: number;
+};
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -265,6 +291,18 @@ export const api = {
       } | null;
       credits_note?: string | null;
     }>('/settings/llm'),
+  getLlmUsage: (range: 'week' | 'month' = 'week') =>
+    request<{
+      currency: string;
+      range: 'week' | 'month';
+      note?: string;
+      periods: {
+        today: LlmUsagePeriod;
+        week: LlmUsagePeriod;
+        month: LlmUsagePeriod;
+      };
+      daily: LlmUsageDaily[];
+    }>(`/settings/llm/usage?range=${range}`),
   /** @deprecated Use getLlmStatus */
   getOpenRouterStatus: () => api.getLlmStatus(),
   generateReport: (ticker: string) => request<{ task_id: string; status: string }>(`/research/${ticker}`, { method: 'POST' }),

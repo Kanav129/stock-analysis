@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from rest_api.schemas import SettingsUpdate
+from services.llm_usage_service import LlmUsageService
 from services.qwen_service import QwenService
 from services.settings_service import SettingsService
 
@@ -29,6 +30,15 @@ def llm_status():
         status["analysis_model"] = settings_service.get_raw("analysis_model")
         status["research_model"] = settings_service.get_raw("research_model")
         return status
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/settings/llm/usage")
+def llm_usage(range: str = Query("week", pattern="^(week|month)$")):
+    """Local LLM spend/token aggregates (today, week, month) + daily series."""
+    try:
+        return LlmUsageService().get_usage_summary(range_=range)  # type: ignore[arg-type]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

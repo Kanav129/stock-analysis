@@ -109,3 +109,17 @@ CREATE INDEX IF NOT EXISTS idx_desk_jobs_ticker_type_status
     ON desk_jobs (ticker, job_type, status);
 CREATE INDEX IF NOT EXISTS idx_desk_jobs_status_lease
     ON desk_jobs (status, lease_until);
+
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    role VARCHAR(16) NOT NULL CHECK (role IN ('analysis', 'research', 'other')),
+    model VARCHAR(128) NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
+    meta JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_usage_created_at ON llm_usage (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_role_day ON llm_usage (role, created_at);

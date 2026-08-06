@@ -6,12 +6,13 @@ import pytest
 from config.llm_config import call_with_retry_then_fallback
 
 
+@patch("config.llm_config._record_usage")
 @patch("config.llm_config.resolve_env_fallback_models", return_value=[])
 @patch("config.llm_config._chat_llm")
 @patch("config.llm_config.get_analysis_llm")
 @patch("config.llm_config.resolve_analysis_fallbacks", return_value=["deepseek/deepseek-v4-flash"])
 @patch("config.llm_config.resolve_analysis_model", return_value="openai/gpt-4o")
-def test_retries_primary_before_fallback(mock_model, mock_fb, mock_analysis, mock_chat, mock_env):
+def test_retries_primary_before_fallback(mock_model, mock_fb, mock_analysis, mock_chat, mock_env, mock_rec):
     primary = MagicMock(name="analysis")
     fallback = MagicMock(name="research-fb")
     mock_analysis.return_value = primary
@@ -35,12 +36,15 @@ def test_retries_primary_before_fallback(mock_model, mock_fb, mock_analysis, moc
     mock_chat.assert_called_once_with("deepseek/deepseek-v4-flash", 0.25)
 
 
+@patch("config.llm_config._record_usage")
 @patch("config.llm_config.resolve_env_fallback_models", return_value=[])
 @patch("config.llm_config.get_research_llm")
 @patch("config.llm_config.get_analysis_llm")
 @patch("config.llm_config.resolve_analysis_fallbacks", return_value=["deepseek/deepseek-v4-flash"])
 @patch("config.llm_config.resolve_analysis_model", return_value="openai/gpt-4o")
-def test_succeeds_on_primary_retry_without_fallback(mock_model, mock_fb, mock_analysis, mock_research, mock_env):
+def test_succeeds_on_primary_retry_without_fallback(
+    mock_model, mock_fb, mock_analysis, mock_research, mock_env, mock_rec
+):
     primary = MagicMock(name="analysis")
     mock_analysis.return_value = primary
 
@@ -60,12 +64,15 @@ def test_succeeds_on_primary_retry_without_fallback(mock_model, mock_fb, mock_an
     mock_research.assert_not_called()
 
 
+@patch("config.llm_config._record_usage")
 @patch("config.llm_config.resolve_env_fallback_models", return_value=[])
 @patch("config.llm_config._chat_llm")
 @patch("config.llm_config.get_research_llm")
 @patch("config.llm_config.resolve_research_fallbacks", return_value=["openai/gpt-4o"])
 @patch("config.llm_config.resolve_research_model", return_value="deepseek/deepseek-v4-flash")
-def test_research_retries_then_falls_back_to_analysis(mock_model, mock_fb, mock_research, mock_chat, mock_env):
+def test_research_retries_then_falls_back_to_analysis(
+    mock_model, mock_fb, mock_research, mock_chat, mock_env, mock_rec
+):
     research = MagicMock(name="research")
     analysis = MagicMock(name="analysis-fb")
     mock_research.return_value = research
@@ -88,12 +95,13 @@ def test_research_retries_then_falls_back_to_analysis(mock_model, mock_fb, mock_
     mock_chat.assert_called_once_with("openai/gpt-4o", 0.2)
 
 
+@patch("config.llm_config._record_usage")
 @patch("config.llm_config.resolve_env_fallback_models", return_value=[])
 @patch("config.llm_config.get_analysis_llm")
 @patch("config.llm_config.resolve_analysis_fallbacks", return_value=[])
 @patch("config.llm_config.resolve_analysis_model", return_value="openai/gpt-4o")
 def test_raises_when_primary_retries_exhausted_and_no_fallback(
-    mock_model, mock_fb, mock_analysis, mock_env
+    mock_model, mock_fb, mock_analysis, mock_env, mock_rec
 ):
     mock_analysis.return_value = MagicMock(name="analysis")
 
@@ -105,6 +113,7 @@ def test_raises_when_primary_retries_exhausted_and_no_fallback(
     assert mock_analysis.call_count == 2
 
 
+@patch("config.llm_config._record_usage")
 @patch("config.llm_config._chat_llm")
 @patch("config.llm_config.get_analysis_llm")
 @patch(
@@ -117,7 +126,7 @@ def test_raises_when_primary_retries_exhausted_and_no_fallback(
 )
 @patch("config.llm_config.resolve_analysis_model", return_value="openai/gpt-5.6-luna-pro")
 def test_falls_back_to_env_models_when_cross_role_fails(
-    mock_model, mock_cross, mock_env, mock_analysis, mock_chat
+    mock_model, mock_cross, mock_env, mock_analysis, mock_chat, mock_rec
 ):
     """Simulates HK region block: DB OpenAI models fail, .env DeepSeek succeeds."""
     primary = MagicMock(name="analysis")
