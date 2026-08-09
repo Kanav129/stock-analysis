@@ -26,7 +26,7 @@ export function RatingBadge({
   reportType,
 }: {
   rating: Rating | string;
-  /** Quiet deep-report ring when `deep`; core / unknown leave the badge unchanged. */
+  /** Soft azure pip + luminous wash when `deep`; core / unknown stay plain. */
   reportType?: ReportType | string | null;
 }) {
   const key = (rating?.toUpperCase().replace(/[\s-]+/g, '_') as Rating) || 'HOLD';
@@ -40,6 +40,8 @@ export function RatingBadge({
       className={`rating-badge ${tone}${deep ? ' rating-badge--deep' : ''}`}
       title={deep ? 'Deep report' : depth === 'core' ? 'Core report' : undefined}
     >
+      {deep ? <span className="rating-badge__pip" aria-hidden /> : null}
+      {deep ? <span className="sr-only">Deep report. </span> : null}
       {label}
     </span>
   );

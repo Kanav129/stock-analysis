@@ -86,7 +86,7 @@ export function SuggestionDetailPage() {
               Watchlist
             </Link>
           </div>
-          <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
+          <h2 className="mt-2 font-display font-display-title text-2xl font-semibold">
             <span className="font-mono text-[var(--color-accent)]">{item.ticker}</span>
             {item.company_name ? (
               <span className="ml-2 text-[var(--color-text-primary)]">{item.company_name}</span>

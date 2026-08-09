@@ -90,7 +90,7 @@ export function RecentReportsPanel({ ticker }: { ticker: string }) {
         <div className="recent-reports">
           <CompactTable
             headers={['Date', 'Score', 'Rating', 'Type', 'Download']}
-            centerCols={[1, 4]}
+            centerCols={[1, 2, 4]}
             caption={`Recent research reports for ${t}`}
           >
             {items.map((item) => (
@@ -105,7 +105,7 @@ export function RecentReportsPanel({ ticker }: { ticker: string }) {
                       : item.score
                     : '—'}
                 </td>
-                <td>
+                <td className="is-center">
                   {item.analysis_failed ? (
                     <span className="inline-flex items-center gap-1.5 text-xs text-[var(--color-down)]">
                       <AnalysisErrorIcon

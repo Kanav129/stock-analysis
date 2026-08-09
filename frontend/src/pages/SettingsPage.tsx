@@ -132,7 +132,7 @@ export function SettingsPage() {
     return (
       <div className="flex max-w-2xl flex-col gap-6 animate-fade-up">
         <div>
-          <h2 className="font-display text-2xl font-semibold">Settings</h2>
+          <h2 className="font-display font-display-title text-2xl font-semibold">Settings</h2>
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
             Qwen API, models, and scheduling.
           </p>
@@ -145,7 +145,7 @@ export function SettingsPage() {
   return (
     <div className="flex max-w-2xl flex-col gap-6 animate-fade-up">
       <div>
-        <h2 className="font-display text-2xl font-semibold">Settings</h2>
+        <h2 className="font-display font-display-title text-2xl font-semibold">Settings</h2>
         <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
           Qwen API, models, and scheduling.
         </p>

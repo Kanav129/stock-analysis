@@ -28,52 +28,46 @@ export function Layout() {
   return (
     <LivePriceProvider>
       <div className="min-h-screen bg-[var(--color-surface-0)]">
-        <header className="sticky top-0 z-20 border-b border-[var(--color-surface-3)] bg-[var(--color-surface-1)]/95 backdrop-blur-sm">
-          <div className="terminal-shell mx-auto grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 px-4 py-2.5">
-            <div className="flex min-w-0 items-center gap-3">
-              <div>
-                <p className="font-display text-[length:var(--text-label)] uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
-                  Personal Desk
-                </p>
-                <h1 className="font-display text-base font-semibold leading-tight text-[var(--color-text-primary)]">
-                  Stock Analysis
-                </h1>
+        <header className="desk-header">
+          <div className="terminal-shell desk-header__shell">
+            <div className="desk-header__bar">
+              <div className="desk-header__brand">
+                <p className="desk-header__eyebrow">Personal Desk</p>
+                <h1 className="desk-header__title">Stock Analysis</h1>
+              </div>
+
+              <nav className="desk-header__nav" aria-label="Primary">
+                {nav.map((item) => {
+                  const active =
+                    item.to === '/'
+                      ? location.pathname === '/'
+                      : location.pathname.startsWith(item.to);
+                  return (
+                    <Link
+                      key={item.to}
+                      to={item.to}
+                      className={`desk-header__nav-link desk-press${active ? ' is-active' : ''}`}
+                      aria-current={active ? 'page' : undefined}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </nav>
+
+              <div className="desk-header__actions">
+                <PrivacyToggle />
+                <button type="button" onClick={logout} className="desk-header__logout desk-press">
+                  Log out
+                </button>
               </div>
             </div>
-            <nav className="flex items-center justify-center gap-0.5">
-              {nav.map((item) => {
-                const active = location.pathname === item.to;
-                return (
-                  <Link
-                    key={item.to}
-                    to={item.to}
-                    className={`rounded px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                      active
-                        ? 'bg-[var(--color-surface-3)] text-[var(--color-text-primary)]'
-                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-                    }`}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </nav>
-            <div className="flex shrink-0 items-center justify-end gap-2">
-              <PrivacyToggle />
-              <button
-                type="button"
-                onClick={logout}
-                className="rounded px-2.5 py-1.5 text-xs font-semibold text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
-              >
-                Log out
-              </button>
-            </div>
           </div>
-      </header>
-      <main className="terminal-shell mx-auto min-h-[70vh] px-4 py-4">
-        <Outlet />
-      </main>
-    </div>
+        </header>
+        <main className="terminal-shell mx-auto min-h-[70vh] px-4 py-4">
+          <Outlet />
+        </main>
+      </div>
     </LivePriceProvider>
   );
 }

@@ -30,7 +30,7 @@ export function WatchlistPage() {
     <div className="flex flex-col gap-8 animate-fade-up">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="font-display text-2xl font-semibold">Watchlist</h2>
+          <h2 className="font-display font-display-title text-2xl font-semibold">Watchlist</h2>
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
             Add tickers you want to track. They will be included in daily scraping and AI analysis.
           </p>

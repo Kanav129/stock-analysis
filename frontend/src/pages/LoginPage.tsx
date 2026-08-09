@@ -75,7 +75,7 @@ export function LoginPage() {
         <p className="font-display text-[length:var(--text-label)] uppercase tracking-[0.2em] text-[var(--color-text-muted)]">
           Personal Desk
         </p>
-        <h1 className="font-display mt-1 text-3xl font-semibold tracking-tight text-[var(--color-text-primary)]">
+        <h1 className="font-display font-display-title mt-1 text-3xl font-semibold text-[var(--color-text-primary)]">
           Stock Analysis
         </h1>
         <p className="mt-2 text-sm text-[var(--color-text-secondary)]">

@@ -21,19 +21,24 @@
   background: var(--color-surface-2);
   color: var(--color-text-secondary);
   font-family: inherit;
-  font-size: var(--text-data, 12px);
+  font-size: var(--text-ui);
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
   transition:
     color 0.15s ease,
     background 0.15s ease,
-    border-color 0.15s ease;
+    border-color 0.15s ease,
+    transform 100ms ease-out;
 }
 
 .btn-ghost:hover:not(:disabled) {
   color: var(--color-text-primary);
   border-color: var(--color-accent);
+}
+
+.btn-ghost:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .btn-ghost:disabled {

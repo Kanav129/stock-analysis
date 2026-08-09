@@ -2,53 +2,89 @@
 name: Stock Analysis — Personal Desk
 description: Private trading desk UI — sync → report → rating, dense and instrumental
 colors:
-  desk-azure: "oklch(0.72 0.14 250)"
-  desk-azure-hover: "oklch(0.78 0.16 250)"
-  surface-0: "oklch(0.13 0.02 260)"
-  surface-1: "oklch(0.17 0.025 260)"
-  surface-2: "oklch(0.21 0.03 260)"
-  surface-3: "oklch(0.25 0.035 260)"
-  text-primary: "oklch(0.93 0.01 260)"
-  text-secondary: "oklch(0.72 0.02 260)"
-  text-muted: "oklch(0.55 0.02 260)"
-  up: "oklch(0.72 0.12 155)"
-  down: "oklch(0.65 0.14 25)"
-  hold: "oklch(0.75 0.08 85)"
-  rating-strong-buy: "oklch(0.76 0.16 145)"
-  rating-buy: "oklch(0.72 0.13 155)"
-  rating-accumulate: "oklch(0.74 0.10 130)"
-  rating-hold: "oklch(0.78 0.12 95)"
-  rating-reduce: "oklch(0.74 0.14 55)"
-  rating-sell: "oklch(0.68 0.15 35)"
-  rating-strong-sell: "oklch(0.62 0.17 22)"
+  # Near-neutral dark elevations (clearer steps, less muddy blue cast) + vivid system accent.
+  desk-azure: "oklch(0.70 0.19 250)"
+  desk-azure-hover: "oklch(0.78 0.17 250)"
+  surface-0: "oklch(0.11 0.006 255)"
+  surface-1: "oklch(0.17 0.010 255)"
+  surface-2: "oklch(0.23 0.012 255)"
+  surface-3: "oklch(0.30 0.014 255)"
+  text-primary: "oklch(0.97 0.004 255)"
+  text-secondary: "oklch(0.80 0.014 255)"
+  text-muted: "oklch(0.64 0.012 255)"
+  up: "oklch(0.78 0.16 155)"
+  down: "oklch(0.68 0.19 25)"
+  hold: "oklch(0.82 0.12 90)"
+  rating-strong-buy: "oklch(0.80 0.18 145)"
+  rating-buy: "oklch(0.76 0.16 155)"
+  rating-accumulate: "oklch(0.78 0.13 130)"
+  rating-hold: "oklch(0.82 0.13 95)"
+  rating-reduce: "oklch(0.76 0.16 55)"
+  rating-sell: "oklch(0.70 0.18 35)"
+  rating-strong-sell: "oklch(0.64 0.20 22)"
 typography:
+  # Tracking is size-specific: positive on small uppercase labels, near 0 on body/data,
+  # slight negative (~-0.02em) on large display titles so letters don't read too open.
+  badge:
+    fontFamily: "JetBrains Mono, ui-monospace, monospace"
+    fontSize: "0.5625rem"
+    fontWeight: 600
+    letterSpacing: "0.04em"
+  micro:
+    fontFamily: "Hanken Grotesk, system-ui, sans-serif"
+    fontSize: "0.625rem"
+    fontWeight: 600
+    letterSpacing: "0.06em"
   display:
     fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
     fontSize: "0.6875rem"
     fontWeight: 700
     letterSpacing: "0.08em"
-  title:
-    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
-    fontSize: "1.125rem"
-    fontWeight: 600
-    lineHeight: 1.25
-  body:
-    fontFamily: "Hanken Grotesk, system-ui, sans-serif"
-    fontSize: "0.875rem"
-    fontWeight: 400
-    lineHeight: 1.45
   label:
     fontFamily: "Hanken Grotesk, system-ui, sans-serif"
     fontSize: "0.6875rem"
     fontWeight: 600
     letterSpacing: "0.08em"
+  ui:
+    fontFamily: "Hanken Grotesk, system-ui, sans-serif"
+    fontSize: "0.75rem"
+    fontWeight: 600
   data:
     fontFamily: "JetBrains Mono, ui-monospace, monospace"
     fontSize: "0.8125rem"
     fontWeight: 500
+  body:
+    fontFamily: "Hanken Grotesk, system-ui, sans-serif"
+    fontSize: "0.875rem"
+    fontWeight: 400
+    lineHeight: 1.45
+  title-sm:
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
+    fontSize: "1.05rem"
+    fontWeight: 600
+    letterSpacing: "-0.02em"
+  title:
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
+    fontSize: "1.125rem"
+    fontWeight: 600
+    lineHeight: 1.25
+    letterSpacing: "-0.02em"
+  metric:
+    fontFamily: "JetBrains Mono, ui-monospace, monospace"
+    fontSize: "1.25rem"
+    fontWeight: 600
+    letterSpacing: "-0.02em"
+  stat:
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
+    fontSize: "1.35rem"
+    fontWeight: 600
+    letterSpacing: "-0.02em"
 rounded:
   sm: "4px"
   md: "6px"
+  nested: "10px"
+  surface: "12px"
+  chrome: "18px"
   pill: "999px"
 spacing:
   xs: "4px"
@@ -106,25 +142,25 @@ The system explicitly rejects generic SaaS analytics dashboards — purple gradi
 
 ## 2. Colors
 
-Cool night console: blue-tinted near-black surfaces, bright ink, one instrumental accent, and a full semantic rating ladder.
+Modern dark desk: near-neutral elevations with clear luminance steps (not muddy blue-gray sludge), vibrant secondary labels, one vivid system accent, and a full semantic rating ladder.
 
 ### Primary
-- **Desk Azure** (`oklch(0.72 0.14 250)` / `--color-accent`): Active chart ranges, accent terminal buttons, Sync/Analysis emphasis borders, ticker links, focus rings. Hover lifts to `oklch(0.78 0.16 250)`.
+- **Desk Azure** (`oklch(0.70 0.19 250)` / `--color-accent`): Active chart ranges, accent terminal buttons, Sync/Analysis emphasis borders, ticker links, focus rings. Hover lifts to `oklch(0.78 0.17 250)`.
 
 ### Neutral
-- **Void Pit** (`oklch(0.13 0.02 260)` / `--color-surface-0`): App chrome / page ground.
-- **Console Deck** (`oklch(0.17 0.025 260)` / `--color-surface-1`): Panel fills, sticky header base.
-- **Well Plate** (`oklch(0.21 0.03 260)` / `--color-surface-2`): Controls, segmented control tracks, nested wells.
-- **Rail Edge** (`oklch(0.25 0.035 260)` / `--color-surface-3`): Stronger fills, pressed nav, borders.
-- **Signal Ink** (`oklch(0.93 0.01 260)`): Primary text / prices.
-- **Secondary Ink** (`oklch(0.72 0.02 260)`): Supporting labels.
-- **Muted Ink** (`oklch(0.55 0.02 260)`): Panel titles, quiet meta (keep ≥ readable for labels; never for body paragraphs).
+- **Void Pit** (`oklch(0.11 0.006 255)` / `--color-surface-0`): App chrome / page ground — deep, nearly neutral.
+- **Console Deck** (`oklch(0.17 0.010 255)` / `--color-surface-1`): Panel fills, floating header glass base.
+- **Well Plate** (`oklch(0.23 0.012 255)` / `--color-surface-2`): Controls, segmented tracks, nested wells.
+- **Rail Edge** (`oklch(0.30 0.014 255)` / `--color-surface-3`): Stronger fills, pressed nav, borders — visibly stepped from surface-2.
+- **Signal Ink** (`oklch(0.97 0.004 255)`): Primary text / prices — bright for vibrancy over glass.
+- **Secondary Ink** (`oklch(0.80 0.014 255)`): Supporting labels (alive, not washed gray).
+- **Muted Ink** (`oklch(0.64 0.012 255)`): Panel titles, quiet meta (keep ≥ readable for labels; never for body paragraphs).
 - **Gridline**: `color-mix` of surface-3 at ~80% — hairline dividers only.
 
 ### Semantic (market & ratings)
-- **Tape Green / Up** (`oklch(0.72 0.12 155)`): Positive deltas, Done badges.
-- **Tape Red / Down** (`oklch(0.65 0.14 25)`): Negative deltas, errors.
-- **Hold Amber** (`oklch(0.75 0.08 85)`): Neutral / resume cues.
+- **Tape Green / Up** (`oklch(0.78 0.16 155)`): Positive deltas, Done badges.
+- **Tape Red / Down** (`oklch(0.68 0.19 25)`): Negative deltas, errors.
+- **Hold Amber** (`oklch(0.82 0.12 90)`): Neutral / resume cues.
 - **Rating ladder** (strong-buy → strong-sell): seven distinct OKLCH steps for badges — never collapse to two colors.
 
 ### Named Rules

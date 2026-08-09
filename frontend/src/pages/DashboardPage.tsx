@@ -27,7 +27,7 @@ const MARKET_TICKERS = ['SPY', 'QQQ', 'IWM', 'DIA'];
 /** Heatmap prefers watchlist; holdings fill remaining slots up to this cap. */
 const HEATMAP_CAP = 18;
 const CALLS_CAP = 6;
-const RECENT_ANALYSIS_CAP = 8;
+const RECENT_ANALYSIS_CAP = 7;
 
 /** Higher = more urgent for the review queue (soft ACCUMULATE ranks below REDUCE/BUY). */
 const CALL_PRIORITY: Record<Rating, number> = {
@@ -282,12 +282,12 @@ export function DashboardPage() {
         {callsToReview.length === 0 ? (
           <p className="text-xs text-[var(--color-text-muted)]">Run Analysis to populate calls.</p>
         ) : (
-          <div className="flex flex-col gap-0 sm:flex-row sm:flex-wrap sm:gap-x-3 sm:gap-y-1">
+          <div className="flex flex-col gap-0 sm:flex-row sm:flex-wrap sm:gap-x-1 sm:gap-y-0.5">
             {callsToReview.map((r) => (
               <Link
                 key={r.ticker}
                 to={`/stock/${r.ticker}`}
-                className="flex min-w-0 items-center gap-2 border-b border-[var(--color-surface-3)] py-1 last:border-0 hover:bg-[var(--color-surface-2)] sm:border-b-0 sm:py-0.5"
+                className="flex min-w-0 items-center gap-1.5 rounded-full border-b border-[var(--color-surface-3)] px-2 py-0.5 transition-colors last:border-0 hover:border-transparent hover:bg-[var(--color-surface-2)] sm:border-b-0"
               >
                 <span className="shrink-0 font-mono text-xs font-semibold text-[var(--color-accent)]">
                   {r.ticker}
@@ -320,12 +320,12 @@ export function DashboardPage() {
             No analysis in the last 5 days. Run Analysis to populate.
           </p>
         ) : (
-          <div className="flex flex-col gap-0 sm:flex-row sm:flex-wrap sm:gap-x-3 sm:gap-y-1">
-            {recentAnalysis.map((r) => (
+          <div className="flex flex-col gap-0 sm:flex-row sm:flex-nowrap sm:gap-x-1 sm:overflow-x-auto">
+            {recentAnalysis.slice(0, RECENT_ANALYSIS_CAP).map((r) => (
               <Link
                 key={`${r.id}-${r.ticker}-${r.created_at}`}
                 to={`/stock/${r.ticker}`}
-                className="flex min-w-0 items-center gap-2 border-b border-[var(--color-surface-3)] py-1 last:border-0 hover:bg-[var(--color-surface-2)] sm:border-b-0 sm:py-0.5"
+                className="flex min-w-0 items-center gap-1.5 rounded-full border-b border-[var(--color-surface-3)] px-2 py-0.5 transition-colors last:border-0 hover:border-transparent hover:bg-[var(--color-surface-2)] sm:border-b-0"
               >
                 <span className="shrink-0 font-mono text-xs font-semibold text-[var(--color-accent)]">
                   {r.ticker}
@@ -421,7 +421,7 @@ export function DashboardPage() {
                 {heatWatchlist.length > 0 && (
                   <div>
                     <p className="mb-1.5 text-xs text-[var(--color-text-muted)]">Watchlist</p>
-                    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-2">
+                    <div className="heat-mosaic grid-cols-2 sm:grid-cols-3 lg:grid-cols-2">
                       {heatWatchlist.map((t) => (
                         <HeatTile
                           key={t}
@@ -444,7 +444,7 @@ export function DashboardPage() {
                 {heatHoldings.length > 0 && (
                   <div>
                     <p className="mb-1.5 text-xs text-[var(--color-text-muted)]">Holdings</p>
-                    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-2">
+                    <div className="heat-mosaic grid-cols-2 sm:grid-cols-3 lg:grid-cols-2">
                       {heatHoldings.map((t) => (
                         <HeatTile
                           key={t}

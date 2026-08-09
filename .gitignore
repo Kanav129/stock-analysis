@@ -71,3 +71,6 @@ frontend/.env.*
 !frontend/.env.example
 
 docs/
+
+skills-lock.json
+.agents/

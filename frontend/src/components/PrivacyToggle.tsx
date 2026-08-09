@@ -11,7 +11,7 @@ export function PrivacyToggle() {
       aria-pressed={privacyMode}
       aria-label={privacyMode ? 'Show values' : 'Hide values'}
       title={privacyMode ? 'Show values' : 'Hide values'}
-      className="inline-flex h-8 w-8 items-center justify-center rounded text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text-primary)]"
+      className="desk-header__icon-btn desk-press"
     >
       {privacyMode ? <EyeOffIcon /> : <EyeIcon />}
     </button>

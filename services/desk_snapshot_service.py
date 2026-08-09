@@ -10,7 +10,7 @@ from services.watchlist_service import WatchlistService
 
 MARKET_TICKERS = ["SPY", "QQQ", "IWM", "DIA"]
 SPARK_DAYS = 7
-RECENT_RATINGS_LIMIT = 8
+RECENT_RATINGS_LIMIT = 7
 MAX_QUOTE_TICKERS = 80
 
 

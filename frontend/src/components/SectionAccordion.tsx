@@ -14,7 +14,7 @@ export function SectionAccordion({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div id={id} className="section-accordion">
+    <div id={id} className={`section-accordion${open ? ' is-open' : ''}`}>
       <button
         type="button"
         className="section-accordion__trigger"
@@ -23,10 +23,14 @@ export function SectionAccordion({
       >
         <span>{title}</span>
         <span className="section-accordion__chevron" aria-hidden>
-          {open ? '▾' : '▸'}
+          ▸
         </span>
       </button>
-      {open && <div className="section-accordion__body">{children}</div>}
+      <div className="section-accordion__panel" inert={!open ? true : undefined}>
+        <div className="section-accordion__panel-inner">
+          <div className="section-accordion__body">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }

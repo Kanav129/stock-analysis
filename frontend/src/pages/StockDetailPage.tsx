@@ -323,8 +323,8 @@ export function StockDetailPage() {
             ← Desk
           </Link>
           <div className="mt-1 flex flex-wrap items-baseline gap-3">
-            <h2 className="font-display font-mono text-2xl font-semibold">{t}</h2>
-            <span className="font-mono text-2xl font-medium">
+            <h2 className="font-display font-display-title font-mono text-2xl font-semibold">{t}</h2>
+            <span className="font-display-title font-mono text-2xl font-medium">
               {fmtPrice(quote?.latest_close ?? report?.live_price)}
             </span>
             <DeltaValue value={quote?.change_pct} className="text-base" />
