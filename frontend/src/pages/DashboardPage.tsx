@@ -16,8 +16,9 @@ import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 import { AnalysisErrorIcon } from '../components/AnalysisErrorIcon';
 import { RatingBadge } from '../components/RatingBadge';
 import { WatchlistSuggestions } from '../components/WatchlistSuggestions';
-import type { JobsSnapshot, Rating, StockQuote } from '../api/types';
+import type { DeskSnapshot, JobsSnapshot, Rating } from '../api/types';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
+import { useUsRegularSession } from '../hooks/useUsRegularSession';
 import { isUsRegularSession } from '../lib/usMarketHours';
 import { patchDeskCache, readDeskCache } from '../lib/deskCache';
 import { scoreTextClass } from '../lib/reportDepth';
@@ -27,9 +28,6 @@ const MARKET_TICKERS = ['SPY', 'QQQ', 'IWM', 'DIA'];
 const HEATMAP_CAP = 18;
 const CALLS_CAP = 6;
 const RECENT_ANALYSIS_CAP = 8;
-const MARKET_SPARK_DAYS = 7;
-const HEAT_SPARK_DAYS = 7;
-const HOLDINGS_SPARK_DAYS = 5;
 
 /** Higher = more urgent for the review queue (soft ACCUMULATE ranks below REDUCE/BUY). */
 const CALL_PRIORITY: Record<Rating, number> = {
@@ -68,8 +66,21 @@ function fmtLiveAt(ms: number | null, liveEnabled: boolean): string {
   return 'off';
 }
 
+/** Hydrate sibling query keys so other pages/buttons still work after invalidation. */
+function seedDeskCaches(qc: ReturnType<typeof useQueryClient>, snap: DeskSnapshot) {
+  qc.setQueryData(['holdings'], snap.holdings);
+  qc.setQueryData(['watchlist'], snap.watchlist);
+  const deskKey = (snap.meta.desk_tickers ?? []).join(',');
+  if (deskKey) {
+    qc.setQueryData(['ratings', 'desk', deskKey], snap.ratings);
+  }
+  qc.setQueryData(['ratings', 'recent', RECENT_ANALYSIS_CAP], snap.recent_ratings);
+  qc.setQueryData(['quotes', 'desk'], snap.quotes);
+}
+
 export function DashboardPage() {
   const qc = useQueryClient();
+  const marketOpen = useUsRegularSession();
 
   // Polling owned by useSyncKeepAlive — subscribe only; prefer jobs snapshot cache.
   const syncQ = useQuery({
@@ -104,88 +115,52 @@ export function DashboardPage() {
     Boolean(
       jobsQ.data?.jobs?.some((j) => j.status === 'queued' || j.status === 'running'),
     );
+  // Off-hours prices don't move — full snapshot poll only during US RTH when idle.
+  // Jobs keep updating via useSyncKeepAlive; manual sync invalidates snapshot on complete.
+  const snapshotPollMs = deskBusy || !marketOpen ? false : DESK_STALE_MS;
 
-  // Critical path — paint from session cache immediately, then refresh in background.
-  const holdingsQ = useQuery({
-    queryKey: ['holdings'],
-    queryFn: api.getHoldings,
-    refetchInterval: deskBusy ? false : DESK_STALE_MS,
+  const deskQ = useQuery({
+    queryKey: ['desk-snapshot'],
+    queryFn: async () => {
+      const snap = await api.getDeskSnapshot();
+      seedDeskCaches(qc, snap);
+      return snap;
+    },
     staleTime: DESK_STALE_MS,
+    refetchInterval: snapshotPollMs,
     placeholderData: keepPrevious,
-    initialData: sessionCache?.holdings as Awaited<ReturnType<typeof api.getHoldings>> | undefined,
-    initialDataUpdatedAt: sessionCache?.holdings ? sessionCache.at : undefined,
-  });
-  const watchlistQ = useQuery({
-    queryKey: ['watchlist'],
-    queryFn: api.getWatchlist,
-    staleTime: DESK_STALE_MS,
-    placeholderData: keepPrevious,
-    initialData: sessionCache?.watchlist as Awaited<ReturnType<typeof api.getWatchlist>> | undefined,
-    initialDataUpdatedAt: sessionCache?.watchlist ? sessionCache.at : undefined,
-  });
-
-  const holdingsTickers = (holdingsQ.data?.holdings ?? []).map((h) => h.ticker);
-
-  const deskTickers = useMemo(() => {
-    const fromHoldings = holdingsTickers.map((t) => t.toUpperCase());
-    const fromWatch = (watchlistQ.data?.items ?? []).map((i) => i.ticker.toUpperCase());
-    return [...new Set([...fromHoldings, ...fromWatch])].sort();
-  }, [holdingsTickers, watchlistQ.data]);
-  const deskTickerKey = deskTickers.join(',');
-
-  const ratingsQ = useQuery({
-    queryKey: ['ratings', 'desk', deskTickerKey],
-    queryFn: () => api.getRatings(deskTickers),
-    enabled: deskTickers.length > 0,
-    refetchInterval: deskBusy ? false : DESK_STALE_MS,
-    staleTime: DESK_STALE_MS,
-    placeholderData: keepPrevious,
-    initialData:
-      sessionCache?.ratingsDeskKey === deskTickerKey
-        ? (sessionCache.ratings as Awaited<ReturnType<typeof api.getRatings>> | undefined)
-        : undefined,
-    initialDataUpdatedAt:
-      sessionCache?.ratingsDeskKey === deskTickerKey && sessionCache?.ratings
-        ? sessionCache.at
-        : undefined,
-  });
-
-  const recentRatingsQ = useQuery({
-    queryKey: ['ratings', 'recent', RECENT_ANALYSIS_CAP],
-    queryFn: () => api.getRecentRatings(RECENT_ANALYSIS_CAP),
-    refetchInterval: deskBusy ? false : DESK_STALE_MS,
-    staleTime: DESK_STALE_MS,
+    initialData: sessionCache?.snapshot as DeskSnapshot | undefined,
+    initialDataUpdatedAt: sessionCache?.snapshot ? sessionCache.at : undefined,
     // Recover after local API restarts (Vite returns 502 while uvicorn is down).
     retry: 3,
     retryDelay: (n) => Math.min(1000 * 2 ** n, 8000),
-    placeholderData: keepPrevious,
   });
 
   const wasRunning = useRef(false);
   useEffect(() => {
     const running = !!analysisQ.data?.running;
     if (wasRunning.current && !running) {
-      qc.invalidateQueries({ queryKey: ['ratings'] });
-      qc.invalidateQueries({ queryKey: ['watchlist'] });
-      qc.invalidateQueries({ queryKey: ['report'] });
+      void qc.invalidateQueries({ queryKey: ['desk-snapshot'] });
+      void qc.invalidateQueries({ queryKey: ['ratings'] });
+      void qc.invalidateQueries({ queryKey: ['watchlist'] });
+      void qc.invalidateQueries({ queryKey: ['report'] });
     }
     wasRunning.current = running;
   }, [analysisQ.data?.running, qc]);
 
   useEffect(() => {
-    if (holdingsQ.data) patchDeskCache({ holdings: holdingsQ.data });
-  }, [holdingsQ.data]);
-  useEffect(() => {
-    if (ratingsQ.data && deskTickerKey) {
-      patchDeskCache({ ratings: ratingsQ.data, ratingsDeskKey: deskTickerKey });
-    }
-  }, [ratingsQ.data, deskTickerKey]);
-  useEffect(() => {
-    if (watchlistQ.data) patchDeskCache({ watchlist: watchlistQ.data });
-  }, [watchlistQ.data]);
+    if (deskQ.data) patchDeskCache({ snapshot: deskQ.data });
+  }, [deskQ.data]);
+
+  const holdings = deskQ.data?.holdings.holdings ?? [];
+  const holdingsTickers = holdings.map((h) => h.ticker);
+  const watchItems = deskQ.data?.watchlist.items ?? [];
+  const ratings = deskQ.data?.ratings.ratings ?? [];
+  const recentAnalysis = deskQ.data?.recent_ratings.ratings ?? [];
+  const quotes = deskQ.data?.quotes.quotes ?? {};
 
   const { heatWatchlist, heatHoldings } = useMemo(() => {
-    const wl = [...new Set((watchlistQ.data?.items ?? []).map((i) => i.ticker.toUpperCase()))];
+    const wl = [...new Set(watchItems.map((i) => i.ticker.toUpperCase()))];
     const wlSet = new Set(wl);
     const holdingsOnly = [
       ...new Set(
@@ -198,125 +173,39 @@ export function DashboardPage() {
       heatWatchlist: wl.slice(0, watchCap),
       heatHoldings: holdingsOnly.slice(0, holdCap),
     };
-  }, [watchlistQ.data, holdingsTickers]);
+  }, [watchItems, holdingsTickers]);
   const heatTickers = heatWatchlist.length + heatHoldings.length;
 
   const heatQuoteTickers = useMemo(
     () => [...new Set([...heatWatchlist, ...heatHoldings])],
     [heatWatchlist, heatHoldings],
   );
-  const heatQuoteKey = heatQuoteTickers.join(',');
-
-  const holdingsRestTickers = useMemo(() => {
-    const heatSet = new Set(heatQuoteTickers);
-    return [
-      ...new Set(holdingsTickers.map((t) => t.toUpperCase()).filter((t) => !heatSet.has(t))),
-    ].sort();
-  }, [holdingsTickers, heatQuoteTickers]);
-  const holdingsRestQuoteKey = holdingsRestTickers.join(',');
 
   const liveTickers = useMemo(
     () => [...MARKET_TICKERS, ...heatQuoteTickers],
     [heatQuoteTickers],
   );
 
-  const deskReady = Boolean(holdingsQ.data || watchlistQ.data);
+  const deskReady = Boolean(deskQ.data);
   const liveEnabled = !syncing && deskReady;
   const { lastLiveAt } = useLivePriceRefresh(liveTickers, {
     enabled: liveEnabled,
     deferMs: 45_000,
   });
 
-  const marketQuotesQ = useQuery({
-    queryKey: ['quotes', 'market', MARKET_TICKERS.join(',')],
-    queryFn: () => api.getQuotes(MARKET_TICKERS, MARKET_SPARK_DAYS),
-    staleTime: DESK_STALE_MS,
-    refetchInterval: deskBusy ? false : DESK_STALE_MS,
-    placeholderData: keepPrevious,
-    initialData: sessionCache?.marketQuotes as
-      | { quotes: Record<string, StockQuote> }
-      | undefined,
-    initialDataUpdatedAt: sessionCache?.marketQuotes ? sessionCache.at : undefined,
-  });
-
-  const heatQuotesQ = useQuery({
-    queryKey: ['quotes', 'heat', heatQuoteKey],
-    queryFn: () => api.getQuotes(heatQuoteTickers, HEAT_SPARK_DAYS),
-    enabled: heatQuoteTickers.length > 0,
-    staleTime: DESK_STALE_MS,
-    refetchInterval: deskBusy ? false : DESK_STALE_MS,
-    placeholderData: keepPrevious,
-    initialData:
-      sessionCache?.heatQuoteKey === heatQuoteKey
-        ? (sessionCache.heatQuotes as { quotes: Record<string, StockQuote> } | undefined)
-        : undefined,
-    initialDataUpdatedAt:
-      sessionCache?.heatQuoteKey === heatQuoteKey && sessionCache?.heatQuotes
-        ? sessionCache.at
-        : undefined,
-  });
-
-  const holdingsRestQuotesQ = useQuery({
-    queryKey: ['quotes', 'holdings-rest', holdingsRestQuoteKey],
-    queryFn: () => api.getQuotes(holdingsRestTickers, HOLDINGS_SPARK_DAYS),
-    enabled:
-      holdingsRestTickers.length > 0 &&
-      Boolean(holdingsQ.data) &&
-      (heatQuoteTickers.length === 0 || heatQuotesQ.isSuccess),
-    staleTime: DESK_STALE_MS,
-    refetchInterval: deskBusy ? false : DESK_STALE_MS,
-    placeholderData: keepPrevious,
-    initialData:
-      sessionCache?.holdingsRestQuoteKey === holdingsRestQuoteKey
-        ? (sessionCache.holdingsRestQuotes as { quotes: Record<string, StockQuote> } | undefined)
-        : undefined,
-    initialDataUpdatedAt:
-      sessionCache?.holdingsRestQuoteKey === holdingsRestQuoteKey &&
-      sessionCache?.holdingsRestQuotes
-        ? sessionCache.at
-        : undefined,
-  });
-
-  useEffect(() => {
-    if (marketQuotesQ.data) patchDeskCache({ marketQuotes: marketQuotesQ.data });
-  }, [marketQuotesQ.data]);
-  useEffect(() => {
-    if (heatQuotesQ.data && heatQuoteKey) {
-      patchDeskCache({ heatQuotes: heatQuotesQ.data, heatQuoteKey });
-    }
-  }, [heatQuotesQ.data, heatQuoteKey]);
-  useEffect(() => {
-    if (holdingsRestQuotesQ.data && holdingsRestQuoteKey) {
-      patchDeskCache({
-        holdingsRestQuotes: holdingsRestQuotesQ.data,
-        holdingsRestQuoteKey,
-      });
-    }
-  }, [holdingsRestQuotesQ.data, holdingsRestQuoteKey]);
-
-  const quotes = useMemo(
-    () => ({
-      ...(marketQuotesQ.data?.quotes ?? {}),
-      ...(heatQuotesQ.data?.quotes ?? {}),
-      ...(holdingsRestQuotesQ.data?.quotes ?? {}),
-    }),
-    [marketQuotesQ.data, heatQuotesQ.data, holdingsRestQuotesQ.data],
-  );
-
-  const summary = holdingsQ.data?.summary ?? {
+  const summary = deskQ.data?.holdings.summary ?? {
     total_value: 0,
     total_unrealized_pnl: 0,
     position_count: 0,
     snapshot_at: null,
   };
 
-  const ratings = ratingsQ.data?.ratings ?? [];
   const ratingMap = Object.fromEntries(ratings.map((r) => [r.ticker, r]));
 
   const callsToReview = useMemo(() => {
     const universe = new Set([
       ...holdingsTickers.map((t) => t.toUpperCase()),
-      ...(watchlistQ.data?.items ?? []).map((i) => i.ticker.toUpperCase()),
+      ...watchItems.map((i) => i.ticker.toUpperCase()),
     ]);
     return ratings
       .filter(
@@ -332,18 +221,16 @@ export function DashboardPage() {
         return Math.abs(b.score) - Math.abs(a.score);
       })
       .slice(0, CALLS_CAP);
-  }, [ratings, holdingsTickers, watchlistQ.data]);
+  }, [ratings, holdingsTickers, watchItems]);
 
-  const recentAnalysis = recentRatingsQ.data?.ratings ?? [];
-
-  const holdingsPending = holdingsQ.isLoading && !holdingsQ.data;
-  const marketPending = marketQuotesQ.isLoading && !marketQuotesQ.data;
+  const deskPending = deskQ.isLoading && !deskQ.data;
+  const deskError = deskQ.isError && !deskQ.data;
 
   const syncAt =
     syncQ.data?.last_sync ?? syncQ.data?.daily?.finished_at ?? syncQ.data?.finished_at ?? null;
   const holdingsSyncedAt =
-    holdingsQ.data?.holdings_synced_at ??
-    holdingsQ.data?.summary?.holdings_synced_at ??
+    deskQ.data?.holdings.holdings_synced_at ??
+    deskQ.data?.holdings.summary?.holdings_synced_at ??
     null;
   const freshnessLine = [
     `Holdings · ${fmtDeskTime(holdingsSyncedAt)}`,
@@ -379,7 +266,13 @@ export function DashboardPage() {
 
       <JobsPanel />
 
-      {holdingsPending ? (
+      {deskError ? (
+        <p className="text-xs text-[var(--color-down)]">
+          {deskQ.error instanceof Error ? deskQ.error.message : 'Failed to load desk.'}
+        </p>
+      ) : null}
+
+      {deskPending ? (
         <LoadingState label="Loading portfolio…" compact minHeight="3rem" />
       ) : (
         <PortfolioSummaryCard summary={summary} />
@@ -414,12 +307,12 @@ export function DashboardPage() {
       </Panel>
 
       <Panel title="Recent analysis" subtitle="Last 5 days · newest first" dense>
-        {recentRatingsQ.isLoading && !recentAnalysis.length ? (
+        {deskPending && !recentAnalysis.length ? (
           <p className="text-xs text-[var(--color-text-muted)]">Loading recent analysis…</p>
-        ) : recentRatingsQ.isError ? (
+        ) : deskError ? (
           <p className="text-xs text-[var(--color-down)]">
-            {recentRatingsQ.error instanceof Error
-              ? recentRatingsQ.error.message
+            {deskQ.error instanceof Error
+              ? deskQ.error.message
               : 'Failed to load recent analysis.'}
           </p>
         ) : recentAnalysis.length === 0 ? (
@@ -465,11 +358,11 @@ export function DashboardPage() {
             subtitle={`${holdingsTickers.length} positions · ${freshnessLine}`}
             actions={<SyncHoldingsButton />}
           >
-            {holdingsPending ? (
+            {deskPending ? (
               <LoadingState label="Loading holdings…" minHeight="12rem" />
             ) : (
               <HoldingsTable
-                holdings={holdingsQ.data?.holdings ?? []}
+                holdings={holdings}
                 ratings={ratings}
                 quotes={quotes}
               />
@@ -479,7 +372,7 @@ export function DashboardPage() {
 
         <div className="col-span-12 flex flex-col gap-3 lg:col-span-4">
           <Panel title="Market" subtitle="SPY · QQQ · IWM · DIA" dense>
-            {marketPending ? (
+            {deskPending ? (
               <LoadingState label="Loading market…" compact minHeight="8rem" />
             ) : (
             <div className="flex flex-col">
@@ -517,7 +410,7 @@ export function DashboardPage() {
             }
             dense
           >
-            {watchlistQ.isLoading && heatTickers === 0 ? (
+            {deskPending && heatTickers === 0 ? (
               <LoadingState label="Loading heatmap…" minHeight="10rem" />
             ) : heatTickers === 0 ? (
               <p className="text-xs text-[var(--color-text-muted)]">

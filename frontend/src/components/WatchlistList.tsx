@@ -29,7 +29,10 @@ export function WatchlistList({ items }: { items: WatchlistItem[] }) {
     onError: (_e, _t, ctx) => {
       if (ctx?.prev) qc.setQueryData(['watchlist'], ctx.prev);
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['watchlist'] }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['desk-snapshot'] });
+    },
   });
 
   if (!items.length) {

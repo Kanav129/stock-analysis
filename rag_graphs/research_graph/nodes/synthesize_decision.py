@@ -81,6 +81,11 @@ has a clear, material effect (e.g. already a very large weight or sector cluster
 keep nudges modest and state them explicitly in reasoning. If portfolio influence
 is none, say so briefly in reasoning.
 
+When Historical performance priors are present (deep analysis), use them only to
+calibrate conviction and score magnitude. Current research remains the primary
+driver — do not copy prior ratings. If priors conflict with the present evidence,
+prefer the evidence and note the conflict briefly in reasoning.
+
 Output Format: JSON with fields rating, score, reasoning (markdown), key_drivers (list),
 supporting_headlines (list), entry (number or null), stop (number or null), target
 (number or null), position_note (string), posture (string)."""
@@ -93,6 +98,7 @@ def build_decision_context(
     factor_scores: dict[str, Any],
     sections: dict[str, Any],
     portfolio_markdown: str,
+    priors_markdown: str = "",
 ) -> str:
     def truncate(text: str, max_chars: int = 3000) -> str:
         return text[:max_chars] + ("..." if len(text) > max_chars else "")
@@ -102,7 +108,7 @@ def build_decision_context(
     news_md = sections.get("news", "")
     sentiment_md = sections.get("sentiment", "")
 
-    return f"""## Market / Technicals
+    base = f"""## Market / Technicals
 {truncate(market_md) or truncate(fundamentals_md, 1500)}
 
 ## Fundamentals
@@ -127,6 +133,9 @@ ${float(live_price):.2f}
 
 {portfolio_markdown}
 """
+    if priors_markdown:
+        return base.rstrip() + "\n\n" + priors_markdown.strip() + "\n"
+    return base
 
 
 def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
@@ -134,6 +143,7 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
     logger.info(f"---SYNTHESIZE DECISION {ticker}---")
 
     live_price = state.get("live_price") or 0.0
+    report_type = (state.get("report_type") or "core").strip().lower()
 
     fundamental_data = state.get("fundamental_data") or {}
     market_data = state.get("market_data") or {}
@@ -154,12 +164,32 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
             "- Use generic position sizing."
         )
 
+    priors_md = ""
+    if report_type == "deep":
+        try:
+            from services.analysis_knowledge_service import analysis_knowledge_service
+
+            priors_md = analysis_knowledge_service.priors_for_deep(
+                ticker,
+                score=state.get("score"),
+                factor_scores=factor_scores,
+                key_drivers=list(state.get("key_drivers") or []),
+            )
+        except Exception as exc:
+            logger.warning(f"Deep priors failed for {ticker}: {exc}")
+            priors_md = (
+                "## Historical performance priors\n"
+                "- Priors unavailable (lookup failed). "
+                "Score from current research only."
+            )
+
     context = build_decision_context(
         ticker=ticker,
         live_price=float(live_price),
         factor_scores=factor_scores,
         sections=sections,
         portfolio_markdown=portfolio_md,
+        priors_markdown=priors_md,
     )
 
     prompt = ChatPromptTemplate.from_messages([

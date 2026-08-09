@@ -46,6 +46,7 @@ export function WatchlistSuggestions({
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['watchlist-suggestions'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['desk-snapshot'] });
       qc.invalidateQueries({ queryKey: ['universe'] });
       qc.invalidateQueries({ queryKey: ['jobs'] });
       qc.invalidateQueries({ queryKey: ['analysis-status'] });

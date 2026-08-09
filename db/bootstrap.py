@@ -6,6 +6,7 @@ from db.migrate_desk_job_leases import migrate_desk_job_leases
 from db.migrate_holdings import migrate_holdings_schema
 from db.migrate_ratings import migrate_stock_ratings_schema
 from db.migrate_stock_data import migrate_stock_data_schema
+from db.migrate_rating_outcomes import migrate_rating_outcomes
 from db.migrate_watchlist_suggestions import migrate_watchlist_suggestions
 from utils.logger import logger
 
@@ -61,4 +62,10 @@ def bootstrap_schema() -> None:
         migrate_watchlist_suggestions()
     except Exception as exc:
         logger.error(f"watchlist_suggestions migration skipped or failed: {exc}")
+        raise
+
+    try:
+        migrate_rating_outcomes()
+    except Exception as exc:
+        logger.error(f"rating_outcomes migration skipped or failed: {exc}")
         raise

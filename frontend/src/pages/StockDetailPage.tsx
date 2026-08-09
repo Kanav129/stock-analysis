@@ -21,6 +21,7 @@ import {
 } from '../components/ChartRangeToggle';
 import { RecentReportsPanel } from '../components/RecentReportsPanel';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
+import { useUsRegularSession } from '../hooks/useUsRegularSession';
 
 const PriceChart = lazy(() =>
   import('../components/PriceChart').then((m) => ({ default: m.PriceChart })),
@@ -98,6 +99,7 @@ export function StockDetailPage() {
   const location = useLocation();
   const qc = useQueryClient();
   const reportRef = useRef<HTMLDivElement>(null);
+  const marketOpen = useUsRegularSession();
 
   const [generating, setGenerating] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -127,7 +129,8 @@ export function StockDetailPage() {
     queryKey: ['quotes', t],
     queryFn: () => api.getQuotes([t]),
     enabled: !!t,
-    refetchInterval: 60_000,
+    // Off-hours closes don't move; refresh on load / after manual sync invalidation.
+    refetchInterval: marketOpen ? 60_000 : false,
     staleTime: 30_000,
   });
   const chartQ = useQuery({
@@ -229,6 +232,7 @@ export function StockDetailPage() {
       clearPersistedTask(t);
       qc.invalidateQueries({ queryKey: ['report-active', t] });
       qc.invalidateQueries({ queryKey: ['jobs'] });
+      qc.invalidateQueries({ queryKey: ['desk-snapshot'] });
       qc.invalidateQueries({ queryKey: ['ratings'] });
       qc.invalidateQueries({ queryKey: ['ratings', t] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
@@ -300,7 +304,10 @@ export function StockDetailPage() {
       if (onWatchlist) await api.removeWatchlist(t);
       else await api.addWatchlist(t);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['watchlist'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['desk-snapshot'] });
+    },
   });
 
   if (!t) {

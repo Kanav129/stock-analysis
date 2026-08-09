@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -74,6 +74,9 @@ function runningJobStatus(job: DeskJob): { step: string | null; label: string } 
 export function JobsPanel() {
   const qc = useQueryClient();
   const [dismissedSyncAt, setDismissedSyncAt] = useState<string | null>(null);
+  const wasSyncActive = useRef(false);
+  const seenDoneIds = useRef<Set<string>>(new Set());
+  const doneSeeded = useRef(false);
 
   // Polling owned by useSyncKeepAlive — subscribe only (full snapshot on demand).
   const jobsQ = useQuery({
@@ -133,25 +136,52 @@ export function JobsPanel() {
     return () => window.clearTimeout(t);
   }, [syncDone, sync?.finished_at]);
 
+  // Invalidate price/news caches only when a sync run transitions to completed
+  // (manual Sync Data), not on every jobs poll while last status is completed.
   useEffect(() => {
-    if (!syncActive && sync?.status === 'completed' && sync.finished_at) {
-      qc.invalidateQueries({ queryKey: ['chart'] });
-      qc.invalidateQueries({ queryKey: ['quotes'] });
-      qc.invalidateQueries({ queryKey: ['holdings'] });
-      qc.invalidateQueries({ queryKey: ['technicals'] });
-      qc.invalidateQueries({ queryKey: ['news'] });
-      qc.invalidateQueries({ queryKey: ['watchlist'] });
-      qc.invalidateQueries({ queryKey: ['ratings'] });
+    if (
+      wasSyncActive.current &&
+      !syncActive &&
+      sync?.status === 'completed' &&
+      sync.finished_at
+    ) {
+      void Promise.all([
+        qc.invalidateQueries({ queryKey: ['desk-snapshot'] }),
+        qc.invalidateQueries({ queryKey: ['chart'] }),
+        qc.invalidateQueries({ queryKey: ['quotes'] }),
+        qc.invalidateQueries({ queryKey: ['holdings'] }),
+        qc.invalidateQueries({ queryKey: ['technicals'] }),
+        qc.invalidateQueries({ queryKey: ['news'] }),
+        qc.invalidateQueries({ queryKey: ['watchlist'] }),
+        qc.invalidateQueries({ queryKey: ['ratings'] }),
+      ]);
     }
+    wasSyncActive.current = syncActive;
   }, [syncActive, sync?.status, sync?.finished_at, qc]);
 
+  // Invalidate ratings only for jobs that newly reach done — seed historical done ids.
   useEffect(() => {
-    const doneJobs = data?.jobs.filter((j) => j.status === 'done') ?? [];
-    if (doneJobs.length) {
-      qc.invalidateQueries({ queryKey: ['ratings'] });
-      qc.invalidateQueries({ queryKey: ['report'] });
-      qc.invalidateQueries({ queryKey: ['analysis-status'] });
+    // Wait for the first jobs snapshot so we don't treat historical done as new.
+    if (!data?.jobs) return;
+    const jobs = data.jobs;
+    if (!doneSeeded.current) {
+      for (const j of jobs) {
+        if (j.status === 'done') seenDoneIds.current.add(j.id);
+      }
+      doneSeeded.current = true;
+      return;
     }
+    const newlyDone = jobs.filter(
+      (j) => j.status === 'done' && !seenDoneIds.current.has(j.id),
+    );
+    if (!newlyDone.length) return;
+    for (const j of newlyDone) seenDoneIds.current.add(j.id);
+    void Promise.all([
+      qc.invalidateQueries({ queryKey: ['desk-snapshot'] }),
+      qc.invalidateQueries({ queryKey: ['ratings'] }),
+      qc.invalidateQueries({ queryKey: ['report'] }),
+      qc.invalidateQueries({ queryKey: ['analysis-status'] }),
+    ]);
   }, [data?.jobs, qc]);
 
   const running = data?.jobs.filter((j) => j.status === 'running') ?? [];

@@ -100,6 +100,17 @@ def cancel_analysis():
     return analysis_service.request_cancel()
 
 
+@router.post("/analysis/outcomes/refresh")
+def refresh_rating_outcomes(limit: Optional[int] = Query(None, ge=1, le=5000)):
+    """Backfill / refresh forward +5d/+20d outcomes and calibration snapshots."""
+    from services.outcome_service import outcome_service
+
+    try:
+        return outcome_service.refresh(limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/analysis/status")
 def analysis_status():
     return analysis_service.get_status()

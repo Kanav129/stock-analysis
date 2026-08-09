@@ -25,6 +25,7 @@ export function RetryFailedAnalysisButton() {
       void qc.invalidateQueries({ queryKey: ['analysis-status'] });
       void qc.invalidateQueries({ queryKey: ['jobs'] });
       void qc.invalidateQueries({ queryKey: ['ratings'] });
+      void qc.invalidateQueries({ queryKey: ['desk-snapshot'] });
     },
   });
 

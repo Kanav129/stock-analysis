@@ -20,6 +20,7 @@ export function WatchlistPage() {
       setTicker('');
       setNotes('');
       qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['desk-snapshot'] });
     },
   });
 

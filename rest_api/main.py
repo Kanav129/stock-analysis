@@ -13,6 +13,7 @@ from rest_api.routes import (
     research_routes,
     cron_routes,
     jobs_routes,
+    desk_routes,
 )
 from db.bootstrap import bootstrap_schema
 from services.analysis_service import analysis_service
@@ -157,6 +158,7 @@ app.include_router(stock_routes.router, prefix="/stock", tags=["Stock Data"])
 app.include_router(news_routes.router, prefix="/news", tags=["News Articles"])
 app.include_router(watchlist_routes.router, tags=["Watchlist"])
 app.include_router(holdings_routes.router, tags=["Holdings"])
+app.include_router(desk_routes.router)
 app.include_router(analysis_routes.router, tags=["Analysis"])
 app.include_router(settings_routes.router, tags=["Settings"])
 app.include_router(sync_routes.router, tags=["Sync"])

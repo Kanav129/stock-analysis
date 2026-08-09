@@ -143,6 +143,7 @@ export function LivePriceProvider({ children }: { children: ReactNode }) {
         if (res.skipped) return;
 
         await Promise.all([
+          qc.invalidateQueries({ queryKey: ['desk-snapshot'] }),
           qc.invalidateQueries({ queryKey: ['quotes'] }),
           qc.invalidateQueries({ queryKey: ['chart'] }),
         ]);

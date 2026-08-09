@@ -38,6 +38,7 @@ export function SuggestionDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['watchlist-suggestions'] });
       qc.invalidateQueries({ queryKey: ['watchlist'] });
+      qc.invalidateQueries({ queryKey: ['desk-snapshot'] });
       qc.invalidateQueries({ queryKey: ['universe'] });
       qc.invalidateQueries({ queryKey: ['jobs'] });
       navigate(`/stock/${ticker}`);

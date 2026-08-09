@@ -1,22 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useLivePrice } from '../context/LivePriceContext';
+import { useUsRegularSession } from '../hooks/useUsRegularSession';
 import { formatCountdown, msUntil } from '../lib/livePriceSchedule';
-import { isUsRegularSession } from '../lib/usMarketHours';
 
 /**
  * Desk header badge: live pulse + countdown during US RTH, otherwise "Not Live".
  */
 export function LiveSessionIndicator() {
   const { nextRefreshAt, pausedUntil, isRefreshing } = useLivePrice();
-  const [sessionOpen, setSessionOpen] = useState(() => isUsRegularSession());
+  const sessionOpen = useUsRegularSession();
   const [countdown, setCountdown] = useState(() => formatCountdown(msUntil(nextRefreshAt)));
-
-  useEffect(() => {
-    const syncSession = () => setSessionOpen(isUsRegularSession());
-    syncSession();
-    const id = window.setInterval(syncSession, 30_000);
-    return () => window.clearInterval(id);
-  }, []);
 
   useEffect(() => {
     if (!sessionOpen) return;

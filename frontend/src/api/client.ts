@@ -127,6 +127,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ key }),
     }),
+  getDeskSnapshot: () =>
+    request<import('./types').DeskSnapshot>('/desk/snapshot'),
   getHoldings: () =>
     request<{
       holdings: import('./types').Holding[];

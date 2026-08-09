@@ -9,6 +9,7 @@ export function SyncHoldingsButton({ className = '' }: { className?: string }) {
     mutationFn: () => api.syncHoldings(),
     onSuccess: async () => {
       await Promise.all([
+        qc.invalidateQueries({ queryKey: ['desk-snapshot'] }),
         qc.invalidateQueries({ queryKey: ['holdings'] }),
         qc.invalidateQueries({ queryKey: ['universe'] }),
         qc.invalidateQueries({ queryKey: ['quotes'] }),

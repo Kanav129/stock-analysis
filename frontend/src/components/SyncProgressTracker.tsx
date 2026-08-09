@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { Panel } from './Panel';
@@ -32,6 +32,7 @@ function activityVerb(stage: string | null | undefined): string {
 export function SyncProgressTracker() {
   const qc = useQueryClient();
   const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  const wasActive = useRef(false);
 
   // Polling owned by useSyncKeepAlive — subscribe only.
   const statusQ = useQuery({
@@ -67,15 +68,20 @@ export function SyncProgressTracker() {
     return () => window.clearTimeout(t);
   }, [showDone, data?.finished_at]);
 
+  // Only refresh caches when a sync run we observed finishes successfully.
   useEffect(() => {
-    if (!active && data?.status === 'completed' && data.finished_at) {
-      qc.invalidateQueries({ queryKey: ['chart'] });
-      qc.invalidateQueries({ queryKey: ['quotes'] });
-      qc.invalidateQueries({ queryKey: ['holdings'] });
-      qc.invalidateQueries({ queryKey: ['technicals'] });
-      qc.invalidateQueries({ queryKey: ['news'] });
-      qc.invalidateQueries({ queryKey: ['watchlist'] });
+    if (wasActive.current && !active && data?.status === 'completed' && data.finished_at) {
+      void Promise.all([
+        qc.invalidateQueries({ queryKey: ['desk-snapshot'] }),
+        qc.invalidateQueries({ queryKey: ['chart'] }),
+        qc.invalidateQueries({ queryKey: ['quotes'] }),
+        qc.invalidateQueries({ queryKey: ['holdings'] }),
+        qc.invalidateQueries({ queryKey: ['technicals'] }),
+        qc.invalidateQueries({ queryKey: ['news'] }),
+        qc.invalidateQueries({ queryKey: ['watchlist'] }),
+      ]);
     }
+    wasActive.current = active;
   }, [active, data?.status, data?.finished_at, qc]);
 
   if (!data || (!active && !showDone)) return null;

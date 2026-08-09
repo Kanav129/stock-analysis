@@ -159,6 +159,26 @@ export interface WatchlistItem {
   description?: string | null;
 }
 
+/** Single bootstrap payload for Trading Desk first paint. */
+export interface DeskSnapshot {
+  holdings: {
+    holdings: Holding[];
+    summary: PortfolioSummary;
+    holdings_synced_at?: string | null;
+    source?: string | null;
+  };
+  watchlist: { items: WatchlistItem[] };
+  ratings: { ratings: StockRating[] };
+  recent_ratings: { ratings: StockRating[] };
+  quotes: { quotes: Record<string, StockQuote> };
+  meta: {
+    desk_tickers: string[];
+    market_tickers: string[];
+    spark_days: number;
+    recent_limit: number;
+  };
+}
+
 export interface ChartPoint {
   date: string;
   close?: number;

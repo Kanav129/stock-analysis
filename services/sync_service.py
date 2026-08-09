@@ -626,6 +626,19 @@ class SyncService:
                     )
                     return
 
+            # Best-effort rating outcome refresh (does not gate sync completion).
+            if _is_current() and not self._cancel_flag():
+                try:
+                    from services.outcome_service import outcome_service
+
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, outcome_service.refresh),
+                        timeout=180,
+                    )
+                except Exception as exc:
+                    if _is_current():
+                        logger.error(f"Rating outcome refresh failed: {exc}")
+
             # Best-effort AI watchlist suggestions (does not gate sync completion).
             if self._cancel_flag():
                 _finalize_cancelled("Sync cancelled. Progress saved — Sync again to resume.")
