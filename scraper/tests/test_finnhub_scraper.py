@@ -30,3 +30,15 @@ def test_get_price_target_logs_info_only_when_data_present():
             out = client.get_price_target("AAPL")
     assert out["targetMean"] == 200.0
     log.info.assert_called()
+
+
+def test_get_general_news_returns_list():
+    client = FinnhubClient(api_key="test")
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = [{"headline": "Markets rally", "summary": "Stocks up"}]
+    with patch("scraper.finnhub_scraper.requests.get", return_value=resp) as get:
+        out = client.get_general_news("general")
+    assert len(out) == 1
+    assert out[0]["headline"] == "Markets rally"
+    assert get.call_args.kwargs["params"]["category"] == "general"

@@ -1,7 +1,19 @@
 import asyncio
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from services.sync_service import SyncService
+
+
+@pytest.fixture(autouse=True)
+def _stub_idea_scan():
+    """Idea scan hits Mongo/Finnhub/LLM — keep sync unit tests offline."""
+    with patch(
+        "services.idea_scan_service.IdeaScanService.rebuild",
+        return_value={"ok": True, "candidates": 0, "upserted": 0},
+    ):
+        yield
 
 
 def _close_scheduled_coroutine(create_task: MagicMock) -> None:

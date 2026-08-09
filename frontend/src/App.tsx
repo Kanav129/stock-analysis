@@ -15,6 +15,9 @@ const StockDetailPage = lazy(() =>
 const WatchlistPage = lazy(() =>
   import('./pages/WatchlistPage').then((m) => ({ default: m.WatchlistPage })),
 );
+const SuggestionDetailPage = lazy(() =>
+  import('./pages/SuggestionDetailPage').then((m) => ({ default: m.SuggestionDetailPage })),
+);
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
@@ -87,6 +90,14 @@ export default function App() {
               element={
                 <Suspense fallback={<PageFallback />}>
                   <WatchlistPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/suggestions/:ticker"
+              element={
+                <Suspense fallback={<PageFallback />}>
+                  <SuggestionDetailPage />
                 </Suspense>
               }
             />

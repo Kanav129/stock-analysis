@@ -6,7 +6,30 @@ from datetime import datetime
 from typing import Any, Optional
 
 from db.db_factory import get_db_client
+from services import run_checkpoint_service as rcs
 from utils.logger import logger
+
+# Sections produced only by deep-dive nodes (not reused when continuing from core).
+_DEEP_ONLY_SECTION_KEYS = frozenset(
+    {
+        "flows",
+        "policy",
+        "lockup",
+        "kronos",
+        "_kronos_data",
+        "research_plan",
+        "trader_proposal",
+        "portfolio_decision",
+        "debate",
+    }
+)
+
+
+def core_sections_for_continue(sections: dict[str, Any] | None) -> dict[str, Any]:
+    """Copy core markdown sections, dropping deep-only / kronos keys."""
+    if not sections:
+        return {}
+    return {k: v for k, v in sections.items() if k not in _DEEP_ONLY_SECTION_KEYS}
 
 
 def resolve_report_type_filter(value: str | None) -> str | None:
@@ -104,6 +127,42 @@ class ReportService:
         if not rows:
             return None
         return self._row_to_dict(rows[0], cols)
+
+    def get_same_day_report(
+        self,
+        ticker: str,
+        report_type: str,
+        *,
+        day: str | None = None,
+    ) -> Optional[dict[str, Any]]:
+        """Latest report of ``report_type`` in the HKT calendar day window."""
+        if report_type not in ("core", "deep"):
+            raise ValueError("report_type must be core or deep")
+        start, end = rcs.day_bounds_utc(day)
+        rows, cols = self._db.fetch_query(
+            "SELECT id, ticker, report_type, sections, rating, factor_scores, "
+            "entry_levels, live_price, model, created_at "
+            "FROM stock_reports "
+            "WHERE ticker=%s AND report_type=%s "
+            "AND created_at >= %s AND created_at < %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (ticker.upper(), report_type, start, end),
+        )
+        if not rows:
+            return None
+        return self._row_to_dict(rows[0], cols)
+
+    def get_same_day_core_report(
+        self, ticker: str, *, day: str | None = None
+    ) -> Optional[dict[str, Any]]:
+        """Latest core report for ticker in today's (or given) HKT day."""
+        return self.get_same_day_report(ticker, "core", day=day)
+
+    def get_same_day_deep_report(
+        self, ticker: str, *, day: str | None = None
+    ) -> Optional[dict[str, Any]]:
+        """Latest deep report for ticker in today's (or given) HKT day."""
+        return self.get_same_day_report(ticker, "deep", day=day)
 
     def get_latest_report_envelope(
         self, ticker: str, report_type: str | None

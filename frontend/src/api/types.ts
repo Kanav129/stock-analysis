@@ -106,6 +106,43 @@ export interface PortfolioSummary {
   source?: string | null;
 }
 
+export interface SuggestionBriefReason {
+  title: string;
+  detail: string;
+}
+
+export interface SuggestionBriefSource {
+  title: string;
+  url: string;
+  publisher?: string;
+}
+
+export interface SuggestionPortfolioFit {
+  stance: 'diversifies' | 'neutral' | 'concentrated' | string;
+  warning?: string | null;
+  note: string;
+}
+
+export interface SuggestionBrief {
+  thesis: string;
+  reasons: SuggestionBriefReason[];
+  sources: SuggestionBriefSource[];
+  portfolio_fit: SuggestionPortfolioFit;
+}
+
+export interface WatchlistSuggestion {
+  ticker: string;
+  reason: string;
+  suggested_at: string;
+  expires_at: string;
+  source?: string | null;
+  company_name?: string | null;
+  company_blurb?: string | null;
+  sector?: string | null;
+  industry?: string | null;
+  brief?: SuggestionBrief;
+}
+
 export interface WatchlistItem {
   id: number;
   ticker: string;

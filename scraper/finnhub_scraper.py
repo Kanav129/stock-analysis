@@ -73,6 +73,18 @@ class FinnhubClient:
         logger.warning(f"Finnhub news returned unexpected type for {ticker}: {type(result)}")
         return []
 
+    def get_general_news(self, category: str = "general", min_id: int = 0) -> list[dict[str, Any]]:
+        """Fetch market-wide news (Finnhub /news). Free tier: general category."""
+        params: dict[str, Any] = {"category": category}
+        if min_id:
+            params["minId"] = min_id
+        result = self._get("/news", params)
+        if isinstance(result, list):
+            logger.info(f"Finnhub: {len(result)} general news articles ({category})")
+            return result
+        logger.warning(f"Finnhub general news returned unexpected type: {type(result)}")
+        return []
+
     # ── Insider transactions ──────────────────────────────────────
 
     def get_insider_transactions(self, ticker: str) -> list[dict[str, Any]]:

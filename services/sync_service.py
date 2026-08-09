@@ -626,6 +626,38 @@ class SyncService:
                     )
                     return
 
+            # Best-effort AI watchlist suggestions (does not gate sync completion).
+            if self._cancel_flag():
+                _finalize_cancelled("Sync cancelled. Progress saved — Sync again to resume.")
+                return
+            self._update(
+                stage="suggestions",
+                stage_label="Suggestions",
+                current_ticker=None,
+                message="Scanning news for watchlist ideas…",
+                percent=92.0,
+                completed=list(completed),
+            )
+            try:
+                from services.idea_scan_service import IdeaScanService
+
+                scan_result = await asyncio.wait_for(
+                    loop.run_in_executor(None, IdeaScanService().rebuild),
+                    timeout=480,
+                )
+                if not _is_current():
+                    return
+                checkpoint["suggestions_done"] = bool(
+                    isinstance(scan_result, dict) and scan_result.get("ok")
+                )
+                _save_if_current(checkpoint)
+            except Exception as exc:
+                if not _is_current():
+                    return
+                logger.error(f"Watchlist idea scan failed: {exc}")
+                checkpoint["suggestions_done"] = False
+                _save_if_current(checkpoint)
+
             if not rcs.is_sync_complete_for_universe(checkpoint, target):
                 finished_at = datetime.utcnow().isoformat()
                 checkpoint.update(

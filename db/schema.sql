@@ -123,3 +123,21 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 CREATE INDEX IF NOT EXISTS idx_llm_usage_created_at ON llm_usage (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_role_day ON llm_usage (role, created_at);
+
+CREATE TABLE IF NOT EXISTS watchlist_suggestions (
+    ticker VARCHAR(10) PRIMARY KEY,
+    reason TEXT NOT NULL,
+    suggested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    source VARCHAR(16),
+    company_name TEXT,
+    company_blurb TEXT,
+    sector TEXT,
+    industry TEXT,
+    brief JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_watchlist_suggestions_expires
+    ON watchlist_suggestions (expires_at);
+CREATE INDEX IF NOT EXISTS idx_watchlist_suggestions_suggested
+    ON watchlist_suggestions (suggested_at DESC);

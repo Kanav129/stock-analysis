@@ -47,6 +47,18 @@ CORE_STAGES = [
     "persist",
 ]
 
+# Same-day core → deep continue path (skip core LLM gathers)
+DEEP_CONTINUE_STAGES = [
+    "gather_prices",
+    "gather_flows",
+    "gather_policy",
+    "gather_lockup",
+    "run_kronos",
+    "debate",
+    "synthesize_decision",
+    "persist",
+]
+
 _JOB_SELECT_COLS = """
     id, job_type, ticker, status, cancel_requested,
     progress, result, error, worker_id, lease_until,
@@ -898,6 +910,8 @@ class JobQueueService:
                 ticker,
                 (result or {}).get("rating"),
             )
+            if job_type == JOB_CORE:
+                self._maybe_auto_enqueue_deep(ticker, result or {})
         except OwnershipLostError:
             logger.info(
                 "Job %s ownership lost %s %s — aborting local run",
@@ -966,10 +980,64 @@ class JobQueueService:
             "report_id": final.get("report_id"),
             "rating": final.get("rating"),
             "score": final.get("score"),
+            "decision_ok": final.get("decision_ok", True),
         }
+
+    def _maybe_auto_enqueue_deep(self, ticker: str, result: dict[str, Any]) -> None:
+        """Enqueue deep dive when core |score| crosses the auto-deep threshold."""
+        from config.rating_config import AUTO_DEEP_SCORE_ABS_THRESHOLD
+        from services.report_service import ReportService
+
+        if result.get("decision_ok") is False:
+            return
+        raw_score = result.get("score")
+        if raw_score is None:
+            return
+        try:
+            score = int(raw_score)
+        except (TypeError, ValueError):
+            return
+        if abs(score) < AUTO_DEEP_SCORE_ABS_THRESHOLD:
+            return
+
+        ticker_u = ticker.upper()
+        if self.find_active(ticker_u, JOB_DEEP):
+            logger.info(
+                "Skip auto deep for %s — deep job already active (score=%s)",
+                ticker_u,
+                score,
+            )
+            return
+        try:
+            if ReportService().get_same_day_deep_report(ticker_u):
+                logger.info(
+                    "Skip auto deep for %s — same-day deep already exists (score=%s)",
+                    ticker_u,
+                    score,
+                )
+                return
+        except Exception as exc:
+            logger.warning("Same-day deep lookup failed for %s: %s", ticker_u, exc)
+
+        try:
+            out = self.enqueue(JOB_DEEP, [ticker_u])
+            logger.info(
+                "Auto-enqueued deep_dive for %s (score=%s, started=%s)",
+                ticker_u,
+                score,
+                out.get("started"),
+            )
+        except Exception as exc:
+            logger.error("Failed to auto-enqueue deep_dive for %s: %s", ticker_u, exc)
 
     def _run_deep(self, job_id: str, ticker: str) -> dict[str, Any]:
         from rag_graphs.research_graph.graph import app as research_graph
+        from services.analysis_service import analysis_service
+        from services.report_service import ReportService
+
+        core = ReportService().get_same_day_core_report(ticker.upper())
+        if core:
+            return self._run_deep_continue(job_id, ticker, core, analysis_service)
 
         final: dict[str, Any] = {"ticker": ticker}
         initial = {
@@ -1001,6 +1069,47 @@ class JobQueueService:
             "report_id": final.get("report_id"),
             "rating": final.get("rating"),
             "score": final.get("score"),
+        }
+
+    def _run_deep_continue(
+        self,
+        job_id: str,
+        ticker: str,
+        core_report: dict[str, Any],
+        analysis_service: Any,
+    ) -> dict[str, Any]:
+        """Deep dive continuing from a same-day core report (skip core LLM gathers)."""
+
+        def on_stage(stage: str) -> None:
+            label = STAGE_LABELS.get(stage, stage.replace("_", " ").title())
+            percent = 0.0
+            if stage in DEEP_CONTINUE_STAGES:
+                percent = round(
+                    (DEEP_CONTINUE_STAGES.index(stage) + 1)
+                    / len(DEEP_CONTINUE_STAGES)
+                    * 100,
+                    1,
+                )
+            self._set_progress(
+                job_id,
+                stage=stage,
+                stage_label=label,
+                message=f"{label}…",
+                percent=min(95.0, percent),
+            )
+
+        result = analysis_service._continue_deep_from_core(
+            core_report,
+            should_cancel=lambda: self._should_stop(job_id),
+            on_stage=on_stage,
+        )
+        return {
+            "ticker": ticker,
+            "report_id": result.get("report_id"),
+            "rating": result.get("rating"),
+            "score": result.get("score"),
+            "continued_from_core": True,
+            "source_core_report_id": core_report.get("id"),
         }
 
     def _run_rescore(self, job_id: str, ticker: str) -> dict[str, Any]:

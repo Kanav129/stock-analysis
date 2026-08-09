@@ -15,6 +15,7 @@ import { Sparkline } from '../components/Sparkline';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 import { AnalysisErrorIcon } from '../components/AnalysisErrorIcon';
 import { RatingBadge } from '../components/RatingBadge';
+import { WatchlistSuggestions } from '../components/WatchlistSuggestions';
 import type { JobsSnapshot, Rating, StockQuote } from '../api/types';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
 import { isUsRegularSession } from '../lib/usMarketHours';
@@ -503,6 +504,8 @@ export function DashboardPage() {
             </div>
             )}
           </Panel>
+
+          <WatchlistSuggestions dense maxRows={8} />
 
           <Panel
             title="Universe heatmap"

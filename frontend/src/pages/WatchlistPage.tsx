@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { DeskRunActions } from '../components/DeskRunActions';
 import { JobsPanel } from '../components/JobsPanel';
 import { WatchlistList } from '../components/WatchlistList';
+import { WatchlistSuggestions } from '../components/WatchlistSuggestions';
 import { LoadingState } from '../components/LoadingSpinner';
 
 export function WatchlistPage() {
@@ -75,6 +76,8 @@ export function WatchlistPage() {
           <p className="p-6 text-sm text-[var(--color-text-muted)]">No watchlist items yet.</p>
         )}
       </div>
+
+      <WatchlistSuggestions asPanel={false} />
     </div>
   );
 }

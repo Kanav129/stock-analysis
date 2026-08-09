@@ -241,6 +241,21 @@ export const api = {
     body: JSON.stringify({ ticker, notes }),
   }),
   removeWatchlist: (ticker: string) => request<{ removed: string }>(`/watchlist/${ticker}`, { method: 'DELETE' }),
+  getWatchlistSuggestions: () =>
+    request<{ items: import('./types').WatchlistSuggestion[] }>('/watchlist/suggestions'),
+  getWatchlistSuggestion: (ticker: string) =>
+    request<import('./types').WatchlistSuggestion>(
+      `/watchlist/suggestions/${encodeURIComponent(ticker)}`,
+    ),
+  acceptWatchlistSuggestion: (ticker: string) =>
+    request<{
+      ticker: string;
+      item: import('./types').WatchlistItem;
+      job: unknown;
+    }>('/watchlist/suggestions/accept', {
+      method: 'POST',
+      body: JSON.stringify({ ticker }),
+    }),
   getUniverse: () => request<{ tickers: string[]; watchlist: string[]; holdings: string[] }>('/universe'),
   getChart: (ticker: string, priceType = 'close', duration = '30') =>
     request<{

@@ -8,6 +8,10 @@ class WatchlistCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class WatchlistSuggestionAccept(BaseModel):
+    ticker: str
+
+
 class AnalysisRunRequest(BaseModel):
     tickers: Optional[List[str]] = None
     force: bool = False

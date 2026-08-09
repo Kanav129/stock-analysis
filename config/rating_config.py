@@ -25,6 +25,9 @@ RATING_SCORE_BANDS = {
 
 RATING_SET = set(RATING_TAGS)
 
+# After a successful core report, auto-enqueue deep dive when |score| >= this.
+AUTO_DEEP_SCORE_ABS_THRESHOLD = 20
+
 
 def normalize_rating(rating: str | None) -> str:
     if not rating:

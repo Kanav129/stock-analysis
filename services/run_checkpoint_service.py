@@ -49,6 +49,7 @@ def empty_sync_checkpoint(tickers: list[str]) -> dict[str, Any]:
         "news_done": [],
         "prices_done": [],
         "vectors_done": False,
+        "suggestions_done": False,
         "errors": [],
         "started_at": now,
         "updated_at": now,

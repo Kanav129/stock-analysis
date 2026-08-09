@@ -4,16 +4,23 @@ import math
 import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
 from rag_graphs.research_graph.graph import app as research_graph
+from rag_graphs.research_graph.nodes.debate import debate
+from rag_graphs.research_graph.nodes.gather_flows import gather_flows
+from rag_graphs.research_graph.nodes.gather_lockup import gather_lockup
+from rag_graphs.research_graph.nodes.gather_policy import gather_policy
+from rag_graphs.research_graph.nodes.gather_prices import gather_prices
 from rag_graphs.research_graph.nodes.persist_report import persist_report
+from rag_graphs.research_graph.nodes.run_kronos import run_kronos
 from rag_graphs.research_graph.nodes.synthesize_decision import synthesize_decision
 from db.db_factory import get_db_client
 from services import run_checkpoint_service as rcs
 from services.analysis_failure_service import record_failed_analysis
-from services.report_service import ReportService
+from services.report_service import ReportService, core_sections_for_continue
 from services.universe_service import UniverseService
 from utils.logger import logger
 
@@ -759,6 +766,62 @@ class AnalysisService:
         )
         persist_out = persist_report(state)  # type: ignore[arg-type]
         state.update(persist_out)
+        return state
+
+    def _continue_deep_from_core(
+        self,
+        report: dict[str, Any],
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+        on_stage: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Run deep-only nodes using same-day core sections; insert a new deep report.
+
+        Skips fundamentals/news/sentiment LLM gathers. Does not set ``report_id`` so
+        persist inserts a new ``deep`` row instead of updating the core report.
+        """
+        cancel = should_cancel or self._cancel_requested
+
+        def _check_cancel() -> None:
+            if cancel():
+                raise RuntimeError("Analysis cancelled")
+
+        ticker = str(report["ticker"]).upper()
+        state: dict[str, Any] = {
+            "ticker": ticker,
+            "report_type": "deep",
+            "sections_markdown": core_sections_for_continue(report.get("sections")),
+            "factor_scores": report.get("factor_scores") or {},
+            "live_price": report.get("live_price") or 0.0,
+            "fundamental_data": {},
+            "market_data": {},
+            "sentiment_data": {},
+            "errors": [],
+        }
+
+        stages: list[tuple[str, Callable[[Any], dict[str, Any]]]] = [
+            ("gather_prices", gather_prices),
+            ("gather_flows", gather_flows),
+            ("gather_policy", gather_policy),
+            ("gather_lockup", gather_lockup),
+            ("run_kronos", run_kronos),
+            ("debate", debate),
+            ("synthesize_decision", synthesize_decision),
+            ("persist", persist_report),
+        ]
+
+        logger.info(
+            "Continuing deep dive for %s from same-day core report %s",
+            ticker,
+            report.get("id"),
+        )
+        for stage_name, node_fn in stages:
+            _check_cancel()
+            if on_stage:
+                on_stage(stage_name)
+            out = node_fn(state)  # type: ignore[arg-type]
+            if isinstance(out, dict):
+                state.update(out)
         return state
 
 
