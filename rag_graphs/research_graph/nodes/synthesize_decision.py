@@ -1,17 +1,29 @@
 """Decision synthesis — structured LLM call producing rating tag + AI score (−100…+100)."""
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from typing import Any, Dict
 
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from config.llm_config import call_with_retry_then_fallback
+from config.llm_config import (
+    _chat_llm,
+    _fallback_chain,
+    _record_usage,
+    resolve_analysis_model,
+)
 from config.rating_config import RATING_TAGS, clamp_score, normalize_rating
 from config.report_config import compute_dimension_alignment, compute_factor_scores
 from rag_graphs.research_graph.state import ResearchState
 from services.portfolio_context_service import portfolio_markdown_for
 from utils.logger import logger
+
+# Promoted from evals/decision_scoring variant tight_v1_think (2026-08-10).
+DECISION_TEMPERATURE = 0.25
+DECISION_ENABLE_THINKING = True
+_PRIMARY_ATTEMPTS = 2
 
 
 class DecisionOutput(BaseModel):
@@ -54,7 +66,7 @@ Produce:
    +100 = strongest buy conviction
 
 Score is NOT "confidence %". A HOLD at +12 means a mild bullish lean; a HOLD at -18 means
-a mild bearish lean. A BUY at +55 is clearly stronger than ACCUMULATE at +28.
+a mild bearish lean.
 
 Typical bands (use the full range — do not cluster near 0):
 - STRONG_SELL: -100 to -70
@@ -65,10 +77,9 @@ Typical bands (use the full range — do not cluster near 0):
 - BUY: +40 to +70
 - STRONG_BUY: +70 to +100
 
-Be progressive, not overly conservative. If the evidence is clearly constructive or
-deteriorating, move decisively into BUY/SELL or STRONG_* — do not default everything to
-HOLD with a tiny score. Use REDUCE/ACCUMULATE when the lean is real but not a full
-buy/sell. Reserve STRONG_* for high-conviction setups with aligned factors.
+Default to HOLD when evidence is mixed or inconclusive. Use REDUCE/ACCUMULATE when there
+is a clear but moderate lean. Move to BUY/SELL or STRONG_* only when multiple factors
+align with high conviction. Reserve STRONG_* for exceptional setups with aligned factors.
 
 Keep rating and score consistent with the bands above. Be specific and actionable with
 entry/stop/target when possible.
@@ -138,6 +149,122 @@ ${float(live_price):.2f}
     return base
 
 
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, Mapping) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "\n".join(parts)
+    raise TypeError("LLM response content must be text")
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(text):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise ValueError("LLM response did not contain a JSON object")
+
+
+def _invoke_decision_on_llm(
+    llm: Any,
+    prompt: ChatPromptTemplate,
+    inputs: dict[str, Any],
+    *,
+    enable_thinking: bool,
+) -> Any:
+    """Structured decision call.
+
+    Qwen rejects tool_choice=required while enable_thinking=True, so thinking
+    mode uses JSON parse directly. Non-thinking uses function_calling.
+    """
+    prompt_value = prompt.invoke(inputs)
+    if enable_thinking:
+        raw = llm.invoke(prompt_value)
+        content = getattr(raw, "content", raw)
+        payload = _extract_json_object(_message_text(content))
+        decision = DecisionOutput.model_validate(payload)
+        return {"raw": raw, "parsed": decision}
+
+    structured_llm = llm.with_structured_output(
+        DecisionOutput,
+        method="function_calling",
+        include_raw=True,
+    )
+    out = structured_llm.invoke(prompt_value)
+    if isinstance(out, dict) and "parsed" in out:
+        if out.get("parsed") is None:
+            raise ValueError(
+                f"structured output parsing failed: {out.get('parsing_error') or 'empty'}"
+            )
+    return out
+
+
+def _call_decision_llm(
+    prompt: ChatPromptTemplate,
+    inputs: dict[str, Any],
+) -> tuple[Any, str]:
+    primary_name = resolve_analysis_model()
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _PRIMARY_ATTEMPTS + 1):
+        try:
+            llm = _chat_llm(
+                primary_name,
+                DECISION_TEMPERATURE,
+                enable_thinking=DECISION_ENABLE_THINKING,
+            )
+            result = _invoke_decision_on_llm(
+                llm,
+                prompt,
+                inputs,
+                enable_thinking=DECISION_ENABLE_THINKING,
+            )
+            _record_usage("analysis", primary_name, result)
+            return result, primary_name
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                f"analysis LLM ({primary_name}) attempt "
+                f"{attempt}/{_PRIMARY_ATTEMPTS} failed: {exc}"
+            )
+
+    for fallback_name in _fallback_chain("analysis", primary_name):
+        try:
+            # Cross-role / env fallbacks: prefer function_calling (thinking off).
+            llm = _chat_llm(
+                fallback_name,
+                DECISION_TEMPERATURE,
+                enable_thinking=False,
+            )
+            result = _invoke_decision_on_llm(
+                llm,
+                prompt,
+                inputs,
+                enable_thinking=False,
+            )
+            logger.info(f"analysis succeeded via fallback model {fallback_name}")
+            _record_usage("analysis", fallback_name, result)
+            return result, fallback_name
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(f"analysis fallback LLM ({fallback_name}) failed: {exc}")
+
+    assert last_exc is not None
+    raise last_exc
+
+
 def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
     ticker = state["ticker"]
     logger.info(f"---SYNTHESIZE DECISION {ticker}---")
@@ -201,22 +328,11 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
 Return your structured decision with rating tag + score (−100…+100)."""),
     ])
 
-    def _invoke(llm):
-        structured_llm = llm.with_structured_output(
-            DecisionOutput,
-            method="function_calling",
-            include_raw=True,
-        )
-        out = (prompt | structured_llm).invoke({"ticker": ticker, "context": context})
-        # include_raw → {"raw": AIMessage, "parsed": DecisionOutput}; keep both for usage tracking
-        return out
-
     used_model = "analysis"
     try:
-        result, used_model = call_with_retry_then_fallback(
-            role="analysis",
-            temperature=0.25,
-            call=_invoke,
+        result, used_model = _call_decision_llm(
+            prompt,
+            {"ticker": ticker, "context": context},
         )
     except Exception as exc:
         logger.error(f"Decision LLM failed: {exc}")
@@ -265,14 +381,44 @@ Return your structured decision with rating tag + score (−100…+100)."""),
             "posture": "",
         }
 
-    rating = normalize_rating(result.rating)
-    score = clamp_score(result.score)
+    if isinstance(result, DecisionOutput):
+        decision = result
+    elif isinstance(result, Mapping):
+        try:
+            decision = DecisionOutput.model_validate(dict(result))
+        except Exception as exc:
+            return {
+                "decision_ok": False,
+                "error_message": f"Decision parse failed: {exc}"[:500],
+                "rating": None,
+                "score": None,
+                "reasoning": f"Decision generation failed: {exc}",
+                "key_drivers": [],
+                "supporting_headlines": [],
+                "entry_levels": {
+                    "entry": None,
+                    "stop": None,
+                    "target": None,
+                    "position_note": "Unable to determine — review manually.",
+                },
+                "factor_scores": factor_scores,
+                "dimension_alignment": {},
+                "calibration_note": "Analysis failed",
+                "model": used_model,
+                "posture": "",
+            }
+    else:
+        # Duck-typed objects (incl. test doubles) exposing DecisionOutput fields.
+        decision = result
+
+    rating = normalize_rating(decision.rating)
+    score = clamp_score(decision.score)
 
     entry_levels = {
-        "entry": result.entry,
-        "stop": result.stop,
-        "target": result.target,
-        "position_note": result.position_note,
+        "entry": decision.entry,
+        "stop": decision.stop,
+        "target": decision.target,
+        "position_note": decision.position_note,
     }
 
     dimension_alignment = compute_dimension_alignment(factor_scores, rating)
@@ -295,13 +441,13 @@ Return your structured decision with rating tag + score (−100…+100)."""),
         "error_message": None,
         "rating": rating,
         "score": score,
-        "reasoning": result.reasoning,
-        "key_drivers": result.key_drivers[:5],
-        "supporting_headlines": [{"headline": h} for h in result.supporting_headlines[:5]],
+        "reasoning": decision.reasoning,
+        "key_drivers": decision.key_drivers[:5],
+        "supporting_headlines": [{"headline": h} for h in decision.supporting_headlines[:5]],
         "entry_levels": entry_levels,
         "factor_scores": factor_scores,
         "dimension_alignment": dimension_alignment,
         "calibration_note": calibration_note,
         "model": used_model,
-        "posture": result.posture,
+        "posture": decision.posture,
     }

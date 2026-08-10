@@ -49,26 +49,13 @@ def _base_state(**overrides):
     return state
 
 
-def _decision_mock():
-    decision = MagicMock()
-    decision.rating = "BUY"
-    decision.score = 42
-    decision.reasoning = "ok"
-    decision.key_drivers = ["momentum"]
-    decision.supporting_headlines = ["headline"]
-    decision.entry = None
-    decision.stop = None
-    decision.target = None
-    decision.position_note = "Add modestly."
-    decision.posture = "add"
-    return decision
-
-
 @patch(
     "rag_graphs.research_graph.nodes.synthesize_decision.build_decision_context",
     wraps=build_decision_context,
 )
-@patch("config.llm_config.get_analysis_llm")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision._record_usage")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision.resolve_analysis_model", return_value="qwen3.7-max")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision._chat_llm")
 @patch(
     "rag_graphs.research_graph.nodes.synthesize_decision.portfolio_markdown_for",
     return_value="## Personal Portfolio\n- held",
@@ -77,13 +64,18 @@ def _decision_mock():
     "services.analysis_knowledge_service.analysis_knowledge_service.priors_for_deep",
     return_value="## Historical performance priors\n- prior case",
 )
-def test_deep_includes_priors(mock_priors, mock_port, mock_llm, mock_build):
-    structured = MagicMock()
-    structured.invoke.return_value = _decision_mock()
-    structured.return_value = _decision_mock()
+def test_deep_includes_priors(mock_priors, mock_port, mock_chat_llm, mock_model, mock_usage, mock_build):
+    import json
     llm = MagicMock()
-    llm.with_structured_output.return_value = structured
-    mock_llm.return_value = llm
+    raw = MagicMock()
+    raw.content = json.dumps({
+        "rating": "BUY", "score": 42, "reasoning": "ok",
+        "key_drivers": ["momentum"], "supporting_headlines": ["headline"],
+        "entry": None, "stop": None, "target": None,
+        "position_note": "Add modestly.", "posture": "add",
+    })
+    llm.invoke.return_value = raw
+    mock_chat_llm.return_value = llm
 
     synthesize_decision(_base_state(report_type="deep"))  # type: ignore[arg-type]
     mock_priors.assert_called_once()
@@ -94,7 +86,9 @@ def test_deep_includes_priors(mock_priors, mock_port, mock_llm, mock_build):
     "rag_graphs.research_graph.nodes.synthesize_decision.build_decision_context",
     wraps=build_decision_context,
 )
-@patch("config.llm_config.get_analysis_llm")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision._record_usage")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision.resolve_analysis_model", return_value="qwen3.7-max")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision._chat_llm")
 @patch(
     "rag_graphs.research_graph.nodes.synthesize_decision.portfolio_markdown_for",
     return_value="## Personal Portfolio\n- held",
@@ -103,13 +97,18 @@ def test_deep_includes_priors(mock_priors, mock_port, mock_llm, mock_build):
     "services.analysis_knowledge_service.analysis_knowledge_service.priors_for_deep",
     return_value="## Historical performance priors\n- prior case",
 )
-def test_core_skips_priors(mock_priors, mock_port, mock_llm, mock_build):
-    structured = MagicMock()
-    structured.invoke.return_value = _decision_mock()
-    structured.return_value = _decision_mock()
+def test_core_skips_priors(mock_priors, mock_port, mock_chat_llm, mock_model, mock_usage, mock_build):
+    import json
     llm = MagicMock()
-    llm.with_structured_output.return_value = structured
-    mock_llm.return_value = llm
+    raw = MagicMock()
+    raw.content = json.dumps({
+        "rating": "BUY", "score": 42, "reasoning": "ok",
+        "key_drivers": ["momentum"], "supporting_headlines": ["headline"],
+        "entry": None, "stop": None, "target": None,
+        "position_note": "Add modestly.", "posture": "add",
+    })
+    llm.invoke.return_value = raw
+    mock_chat_llm.return_value = llm
 
     synthesize_decision(_base_state(report_type="core"))  # type: ignore[arg-type]
     mock_priors.assert_not_called()

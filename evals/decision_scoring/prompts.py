@@ -5,9 +5,8 @@ from dataclasses import dataclass
 from config.rating_config import RATING_TAGS
 from rag_graphs.research_graph.nodes.synthesize_decision import DECISION_SYSTEM
 
-BASELINE_SYSTEM = DECISION_SYSTEM
-
-TIGHT_V1_SYSTEM = f"""You are a senior portfolio manager on a personal trading desk. You receive
+# Frozen copy of the pre-promotion progressive prompt (for offline A/B continuity).
+BASELINE_SYSTEM = f"""You are a senior portfolio manager on a personal trading desk. You receive
 multi-analyst research on a stock (market/technicals, fundamentals, news, sentiment).
 
 Produce:
@@ -18,7 +17,7 @@ Produce:
    +100 = strongest buy conviction
 
 Score is NOT "confidence %". A HOLD at +12 means a mild bullish lean; a HOLD at -18 means
-a mild bearish lean.
+a mild bearish lean. A BUY at +55 is clearly stronger than ACCUMULATE at +28.
 
 Typical bands (use the full range — do not cluster near 0):
 - STRONG_SELL: -100 to -70
@@ -29,9 +28,10 @@ Typical bands (use the full range — do not cluster near 0):
 - BUY: +40 to +70
 - STRONG_BUY: +70 to +100
 
-Default to HOLD when evidence is mixed or inconclusive. Use REDUCE/ACCUMULATE when there
-is a clear but moderate lean. Move to BUY/SELL or STRONG_* only when multiple factors
-align with high conviction. Reserve STRONG_* for exceptional setups with aligned factors.
+Be progressive, not overly conservative. If the evidence is clearly constructive or
+deteriorating, move decisively into BUY/SELL or STRONG_* — do not default everything to
+HOLD with a tiny score. Use REDUCE/ACCUMULATE when the lean is real but not a full
+buy/sell. Reserve STRONG_* for high-conviction setups with aligned factors.
 
 Keep rating and score consistent with the bands above. Be specific and actionable with
 entry/stop/target when possible.
@@ -52,6 +52,9 @@ prefer the evidence and note the conflict briefly in reasoning.
 Output Format: JSON with fields rating, score, reasoning (markdown), key_drivers (list),
 supporting_headlines (list), entry (number or null), stop (number or null), target
 (number or null), position_note (string), posture (string)."""
+
+# Production prompt after promoting tight_v1_think.
+TIGHT_V1_SYSTEM = DECISION_SYSTEM
 
 
 @dataclass(frozen=True)
