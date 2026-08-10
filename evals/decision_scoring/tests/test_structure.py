@@ -11,6 +11,16 @@ def test_valid_payload_passes():
     assert r.parsed_ok and r.rating_ok and r.score_ok and not r.errors
 
 
+def test_garbage_rating_fails_rating_ok():
+    r = validate_decision_payload({
+        "rating": "GARBAGE", "score": 5, "reasoning": "mixed",
+        "key_drivers": ["valuation"], "supporting_headlines": ["h"],
+        "entry": 100.0, "stop": 90.0, "target": 110.0,
+        "position_note": "Hold", "posture": "neutral",
+    })
+    assert not r.rating_ok
+
+
 def test_bad_score_fails():
     r = validate_decision_payload({
         "rating": "BUY", "score": 999, "reasoning": "x",

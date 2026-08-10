@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from config.rating_config import RATING_SET, normalize_rating
+from config.rating_config import RATING_SET
 from rag_graphs.research_graph.nodes.synthesize_decision import DecisionOutput
 
 
@@ -97,7 +97,6 @@ def validate_decision_payload(obj: Any) -> StructureResult:
         model = DecisionOutput.model_validate(obj)
         parsed_ok = True
         normalized = model.model_dump()
-        rating_ok = normalize_rating(model.rating) in RATING_SET
     except ValidationError as exc:
         errors.extend(
             f"{'.'.join(str(part) for part in err.get('loc', ()))}: {err.get('msg', 'invalid')}"
