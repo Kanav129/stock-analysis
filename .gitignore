@@ -72,5 +72,7 @@ frontend/.env.*
 
 docs/
 
+evals/decision_scoring/results/
+
 skills-lock.json
 .agents/
