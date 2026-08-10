@@ -1,0 +1,68 @@
+{
+  "as_of": "2026-08-10T13:43:35.703644+00:00",
+  "tickers": {
+    "AAPL": {
+      "recommendation_key": "buy",
+      "recommendation_mean": 2.08696,
+      "target_mean": 322.81854,
+      "price": 306.27,
+      "n_analysts": 41,
+      "finnhub_rec": {
+        "strongBuy": 13,
+        "buy": 24,
+        "hold": 14,
+        "sell": 3,
+        "strongSell": 0
+      }
+    },
+    "DIS": {
+      "recommendation_key": "strong_buy",
+      "recommendation_mean": 1.4375,
+      "target_mean": 127.71935,
+      "price": 104.32,
+      "n_analysts": 31,
+      "finnhub_rec": {
+        "strongBuy": 11,
+        "buy": 22,
+        "hold": 3,
+        "sell": 1,
+        "strongSell": 0
+      }
+    },
+    "NVDA": {
+      "recommendation_key": "strong_buy",
+      "recommendation_mean": 1.29508,
+      "target_mean": 302.82758,
+      "price": 222.84,
+      "n_analysts": 58,
+      "finnhub_rec": {
+        "strongBuy": 23,
+        "buy": 41,
+        "hold": 3,
+        "sell": 1,
+        "strongSell": 0
+      }
+    },
+    "ICLN": {
+      "recommendation_key": null,
+      "recommendation_mean": null,
+      "target_mean": null,
+      "price": null,
+      "n_analysts": null
+    },
+    "META": {
+      "recommendation_key": "strong_buy",
+      "recommendation_mean": 1.35484,
+      "target_mean": 756.94946,
+      "price": 596.5,
+      "n_analysts": 57,
+      "finnhub_rec": {
+        "strongBuy": 21,
+        "buy": 41,
+        "hold": 9,
+        "sell": 0,
+        "strongSell": 0
+      }
+    }
+  }
+}
