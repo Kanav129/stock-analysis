@@ -84,6 +84,8 @@ jobs:
 
           # Same formula as services/sync_service.compute_stage_timeouts (defaults):
           # news=30s/ticker, prices=200s/ticker, buffer=1.2, vectors=600s, min stage=300s
+          # Resume totals now include post-stage outcome/suggestions buffer.
+          # Floor the Actions window so tiny resumes are not cut off mid-poll.
           SYNC_START_BODY="$body" python3 <<'PY'
           import json, math, os
           body = json.loads(os.environ["SYNC_START_BODY"])
@@ -109,6 +111,9 @@ jobs:
               total_s = news_s + prices_s + 600
           # Extra 10% on the Actions poll window beyond API timeouts
           wait_s = int(math.ceil(total_s * 1.1))
+          # Tiny resumes (1 ticker left) used to get ~5m windows and time out
+          # while the worker was still finishing — keep at least 20 minutes.
+          wait_s = max(wait_s, 20 * 60)
           poll_s = 30
           max_polls = max(1, int(math.ceil(wait_s / poll_s)))
           print(f"Tickers={n} API timeouts news={news_s}s prices={prices_s}s total={total_s}s")
@@ -190,13 +195,15 @@ jobs:
           sh("already_done", bool(daily.get("already_completed_today")))
           PY
           )"
+            if [ "$already_done" = "True" ] || [ "$status" = "completed" ] || [ "$daily_status" = "completed" ]; then
+              # Prefer daily completion over in-memory running: post-stages
+              # (outcome/suggestions) may still be finishing after coverage is done.
+              echo "Sync finished successfully"
+              exit 0
+            fi
             if [ "$running" = "True" ] || [ "$status" = "running" ]; then
               sleep "$POLL_SECONDS"
               continue
-            fi
-            if [ "$already_done" = "True" ] || [ "$status" = "completed" ] || [ "$daily_status" = "completed" ]; then
-              echo "Sync finished successfully"
-              exit 0
             fi
             if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
               if [ "$RESUMES" -ge "$MAX_RESUMES" ]; then

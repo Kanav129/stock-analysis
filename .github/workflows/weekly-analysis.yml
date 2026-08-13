@@ -106,6 +106,7 @@ jobs:
           else:
               total_s = max(600, int(math.ceil(n * (30 + 200) * 1.2)) + 600)
           wait_s = int(math.ceil(total_s * 1.1))
+          wait_s = max(wait_s, 20 * 60)
           poll_s = 30
           max_polls = max(1, int(math.ceil(wait_s / poll_s)))
           print(f"Waiting for sync: up to {max_polls}×{poll_s}s")
@@ -178,13 +179,13 @@ jobs:
           sh("already_done", bool(daily.get("already_completed_today")))
           PY
           )"
-            if [ "$running" = "True" ] || [ "$status" = "running" ]; then
-              sleep "$POLL_SECONDS"
-              continue
-            fi
             if [ "$already_done" = "True" ] || [ "$status" = "completed" ] || [ "$daily_status" = "completed" ]; then
               echo "Sync finished successfully"
               exit 0
+            fi
+            if [ "$running" = "True" ] || [ "$status" = "running" ]; then
+              sleep "$POLL_SECONDS"
+              continue
             fi
             if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
               if [ "$RESUMES" -ge "$MAX_RESUMES" ]; then
@@ -250,6 +251,7 @@ jobs:
               total_s = max(600, int(math.ceil(n * per_s * 1.2)))
           # Extra 10% on the Actions poll window beyond API timeout
           wait_s = int(math.ceil(total_s * 1.1))
+          wait_s = max(wait_s, 20 * 60)
           poll_s = 60
           max_polls = max(1, int(math.ceil(wait_s / poll_s)))
           print(f"Tickers={n} per_ticker≈{per_s}s API timeout={total_s}s ({total_s/60:.1f} min)")
@@ -331,10 +333,6 @@ jobs:
           sh("completed_count", daily.get("completed_count") or 0)
           PY
           )"
-            if [ "$running" = "True" ] || [ "$status" = "running" ] || [ "$status" = "pending" ]; then
-              sleep "$POLL_SECONDS"
-              continue
-            fi
             if [ "$already_done" = "True" ]; then
               echo "Analysis finished successfully (already_completed_today)"
               exit 0
@@ -342,6 +340,10 @@ jobs:
             if { [ "$status" = "done" ] || [ "$status" = "completed" ]; } && [ "$daily_status" = "completed" ]; then
               echo "Analysis finished successfully (completed_count=${completed_count})"
               exit 0
+            fi
+            if [ "$running" = "True" ] || [ "$status" = "running" ] || [ "$status" = "pending" ]; then
+              sleep "$POLL_SECONDS"
+              continue
             fi
             # Dyno recycle / crash: process idle but HKT checkpoint incomplete.
             if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
