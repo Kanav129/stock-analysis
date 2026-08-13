@@ -132,10 +132,38 @@ jobs:
           POLL_SECONDS="${POLL_SECONDS:-30}"
           RESUMES=0
           MAX_RESUMES=30
+          TRANSIENT=0
+          MAX_TRANSIENT=20
           for i in $(seq 1 "$MAX_POLLS"); do
-            body=$(curl -fsS --max-time 60 \
+            set +e
+            raw=$(curl -sS --max-time 60 \
+              -w "\nHTTP_STATUS:%{http_code}" \
               "${BASE}/sync/status" \
-              -H "Authorization: Bearer ${ADMIN_KEY}")
+              -H "Authorization: Bearer ${ADMIN_KEY}" 2>&1)
+            curl_rc=$?
+            set -e
+            http_code=$(printf '%s\n' "$raw" | sed -n 's/^HTTP_STATUS://p' | tail -n1)
+            body=$(printf '%s\n' "$raw" | sed '/^HTTP_STATUS:/d')
+            if [ "$curl_rc" -ne 0 ] || [ -z "$http_code" ] || [ "$http_code" -ge 500 ] || [ "$http_code" -eq 429 ]; then
+              TRANSIENT=$((TRANSIENT + 1))
+              echo "::warning::Transient sync poll failure ${TRANSIENT}/${MAX_TRANSIENT} (curl_rc=${curl_rc}, HTTP ${http_code:-n/a})"
+              printf '%s\n' "$body" | tail -n 5
+              if [ "$TRANSIENT" -ge "$MAX_TRANSIENT" ]; then
+                echo "Too many consecutive transient sync poll failures" >&2
+                exit 1
+              fi
+              curl -sS --max-time 30 \
+                -H "Authorization: Bearer ${ADMIN_KEY}" \
+                "${BASE}/health" >/dev/null || true
+              sleep "$POLL_SECONDS"
+              continue
+            fi
+            if [ "$http_code" -ge 400 ]; then
+              echo "Sync status returned HTTP ${http_code}" >&2
+              printf '%s\n' "$body" >&2
+              exit 1
+            fi
+            TRANSIENT=0
             echo "$body"
             eval "$(SYNC_BODY="$body" python3 <<'PY'
           import json, os
@@ -164,7 +192,7 @@ jobs:
                 exit 1
               fi
               RESUMES=$((RESUMES + 1))
-              curl -fsS --max-time 120 \
+              curl -sS --max-time 120 \
                 -X POST "${BASE}/cron/sync" \
                 -H "Authorization: Bearer ${ADMIN_KEY}" \
                 -H "Content-Type: application/json" \
@@ -250,14 +278,44 @@ jobs:
           POLL_SECONDS="${POLL_SECONDS:-60}"
           RESUMES=0
           MAX_RESUMES=30
+          TRANSIENT=0
+          MAX_TRANSIENT=20
           echo "Polling /analysis/status up to ${MAX_POLLS} times every ${POLL_SECONDS}s"
           # Poll keeps the free dyno awake while the background job runs.
           # If Render restarts mid-run, in-memory status becomes idle but the
           # daily checkpoint still has remaining work — re-POST /cron/analyze.
+          # Transient edge errors (520/502/503/504/timeouts) must not abort the
+          # wait loop while analysis is still running on the dyno.
           for i in $(seq 1 "$MAX_POLLS"); do
-            body=$(curl -fsS --max-time 60 \
+            set +e
+            raw=$(curl -sS --max-time 60 \
+              -w "\nHTTP_STATUS:%{http_code}" \
               "${BASE}/analysis/status" \
-              -H "Authorization: Bearer ${ADMIN_KEY}")
+              -H "Authorization: Bearer ${ADMIN_KEY}" 2>&1)
+            curl_rc=$?
+            set -e
+            http_code=$(printf '%s\n' "$raw" | sed -n 's/^HTTP_STATUS://p' | tail -n1)
+            body=$(printf '%s\n' "$raw" | sed '/^HTTP_STATUS:/d')
+            if [ "$curl_rc" -ne 0 ] || [ -z "$http_code" ] || [ "$http_code" -ge 500 ] || [ "$http_code" -eq 429 ]; then
+              TRANSIENT=$((TRANSIENT + 1))
+              echo "::warning::Transient analysis poll failure ${TRANSIENT}/${MAX_TRANSIENT} (curl_rc=${curl_rc}, HTTP ${http_code:-n/a})"
+              printf '%s\n' "$body" | tail -n 5
+              if [ "$TRANSIENT" -ge "$MAX_TRANSIENT" ]; then
+                echo "Too many consecutive transient analysis poll failures" >&2
+                exit 1
+              fi
+              curl -sS --max-time 30 \
+                -H "Authorization: Bearer ${ADMIN_KEY}" \
+                "${BASE}/health" >/dev/null || true
+              sleep "$POLL_SECONDS"
+              continue
+            fi
+            if [ "$http_code" -ge 400 ]; then
+              echo "Analysis status returned HTTP ${http_code}" >&2
+              printf '%s\n' "$body" >&2
+              exit 1
+            fi
+            TRANSIENT=0
             echo "$body"
             eval "$(ANALYSIS_BODY="$body" python3 <<'PY'
           import json, os
@@ -293,7 +351,7 @@ jobs:
               fi
               RESUMES=$((RESUMES + 1))
               echo "Interrupted with ${completed_count} done — resume ${RESUMES}/${MAX_RESUMES}…"
-              curl -fsS --max-time 120 \
+              curl -sS --max-time 120 \
                 -X POST "${BASE}/cron/analyze" \
                 -H "Authorization: Bearer ${ADMIN_KEY}" \
                 -H "Content-Type: application/json" \
