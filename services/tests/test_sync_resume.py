@@ -147,7 +147,8 @@ def test_start_resumes_todos_and_sizes_timeouts_from_remaining_counts():
         "news": 301,
         "prices": 902,
         "vectors": 600,
-        "total": 1803,
+        "post": 660,
+        "total": 2463,
     }
     assert compute.call_args_list[0].args == (1,)
     assert compute.call_args_list[1].args == (2,)
@@ -375,7 +376,7 @@ def test_worker_keeps_incomplete_coverage_partial():
             )
         )
 
-    is_complete.assert_called_once()
+    is_complete.assert_called()
     stock_factory.assert_not_called()
     assert snapshots[-1][0]["status"] == "partial"
     assert snapshots[-1][1] == "2026-07-22"
@@ -383,6 +384,104 @@ def test_worker_keeps_incomplete_coverage_partial():
     assert svc._status["percent"] < 100
     assert svc.last_sync is None
     mark_last.assert_not_called()
+
+
+def test_worker_marks_completed_before_suggestions_on_resume():
+    """Universe coverage should flip to completed before best-effort idea scan.
+
+    GitHub Actions treats daily.already_completed_today as success, but the wait
+    loop used to keep waiting while suggestions left running=true after the last
+    news ticker was checkpointed.
+    """
+    svc = SyncService()
+    svc._running = True
+    cp = {
+        "status": "running",
+        "tickers": ["AAPL"],
+        "news_done": [],
+        "prices_done": ["AAPL"],
+        "vectors_done": True,
+        "suggestions_done": True,
+        "errors": [],
+    }
+    news = MagicMock()
+    news.scrape_all_tickers.side_effect = (
+        lambda tickers, on_progress=None, on_ticker_done=None, **_k: on_ticker_done("AAPL")
+    )
+    snapshots = []
+    status_when_scan_runs = []
+
+    def fake_rebuild():
+        status_when_scan_runs.append(svc._status.get("status"))
+        return {"ok": True, "candidates": 0, "upserted": 0}
+
+    with (
+        patch(
+            "services.sync_service.NewsScraperFactory.create_scraper",
+            return_value=news,
+        ),
+        patch("services.sync_service.StockScraperFactory") as stock_factory,
+        patch(
+            "services.sync_service.rcs.save_sync",
+            side_effect=lambda data, day=None: snapshots.append(dict(data)),
+        ),
+        patch(
+            "services.sync_service.rcs.is_sync_complete_for_universe",
+            side_effect=lambda data, universe: (
+                "AAPL" in {t.upper() for t in (data.get("news_done") or [])}
+                and "AAPL" in {t.upper() for t in (data.get("prices_done") or [])}
+                and bool(data.get("vectors_done"))
+            ),
+        ),
+        patch("services.sync_service.rcs.mark_last_sync_date") as mark_last,
+        patch("services.outcome_service.outcome_service.refresh", return_value=None),
+        patch(
+            "services.idea_scan_service.IdeaScanService.rebuild",
+            side_effect=fake_rebuild,
+        ) as rebuild,
+    ):
+        asyncio.run(
+            svc._run_worker(
+                ["AAPL"],
+                ["AAPL"],
+                [],
+                False,
+                checkpoint_seed=cp,
+                day="2026-08-13",
+            )
+        )
+
+    stock_factory.assert_not_called()
+    rebuild.assert_not_called()
+    assert status_when_scan_runs == []
+    assert any(item.get("status") == "completed" for item in snapshots)
+    assert snapshots[-1]["status"] == "completed"
+    assert snapshots[-1]["news_done"] == ["AAPL"]
+    assert svc._status["status"] == "completed"
+    assert svc._status["percent"] == 100
+    mark_last.assert_called_once_with("2026-08-13")
+
+
+def test_compute_resume_timeouts_includes_post_stage_buffer_when_suggestions_needed():
+    from services.sync_service import (
+        POST_STAGE_TIMEOUT_SECONDS,
+        compute_resume_timeouts,
+    )
+
+    timeouts = compute_resume_timeouts(1, 0, False, need_suggestions=True)
+    assert timeouts["news"] >= 300
+    assert timeouts["prices"] == 0
+    assert timeouts["vectors"] == 0
+    assert timeouts["post"] == POST_STAGE_TIMEOUT_SECONDS
+    assert timeouts["total"] == timeouts["news"] + POST_STAGE_TIMEOUT_SECONDS
+
+
+def test_compute_resume_timeouts_skips_post_stage_when_suggestions_done():
+    from services.sync_service import OUTCOME_TIMEOUT_SECONDS, compute_resume_timeouts
+
+    timeouts = compute_resume_timeouts(1, 0, False, need_suggestions=False)
+    assert timeouts["post"] == OUTCOME_TIMEOUT_SECONDS
+    assert timeouts["total"] == timeouts["news"] + OUTCOME_TIMEOUT_SECONDS
 
 
 def test_worker_constructs_only_price_scraper_for_price_only_resume():

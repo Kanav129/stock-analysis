@@ -34,6 +34,11 @@ DEFAULT_PRICE_SECONDS_PER_TICKER = 200
 DEFAULT_TIMEOUT_BUFFER = 1.2  # +20% headroom
 MIN_STAGE_TIMEOUT_SECONDS = 5 * 60
 VECTORS_TIMEOUT_SECONDS = 10 * 60
+# Best-effort post-stages after news/prices/vectors (outcome refresh + idea scan).
+# Included in resume totals so GitHub Actions poll windows cover them.
+OUTCOME_TIMEOUT_SECONDS = 3 * 60
+SUGGESTIONS_TIMEOUT_SECONDS = 8 * 60
+POST_STAGE_TIMEOUT_SECONDS = OUTCOME_TIMEOUT_SECONDS + SUGGESTIONS_TIMEOUT_SECONDS
 
 
 def _env_float(name: str, default: float) -> float:
@@ -85,16 +90,21 @@ def compute_resume_timeouts(
     news_n: int,
     prices_n: int,
     need_vectors: bool,
+    need_suggestions: bool = True,
 ) -> dict[str, int]:
     """Size each stage timeout from only the work remaining for that stage."""
     news = compute_stage_timeouts(max(1, news_n))["news"] if news_n else 0
     prices = compute_stage_timeouts(max(1, prices_n))["prices"] if prices_n else 0
     vectors = VECTORS_TIMEOUT_SECONDS if need_vectors else 0
+    post = OUTCOME_TIMEOUT_SECONDS
+    if need_suggestions:
+        post += SUGGESTIONS_TIMEOUT_SECONDS
     return {
         "news": news,
         "prices": prices,
         "vectors": vectors,
-        "total": news + prices + vectors,
+        "post": post,
+        "total": news + prices + vectors + post,
     }
 
 
@@ -293,10 +303,12 @@ class SyncService:
 
         self._running = True
         self._cancel_requested = False
+        need_suggestions = not bool(checkpoint.get("suggestions_done"))
         timeouts = compute_resume_timeouts(
             len(news_todo),
             len(prices_todo),
             need_vectors,
+            need_suggestions=need_suggestions,
         )
         self._update(
             status="running",
@@ -500,13 +512,15 @@ class SyncService:
                 len(news_todo),
                 len(prices_todo),
                 need_vectors,
+                need_suggestions=not bool(checkpoint.get("suggestions_done")),
             )
             logger.info(
-                "Sync timeouts for %s tickers: news=%ss prices=%ss vectors=%ss (total=%ss)",
+                "Sync timeouts for %s tickers: news=%ss prices=%ss vectors=%ss post=%ss (total=%ss)",
                 total,
                 timeouts["news"],
                 timeouts["prices"],
                 timeouts["vectors"],
+                timeouts["post"],
                 timeouts["total"],
             )
 
@@ -626,6 +640,36 @@ class SyncService:
                     )
                     return
 
+            # Mark universe coverage complete before best-effort post-stages so
+            # cron/Actions can succeed while outcome refresh / idea scan finish.
+            if rcs.is_sync_complete_for_universe(checkpoint, target):
+                self._last_sync = datetime.utcnow()
+                finished_at = self._last_sync.isoformat()
+                checkpoint.update(
+                    status="completed",
+                    errors=errors,
+                    vectors_done=True,
+                    finished_at=finished_at,
+                )
+                if not _save_if_current(checkpoint):
+                    return
+                rcs.mark_last_sync_date(day)
+                if not _is_current():
+                    return
+                self._update(
+                    status="completed",
+                    stage="vectors",
+                    stage_label="Vectors",
+                    message=f"Synced news and prices for {total} ticker(s).",
+                    detail=None,
+                    errors=errors,
+                    completed=list(completed) if completed else list(target),
+                    current_ticker=None,
+                    percent=100,
+                    finished_at=finished_at,
+                    last_sync=self._last_sync.isoformat(),
+                )
+
             # Best-effort rating outcome refresh (does not gate sync completion).
             if _is_current() and not self._cancel_flag():
                 try:
@@ -633,7 +677,7 @@ class SyncService:
 
                     await asyncio.wait_for(
                         loop.run_in_executor(None, outcome_service.refresh),
-                        timeout=180,
+                        timeout=OUTCOME_TIMEOUT_SECONDS,
                     )
                 except Exception as exc:
                     if _is_current():
@@ -643,33 +687,67 @@ class SyncService:
             if self._cancel_flag():
                 _finalize_cancelled("Sync cancelled. Progress saved — Sync again to resume.")
                 return
-            self._update(
-                stage="suggestions",
-                stage_label="Suggestions",
-                current_ticker=None,
-                message="Scanning news for watchlist ideas…",
-                percent=92.0,
-                completed=list(completed),
-            )
-            try:
-                from services.idea_scan_service import IdeaScanService
+            if checkpoint.get("suggestions_done"):
+                logger.info("Skipping idea scan — already completed for this sync day")
+            else:
+                self._update(
+                    stage="suggestions",
+                    stage_label="Suggestions",
+                    current_ticker=None,
+                    message="Scanning news for watchlist ideas…",
+                    percent=92.0 if self._status.get("status") != "completed" else 100,
+                    completed=list(completed),
+                )
+                try:
+                    from services.idea_scan_service import IdeaScanService
 
-                scan_result = await asyncio.wait_for(
-                    loop.run_in_executor(None, IdeaScanService().rebuild),
-                    timeout=480,
-                )
-                if not _is_current():
-                    return
-                checkpoint["suggestions_done"] = bool(
-                    isinstance(scan_result, dict) and scan_result.get("ok")
-                )
-                _save_if_current(checkpoint)
-            except Exception as exc:
-                if not _is_current():
-                    return
-                logger.error(f"Watchlist idea scan failed: {exc}")
-                checkpoint["suggestions_done"] = False
-                _save_if_current(checkpoint)
+                    scan_result = await asyncio.wait_for(
+                        loop.run_in_executor(None, IdeaScanService().rebuild),
+                        timeout=SUGGESTIONS_TIMEOUT_SECONDS,
+                    )
+                    if not _is_current():
+                        return
+                    checkpoint["suggestions_done"] = bool(
+                        isinstance(scan_result, dict) and scan_result.get("ok")
+                    )
+                    _save_if_current(checkpoint)
+                except Exception as exc:
+                    if not _is_current():
+                        return
+                    logger.error(f"Watchlist idea scan failed: {exc}")
+                    checkpoint["suggestions_done"] = False
+                    _save_if_current(checkpoint)
+
+            if rcs.is_sync_complete_for_universe(checkpoint, target):
+                if self._status.get("status") != "completed":
+                    self._last_sync = datetime.utcnow()
+                    finished_at = self._last_sync.isoformat()
+                    checkpoint.update(
+                        status="completed",
+                        errors=errors,
+                        vectors_done=True,
+                        finished_at=finished_at,
+                    )
+                    if not _save_if_current(checkpoint):
+                        return
+                    rcs.mark_last_sync_date(day)
+                    if not _is_current():
+                        return
+                    self._update(
+                        status="completed",
+                        stage="vectors",
+                        stage_label="Vectors",
+                        message=f"Synced news and prices for {total} ticker(s).",
+                        detail=None,
+                        errors=errors,
+                        completed=list(completed) if completed else list(target),
+                        current_ticker=None,
+                        percent=100,
+                        finished_at=finished_at,
+                        last_sync=self._last_sync.isoformat(),
+                    )
+                logger.info(f"Background sync completed for {total} tickers")
+                return
 
             if not rcs.is_sync_complete_for_universe(checkpoint, target):
                 finished_at = datetime.utcnow().isoformat()
@@ -690,34 +768,6 @@ class SyncService:
                     finished_at=finished_at,
                 )
                 return
-
-            self._last_sync = datetime.utcnow()
-            finished_at = self._last_sync.isoformat()
-            checkpoint.update(
-                status="completed",
-                errors=errors,
-                vectors_done=True,
-                finished_at=finished_at,
-            )
-            if not _save_if_current(checkpoint):
-                return
-            rcs.mark_last_sync_date(day)
-            if not _is_current():
-                return
-            self._update(
-                status="completed",
-                stage="vectors",
-                stage_label="Vectors",
-                message=f"Synced news and prices for {total} ticker(s).",
-                detail=None,
-                errors=errors,
-                completed=list(completed) if completed else list(target),
-                current_ticker=None,
-                percent=100,
-                finished_at=finished_at,
-                last_sync=self._last_sync.isoformat(),
-            )
-            logger.info(f"Background sync completed for {total} tickers")
         except asyncio.TimeoutError:
             if not _is_current():
                 return
