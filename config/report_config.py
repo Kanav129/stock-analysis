@@ -17,6 +17,7 @@ CORE_SECTIONS = [
     {"id": "fundamentals", "label": "Fundamentals", "order": 2},
     {"id": "news", "label": "News / Macro", "order": 3},
     {"id": "sentiment", "label": "Sentiment", "order": 4},
+    {"id": "catalysts", "label": "Earnings / Street", "order": 4.5},
 ]
 
 DEEP_SECTIONS = [
@@ -34,18 +35,189 @@ DEBATE_SECTIONS = [
 
 ALL_SECTIONS = CORE_SECTIONS + DEEP_SECTIONS + DEBATE_SECTIONS
 
-# ── Factor score computation ─────────────────────────────────────
+FACTOR_INPUT_KEYS = (
+    "forward_pe",
+    "beta",
+    "revenue_growth_pct",
+    "gross_margin_pct",
+    "fcf_margin_pct",
+    "cash_exceeds_debt",
+)
+
+
+def _fmt_num(value: Any, digits: int = 2) -> str:
+    try:
+        return f"{float(value):,.{digits}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def format_market_markdown(market_data: dict[str, Any] | None) -> str:
+    """Deterministic Market / Technicals section from structured market_data."""
+    data = market_data or {}
+    if not data.get("live_price"):
+        return (
+            "## Market / Technicals\n\n"
+            "*Price data unavailable — technicals could not be computed.*\n"
+        )
+
+    ma = data.get("moving_averages") or {}
+    vol_ratio = data.get("volume_ratio")
+    try:
+        vr = float(vol_ratio)
+        vol_regime = "elevated" if vr >= 1.5 else ("light" if vr < 0.7 else "normal")
+    except (TypeError, ValueError):
+        vol_regime = "n/a"
+    week_52 = ""
+    if data.get("week_52_high") or data.get("week_52_low"):
+        from_high = data.get("week_52_from_high_pct")
+        from_high_txt = (
+            f"; live {_fmt_num(from_high, 1)}% vs high"
+            if from_high is not None
+            else ""
+        )
+        bars = data.get("week_52_bar_count") or data.get("daily_bar_count") or "—"
+        week_52 = (
+            f"- **52-week range** ({bars}d lookback): "
+            f"${_fmt_num(data.get('week_52_low'))} – "
+            f"${_fmt_num(data.get('week_52_high'))}{from_high_txt}"
+        )
+    lines = [
+        "## Market / Technicals",
+        "",
+        f"- **Live price**: ${_fmt_num(data.get('live_price'))} "
+        f"(source: {data.get('price_source', 'unknown')}, "
+        f"{data.get('daily_bar_count', '—')} daily bars)",
+        f"- **RSI (14)**: {_fmt_num(data.get('rsi'), 1)} "
+        f"({data.get('rsi_regime', 'n/a')})",
+        f"- **MACD hist**: {_fmt_num(data.get('macd_histogram'))} "
+        f"(line {_fmt_num(data.get('macd_line'))} / "
+        f"signal {_fmt_num(data.get('macd_signal'))})",
+        f"- **ATR**: {_fmt_num(data.get('atr'))} "
+        f"({_fmt_num(data.get('atr_pct'), 2)}%)",
+        f"- **Volume**: {data.get('volume_latest', '—')} vs 20d avg "
+        f"{data.get('volume_avg_20d', '—')} "
+        f"(ratio {data.get('volume_ratio', '—')}, {vol_regime})",
+    ]
+    if week_52:
+        lines.append(week_52)
+    lines.extend([
+        "",
+        "| Average | Level | vs price |",
+        "|---|---:|---:|",
+    ])
+    for key, label in (
+        ("ema_10", "EMA 10"),
+        ("sma_20", "SMA 20"),
+        ("sma_50", "SMA 50"),
+        ("sma_200", "SMA 200"),
+    ):
+        level = ma.get(key)
+        vs = ma.get(f"price_vs_{key}_pct")
+        lines.append(
+            f"| {label} | {_fmt_num(level)} | {_fmt_num(vs, 1)}% |"
+        )
+    alignment = "bullish stack" if ma.get("bullish_alignment") else "mixed / not stacked"
+    lines.extend(["", f"- **MA alignment**: {alignment}"])
+
+    supports = data.get("supports") or []
+    resistances = data.get("resistances") or []
+    if supports:
+        bits = [f"{s.get('label')} {_fmt_num(s.get('value'))}" for s in supports]
+        lines.append(f"- **Supports**: {', '.join(bits)}")
+    if resistances:
+        bits = [f"{r.get('label')} {_fmt_num(r.get('value'))}" for r in resistances]
+        lines.append(f"- **Resistances**: {', '.join(bits)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _fiscal_sort_key(row: dict[str, Any]) -> str:
+    return str(
+        row.get("fiscalDateEnding")
+        or row.get("fiscal_date_ending")
+        or row.get("date")
+        or ""
+    )
+
+
+def _row_revenue(row: dict[str, Any]) -> float | None:
+    raw = row.get("totalRevenue") or row.get("total_revenue") or row.get("revenue")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value else None
+
+
+def annual_revenue_growth_pct(
+    income_annual: list[dict[str, Any]] | None,
+    yf_revenue_growth: float | None = None,
+) -> float:
+    """Average YoY revenue growth. Sorts fiscal periods ascending (oldest first).
+
+    ``yf_revenue_growth`` is yfinance's trailing growth as a fraction (0.18 = 18%).
+    """
+    rows = [r for r in (income_annual or []) if isinstance(r, dict)]
+    rows = sorted(rows, key=_fiscal_sort_key)
+    revenues: list[float] = []
+    for row in rows:
+        rev = _row_revenue(row)
+        if rev is not None:
+            revenues.append(rev)
+    growths: list[float] = []
+    for prev, curr in zip(revenues, revenues[1:]):
+        if prev:
+            growths.append((curr - prev) / prev * 100)
+    if growths:
+        return round(sum(growths) / len(growths), 1)
+    if yf_revenue_growth is not None:
+        try:
+            frac = float(yf_revenue_growth)
+        except (TypeError, ValueError):
+            return 0.0
+        # yfinance may already be percent (>1.5) or a 0–1 fraction.
+        pct = frac * 100 if abs(frac) <= 1.5 else frac
+        return round(pct, 1)
+    return 0.0
+
+
+def fundamentals_from_inputs(inputs: dict[str, Any] | None) -> dict[str, Any]:
+    """Rebuild the subset of fundamentals needed to recompute factor scores."""
+    data = inputs or {}
+    return {
+        "overview": {
+            "forward_pe": data.get("forward_pe"),
+            "beta": data.get("beta"),
+        },
+        "revenue_growth_pct": data.get("revenue_growth_pct", 0),
+        "gross_margin_pct": data.get("gross_margin_pct", 0),
+        "fcf_margin_pct": data.get("fcf_margin_pct", 0),
+        "cash_exceeds_debt": bool(data.get("cash_exceeds_debt", False)),
+    }
+
+
+def _factor_inputs(fundamentals: dict[str, Any]) -> dict[str, Any]:
+    overview = fundamentals.get("overview") or {}
+    return {
+        "forward_pe": overview.get("forward_pe"),
+        "beta": overview.get("beta"),
+        "revenue_growth_pct": fundamentals.get("revenue_growth_pct", 0),
+        "gross_margin_pct": fundamentals.get("gross_margin_pct", 0),
+        "fcf_margin_pct": fundamentals.get("fcf_margin_pct", 0),
+        "cash_exceeds_debt": bool(fundamentals.get("cash_exceeds_debt", False)),
+    }
 
 
 def compute_factor_scores(
     fundamentals: dict[str, Any],
     market_data: dict[str, Any],
     sentiment_data: dict[str, Any],
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Compute standardized 0-100 factor scores deterministically from data.
     These match the sample report's dimensional study outputs."""
 
-    scores: dict[str, int] = {}
+    scores: dict[str, Any] = {}
 
     # ── Value (0–100): lower P/E = higher score ──
     fwd_pe = fundamentals.get("overview", {}).get("forward_pe")
@@ -172,6 +344,7 @@ def compute_factor_scores(
     st = sentiment_data.get("stocktwits", {})
     bullish_pct = st.get("bullish_pct", 0)
     scores["sentiment"] = min(max(int(bullish_pct), 0), 100)
+    scores["_inputs"] = _factor_inputs(fundamentals)
 
     return scores
 
@@ -195,8 +368,10 @@ def compute_dimension_alignment(
     threshold = thresholds.get(rating, 50)
 
     for factor, score in scores.items():
-        if factor == "sentiment":
-            continue  # sentiment always contextual
+        if factor.startswith("_") or factor == "sentiment":
+            continue
+        if not isinstance(score, (int, float)):
+            continue
         if score >= threshold:
             supporting.append(factor)
         else:

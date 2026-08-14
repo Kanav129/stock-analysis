@@ -3,30 +3,25 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-import numpy as np
-import yfinance as yf
 from langchain_core.prompts import ChatPromptTemplate
 
 from config.llm_config import invoke_research_llm
-from config.report_config import compute_factor_scores
+from config.report_config import annual_revenue_growth_pct
 from rag_graphs.research_graph.state import ResearchState
 from scraper.alpha_vantage_scraper import AlphaVantageClient
+from scraper.yf_cache import get_yf_ticker
 from utils.logger import logger
 
 FUNDAMENTALS_SYSTEM = """You are a fundamental equity analyst. Given structured financial data,
-write a concise, insightful analysis in markdown. Include:
-1. A **Company Overview** table (market cap, sector, employees).
-2. A **Valuation Snapshot** table (forward P/E, PEG, P/B, EPS, beta, 52w range).
-3. **Revenue Growth** trends (annual + quarterly tables).
-4. **Profitability** analysis (gross margin, operating margin, net margin trends).
-5. **Cash Flow** analysis (OCF, CapEx, FCF trends).
-6. **Balance Sheet Health** (cash, debt, current ratio, D/E).
-7. A **Risk Factors** table (valuation, SBC, competition, macro).
-8. A **Fundamental Summary** table with signals (growth, profitability, cash flow, liquidity, leverage, valuation, efficiency, dilution, volatility).
-9. **Bull case** and **Bear case** bullet points.
-10. A final **Verdict** paragraph.
+write a concise analysis in markdown. Do NOT reproduce the full statement tables.
+Include:
+1. **Valuation** — 3-5 bullets using the supplied multiples (P/E, PEG, P/B).
+2. **Growth & profitability** — revenue trend, margins, FCF in a short paragraph.
+3. **Balance sheet** — cash vs debt, leverage, dilution/SBC if relevant.
+4. **Bull case** and **Bear case** (3 bullets each).
+5. A final **Verdict** paragraph.
 
-Be specific; reference the exact numbers provided. Keep it under 1500 words."""
+Be specific; reference the exact numbers provided. Keep it under 600 words."""
 
 
 def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:
@@ -37,7 +32,7 @@ def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:
 
     # ── yfinance info ──
     try:
-        stock = yf.Ticker(ticker)
+        stock = get_yf_ticker(ticker)
         info = stock.info
     except Exception as exc:
         logger.error(f"yfinance info failed: {exc}")
@@ -89,22 +84,11 @@ def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:
         av_errors = {"_global": str(exc)}
 
     # ── Compute derived metrics ──
-    avg_revenue_growth = 0.0
-    try:
-        income_annual = av_snapshot.get("income_annual", [])
-        revs = []
-        for r in income_annual[:5]:
-            rev = r.get("totalRevenue")
-            if rev:
-                revs.append(float(rev))
-        growths = []
-        for i in range(1, len(revs)):
-            if revs[i - 1] and revs[i - 1] != 0:
-                growths.append((revs[i] - revs[i - 1]) / revs[i - 1] * 100)
-        if growths:
-            avg_revenue_growth = round(sum(growths) / len(growths), 1)
-    except Exception:
-        pass
+    yf_growth = info.get("revenueGrowth")
+    avg_revenue_growth = annual_revenue_growth_pct(
+        av_snapshot.get("income_annual") if isinstance(av_snapshot, dict) else None,
+        yf_revenue_growth=yf_growth,
+    )
 
     # Gross margin from yfinance
     gross_margin = 0.0
@@ -218,7 +202,4 @@ Output the analysis in markdown."""),
         logger.error(f"Fundamentals LLM failed: {exc}")
         markdown = f"*Fundamentals analysis could not be generated: {exc}*"
 
-    sections = state.get("sections_markdown", {})
-    sections["fundamentals"] = markdown
-
-    return {"fundamental_data": fundamental_data, "sections_markdown": sections}
+    return {"fundamental_data": fundamental_data, "sections_markdown": {"fundamentals": markdown}}

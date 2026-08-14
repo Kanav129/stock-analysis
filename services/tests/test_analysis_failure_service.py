@@ -35,6 +35,7 @@ def test_execute_job_records_non_cancelled_deep_failure_before_finishing():
     with patch("services.job_queue_service.UniverseService"):
         service = JobQueueService()
     service._run_deep = MagicMock(side_effect=RuntimeError("graph crashed"))
+    service._should_stop = MagicMock(return_value=False)
     service._cancel_requested = MagicMock(return_value=False)
     events = []
     service._finish = MagicMock(side_effect=lambda *args, **kwargs: events.append("finish"))
@@ -55,6 +56,7 @@ def test_execute_job_does_not_record_cancelled_failure():
     with patch("services.job_queue_service.UniverseService"):
         service = JobQueueService()
     service._run_core = MagicMock(side_effect=RuntimeError("Job cancelled"))
+    service._should_stop = MagicMock(return_value=False)
     service._cancel_requested = MagicMock(return_value=True)
     service._finish = MagicMock()
 

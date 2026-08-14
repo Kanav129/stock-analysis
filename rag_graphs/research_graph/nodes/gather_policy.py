@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-import yfinance as yf
 from langchain_core.prompts import ChatPromptTemplate
 
 from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
+from scraper.yf_cache import get_yf_ticker
 from utils.logger import logger
 
 POLICY_SYSTEM = """You are a policy/regulatory analyst covering equities. Given a company's sector,
@@ -29,7 +29,7 @@ def gather_policy(state: ResearchState) -> Dict[str, Any]:
 
     # Get sector / industry context
     try:
-        stock = yf.Ticker(ticker)
+        stock = get_yf_ticker(ticker)
         info = stock.info
         sector = info.get("sector", "Technology")
         industry = info.get("industry", "Software")

@@ -21,6 +21,8 @@ const CORE_ANALYSIS_STAGES = [
   'gather_fundamentals',
   'gather_news',
   'gather_sentiment',
+  'gather_catalysts',
+  'join_core_gathers',
   'synthesize_decision',
   'persist',
 ] as const;

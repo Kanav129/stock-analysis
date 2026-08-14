@@ -6,9 +6,9 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
-import yfinance as yf
 
 from db.db_factory import get_db_client
+from scraper.yf_cache import get_yf_ticker
 from utils.logger import logger
 
 MIN_DAILY_BARS = 20
@@ -155,7 +155,7 @@ def load_daily_bars_from_db(ticker: str, lookback_days: int = LOOKBACK_DAYS) -> 
 
 
 def load_daily_bars_from_yfinance(ticker: str, period: str = YFINANCE_PERIOD) -> pd.DataFrame:
-    stock = yf.Ticker(ticker)
+    stock = get_yf_ticker(ticker)
     df: pd.DataFrame = stock.history(period=period)
     if df.empty:
         return pd.DataFrame()
@@ -223,12 +223,23 @@ def build_market_data(df: pd.DataFrame, *, source: str) -> dict[str, Any]:
         and ema_10 > sma_50 > sma_200
     )
 
+    lookback = df.tail(min(252, len(df)))
+    week_52_high = float(lookback["high"].max()) if not lookback.empty else None
+    week_52_low = float(lookback["low"].min()) if not lookback.empty else None
+    week_52_from_high_pct = None
+    if week_52_high:
+        week_52_from_high_pct = round((live_price / week_52_high - 1) * 100, 1)
+
     tail = df.tail(60)
     return {
         "live_price": live_price,
         "volume_latest": int(latest_vol),
         "volume_avg_20d": int(avg_vol_20),
         "volume_ratio": vol_ratio,
+        "week_52_high": round(week_52_high, 2) if week_52_high is not None else None,
+        "week_52_low": round(week_52_low, 2) if week_52_low is not None else None,
+        "week_52_from_high_pct": week_52_from_high_pct,
+        "week_52_bar_count": len(lookback),
         "moving_averages": {
             "ema_10": ema_10,
             "sma_20": sma_20,

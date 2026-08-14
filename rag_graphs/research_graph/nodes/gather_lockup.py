@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-import yfinance as yf
 from langchain_core.prompts import ChatPromptTemplate
 
 from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
 from scraper.finnhub_scraper import FinnhubClient
+from scraper.yf_cache import get_yf_ticker
 from utils.logger import logger
 
 LOCKUP_SYSTEM = """You are a lockup/supply-overhang analyst. Given insider transactions, share count trends,
@@ -36,7 +36,7 @@ def gather_lockup(state: ResearchState) -> Dict[str, Any]:
 
     # Shares outstanding from yfinance
     try:
-        stock = yf.Ticker(ticker)
+        stock = get_yf_ticker(ticker)
         info = stock.info
         shares_out = info.get("sharesOutstanding", info.get("impliedSharesOutstanding"))
     except Exception:

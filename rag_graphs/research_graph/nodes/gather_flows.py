@@ -22,7 +22,9 @@ volume regime data, and institutional activity for a stock, write a structured a
 6. **Key Gaps / Unknowns** bullet points.
 7. **Bottom-line flow assessment** paragraph.
 
-Keep it under 1000 words. Be specific — reference dollar amounts and dates."""
+Keep it under 1000 words. Be specific — reference dollar amounts and dates.
+Do not invent options flow, dark-pool prints, or institutional activity that is
+not in the supplied insider, volume, recommendation, or price-target data."""
 
 
 def gather_flows(state: ResearchState) -> Dict[str, Any]:

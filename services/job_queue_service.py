@@ -29,6 +29,8 @@ STAGE_LABELS = {
     "gather_fundamentals": "Fundamentals",
     "gather_news": "News / macro",
     "gather_sentiment": "Sentiment",
+    "gather_catalysts": "Earnings / street",
+    "join_core_gathers": "Scoring factors",
     "gather_flows": "Flows / ownership",
     "gather_policy": "Policy",
     "gather_lockup": "Lockup / insider",
@@ -43,6 +45,8 @@ CORE_STAGES = [
     "gather_fundamentals",
     "gather_news",
     "gather_sentiment",
+    "gather_catalysts",
+    "join_core_gathers",
     "synthesize_decision",
     "persist",
 ]
@@ -50,6 +54,7 @@ CORE_STAGES = [
 # Same-day core → deep continue path (skip core LLM gathers)
 DEEP_CONTINUE_STAGES = [
     "gather_prices",
+    "gather_catalysts",
     "gather_flows",
     "gather_policy",
     "gather_lockup",
@@ -989,6 +994,10 @@ class JobQueueService:
         from services.report_service import ReportService
 
         if result.get("decision_ok") is False:
+            return
+        err = str(result.get("error_message") or result.get("error") or "")
+        if "403" in err or "quota" in err.lower():
+            logger.info("Skip auto deep for %s — quota/LLM failure (%s)", ticker.upper(), err[:120])
             return
         raw_score = result.get("score")
         if raw_score is None:

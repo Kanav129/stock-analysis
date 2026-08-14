@@ -45,6 +45,7 @@ const CORE_LABELS: Record<string, string> = {
   fundamentals: 'Fundamentals',
   news: 'News / Macro',
   sentiment: 'Sentiment',
+  catalysts: 'Earnings / Street',
 };
 
 const DEEP_LABELS: Record<string, string> = {

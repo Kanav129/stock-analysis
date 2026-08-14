@@ -4,9 +4,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-import yfinance as yf
-
 from rag_graphs.research_graph.state import ResearchState
+from scraper.yf_cache import get_yf_ticker
 from utils.logger import logger
 
 
@@ -48,7 +47,7 @@ def run_kronos(state: ResearchState) -> Dict[str, Any]:
 
     # ── Get 200-day OHLCV ──
     try:
-        stock = yf.Ticker(ticker)
+        stock = get_yf_ticker(ticker)
         df = stock.history(period="200d")
         if df.empty or len(df) < 50:
             kronos_data["error"] = "Insufficient price history (need 50+ days)"

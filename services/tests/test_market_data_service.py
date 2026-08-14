@@ -57,6 +57,8 @@ def test_build_market_data_includes_sma200_and_source():
     assert out["daily_bar_count"] == 220
     assert out["moving_averages"]["sma_200"] == df["close"].rolling(200).mean().iloc[-1]
     assert len(out["price_history"]) == 60
+    assert out["week_52_high"] == round(float(df["high"].max()), 2)
+    assert out["week_52_low"] == round(float(df["low"].min()), 2)
 
 
 @patch("services.market_data_service.load_daily_bars_from_yfinance")

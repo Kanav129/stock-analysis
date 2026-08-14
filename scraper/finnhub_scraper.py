@@ -32,14 +32,14 @@ class FinnhubClient:
             time.sleep(1.05 - elapsed)
         self._last_request = time.monotonic()
 
-    def _get(self, endpoint: str, params: Optional[dict] = None) -> dict[str, Any]:
+    def _get(self, endpoint: str, params: Optional[dict] = None) -> Any:
         self._rate_limit()
         url = f"{self.BASE_URL}{endpoint}"
         try:
             resp = requests.get(url, headers=self._headers, params=params, timeout=15)
             resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
-            return data
+            data = resp.json()
+            return data if data is not None else {}
         except requests.HTTPError as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             # Free-tier plans often 403 premium endpoints (e.g. price-target).
@@ -113,6 +113,13 @@ class FinnhubClient:
             return {}
         logger.info(f"Finnhub: price target for {ticker}")
         return result
+
+    def get_peers(self, ticker: str) -> list[str]:
+        """Company peer tickers (may be empty on free tier)."""
+        result = self._get("/stock/peers", {"symbol": ticker.upper()})
+        if isinstance(result, list):
+            return [str(p).upper() for p in result if p]
+        return []
 
     # ── Company profile / financials ──────────────────────────────
 

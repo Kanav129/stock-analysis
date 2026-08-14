@@ -14,8 +14,17 @@ from config.llm_config import (
     _record_usage,
     resolve_analysis_model,
 )
-from config.rating_config import RATING_TAGS, clamp_score, normalize_rating
-from config.report_config import compute_dimension_alignment, compute_factor_scores
+from config.rating_config import (
+    RATING_TAGS,
+    clamp_score,
+    normalize_rating,
+    reconcile_horizon_decision,
+)
+from config.report_config import (
+    compute_dimension_alignment,
+    compute_factor_scores,
+    fundamentals_from_inputs,
+)
 from rag_graphs.research_graph.state import ResearchState
 from services.portfolio_context_service import portfolio_markdown_for
 from utils.logger import logger
@@ -106,6 +115,11 @@ has a clear, material effect (e.g. already a very large weight or sector cluster
 keep nudges modest and state them explicitly in reasoning. If portfolio influence
 is none, say so briefly in reasoning.
 
+When extra sections are present (Earnings / Street, Flows, Lockup, Kronos, Research
+plan), they are first-class evidence — do not ignore them in favor of fundamentals
+alone. Do not invent options flow, insider prints, or catalysts that are not in
+the provided sections.
+
 When Historical performance priors are present (deep analysis), use them only to
 calibrate conviction and score magnitude. Current research remains the primary
 driver — do not copy prior ratings. If priors conflict with the present evidence,
@@ -126,15 +140,18 @@ def build_decision_context(
     priors_markdown: str = "",
 ) -> str:
     def truncate(text: str, max_chars: int = 3000) -> str:
+        text = text or ""
         return text[:max_chars] + ("..." if len(text) > max_chars else "")
 
     market_md = sections.get("market") or sections.get("technicals") or ""
     fundamentals_md = sections.get("fundamentals", "")
     news_md = sections.get("news", "")
     sentiment_md = sections.get("sentiment", "")
+    catalysts_md = sections.get("catalysts", "")
 
-    base = f"""## Market / Technicals
-{truncate(market_md) or truncate(fundamentals_md, 1500)}
+    parts = [
+        f"""## Market / Technicals
+{truncate(market_md) or "*No technicals section — price/MA/RSI data was not written.*"}
 
 ## Fundamentals
 {truncate(fundamentals_md)}
@@ -143,21 +160,45 @@ def build_decision_context(
 {truncate(news_md)}
 
 ## Sentiment
-{truncate(sentiment_md)}
+{truncate(sentiment_md)}""",
+    ]
+    if catalysts_md.strip():
+        parts.append(f"## Earnings / Street\n{truncate(catalysts_md, 2000)}")
 
-## Factor Scores (0-100; orthogonal to AI score)
-- Value: {factor_scores.get('value', 50)}
-- Growth: {factor_scores.get('growth', 50)}
-- Quality: {factor_scores.get('quality', 50)}
-- Momentum: {factor_scores.get('momentum', 50)}
-- Low Risk: {factor_scores.get('low_risk', 50)}
-- Sentiment: {factor_scores.get('sentiment', 50)}
+    deep_blocks = (
+        ("Flows / positioning", "flows", 2000),
+        ("Lockup / supply", "lockup", 1500),
+        ("Kronos forecast", "kronos", 1200),
+        ("Policy", "policy", 1200),
+        ("Research plan", "research_plan", 2500),
+    )
+    for title, key, limit in deep_blocks:
+        body = (sections.get(key) or "").strip()
+        if body:
+            parts.append(f"## {title}\n{truncate(body, limit)}")
+
+    factor_lines = "\n".join(
+        f"- {label}: {factor_scores.get(key, 50)}"
+        for key, label in (
+            ("value", "Value"),
+            ("growth", "Growth"),
+            ("quality", "Quality"),
+            ("momentum", "Momentum"),
+            ("low_risk", "Low Risk"),
+            ("sentiment", "Sentiment"),
+        )
+    )
+    parts.append(
+        f"""## Factor Scores (0-100; orthogonal to AI score)
+{factor_lines}
 
 ## Live Price
 ${float(live_price):.2f}
 
 {portfolio_markdown}
 """
+    )
+    base = "\n\n".join(parts)
     if priors_markdown:
         return base.rstrip() + "\n\n" + priors_markdown.strip() + "\n"
     return base
@@ -286,11 +327,15 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
     live_price = state.get("live_price") or 0.0
     report_type = (state.get("report_type") or "core").strip().lower()
 
-    fundamental_data = state.get("fundamental_data") or {}
+    fundamental_data = dict(state.get("fundamental_data") or {})
     market_data = state.get("market_data") or {}
     sentiment_data = state.get("sentiment_data") or {}
-
-    factor_scores = state.get("factor_scores") or compute_factor_scores(
+    previous_scores = state.get("factor_scores") or {}
+    if not fundamental_data.get("overview"):
+        inputs = (previous_scores or {}).get("_inputs") if isinstance(previous_scores, dict) else None
+        if inputs:
+            fundamental_data = {**fundamentals_from_inputs(inputs), **fundamental_data}
+    factor_scores = compute_factor_scores(
         fundamental_data, market_data, sentiment_data
     )
 
@@ -430,9 +475,17 @@ Return your structured decision with rating tag + score (−100…+100)."""),
 
     rating = normalize_rating(decision.rating)
     score = clamp_score(decision.score)
+    rating, score, entry = reconcile_horizon_decision(
+        rating=rating,
+        score=score,
+        entry=decision.entry,
+        live_price=float(live_price or 0),
+        posture=decision.posture or "",
+        position_note=decision.position_note or "",
+    )
 
     entry_levels = {
-        "entry": decision.entry,
+        "entry": entry,
         "stop": decision.stop,
         "target": decision.target,
         "position_note": decision.position_note,

@@ -115,11 +115,16 @@ def test_continue_deep_from_core_skips_core_llm_gathers_and_omits_report_id():
         stages_seen.append("gather_prices")
         return {"market_data": {"volume_latest": 1}, "live_price": 121.0}
 
+    def _catalysts(state):
+        stages_seen.append("gather_catalysts")
+        return {"sections_markdown": {"catalysts": "earn"}}
+
     def _flows(state):
         stages_seen.append("gather_flows")
         assert "report_id" not in state
         assert state["report_type"] == "deep"
         assert state["sections_markdown"]["fundamentals"] == "fund"
+        assert state["sections_markdown"]["catalysts"] == "earn"
         assert "flows" not in state["sections_markdown"]
         assert state["factor_scores"]["value"] == 60
         return {"sections_markdown": {**state["sections_markdown"], "flows": "new"}}
@@ -151,6 +156,7 @@ def test_continue_deep_from_core_skips_core_llm_gathers_and_omits_report_id():
 
     with (
         patch("services.analysis_service.gather_prices", side_effect=_prices),
+        patch("services.analysis_service.gather_catalysts", side_effect=_catalysts),
         patch("services.analysis_service.gather_flows", side_effect=_flows),
         patch("services.analysis_service.gather_policy", side_effect=_policy),
         patch("services.analysis_service.gather_lockup", side_effect=_lockup),
@@ -168,6 +174,7 @@ def test_continue_deep_from_core_skips_core_llm_gathers_and_omits_report_id():
     assert out["score"] == 45
     assert stages_seen == [
         "gather_prices",
+        "gather_catalysts",
         "gather_flows",
         "gather_policy",
         "gather_lockup",
@@ -181,7 +188,7 @@ def test_continue_deep_from_core_skips_core_llm_gathers_and_omits_report_id():
     sent.assert_not_called()
 
 
-def test_maybe_auto_enqueue_deep_when_abs_score_ge_20():
+def test_maybe_auto_enqueue_deep_when_abs_score_ge_40():
     from services.job_queue_service import JobQueueService
 
     svc = JobQueueService()
@@ -193,7 +200,7 @@ def test_maybe_auto_enqueue_deep_when_abs_score_ge_20():
         ),
         patch.object(svc, "enqueue", return_value={"started": True}) as enq,
     ):
-        svc._maybe_auto_enqueue_deep("aapl", {"score": 20, "decision_ok": True})
+        svc._maybe_auto_enqueue_deep("aapl", {"score": 40, "decision_ok": True})
 
     enq.assert_called_once_with("deep_dive", ["AAPL"])
 
@@ -210,7 +217,7 @@ def test_maybe_auto_enqueue_deep_negative_score_threshold():
         ),
         patch.object(svc, "enqueue", return_value={"started": True}) as enq,
     ):
-        svc._maybe_auto_enqueue_deep("MSFT", {"score": -25})
+        svc._maybe_auto_enqueue_deep("MSFT", {"score": -40})
 
     enq.assert_called_once_with("deep_dive", ["MSFT"])
 
@@ -220,10 +227,14 @@ def test_maybe_auto_enqueue_deep_skips_below_threshold():
 
     svc = JobQueueService()
     with patch.object(svc, "enqueue") as enq:
-        svc._maybe_auto_enqueue_deep("AAPL", {"score": 19})
-        svc._maybe_auto_enqueue_deep("AAPL", {"score": -19})
+        svc._maybe_auto_enqueue_deep("AAPL", {"score": 39})
+        svc._maybe_auto_enqueue_deep("AAPL", {"score": -39})
         svc._maybe_auto_enqueue_deep("AAPL", {})
         svc._maybe_auto_enqueue_deep("AAPL", {"score": 40, "decision_ok": False})
+        svc._maybe_auto_enqueue_deep(
+            "AAPL",
+            {"score": 50, "decision_ok": True, "error_message": "403 quota exhausted"},
+        )
 
     enq.assert_not_called()
 

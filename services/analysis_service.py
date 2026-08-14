@@ -10,6 +10,7 @@ from typing import Any
 
 from rag_graphs.research_graph.graph import app as research_graph
 from rag_graphs.research_graph.nodes.debate import debate
+from rag_graphs.research_graph.nodes.gather_catalysts import gather_catalysts
 from rag_graphs.research_graph.nodes.gather_flows import gather_flows
 from rag_graphs.research_graph.nodes.gather_lockup import gather_lockup
 from rag_graphs.research_graph.nodes.gather_policy import gather_policy
@@ -30,6 +31,8 @@ STAGE_LABELS = {
     "gather_fundamentals": "Fundamentals",
     "gather_news": "News / macro",
     "gather_sentiment": "Sentiment",
+    "gather_catalysts": "Earnings / street",
+    "join_core_gathers": "Scoring factors",
     "synthesize_decision": "Decision synthesis",
     "persist": "Saving report & rating",
 }
@@ -40,6 +43,8 @@ STAGES = [
     "gather_fundamentals",
     "gather_news",
     "gather_sentiment",
+    "gather_catalysts",
+    "join_core_gathers",
     "synthesize_decision",
     "persist",
 ]
@@ -801,6 +806,7 @@ class AnalysisService:
 
         stages: list[tuple[str, Callable[[Any], dict[str, Any]]]] = [
             ("gather_prices", gather_prices),
+            ("gather_catalysts", gather_catalysts),
             ("gather_flows", gather_flows),
             ("gather_policy", gather_policy),
             ("gather_lockup", gather_lockup),
@@ -821,7 +827,13 @@ class AnalysisService:
                 on_stage(stage_name)
             out = node_fn(state)  # type: ignore[arg-type]
             if isinstance(out, dict):
-                state.update(out)
+                patch = dict(out)
+                sections_patch = patch.pop("sections_markdown", None)
+                state.update(patch)
+                if isinstance(sections_patch, dict):
+                    merged = dict(state.get("sections_markdown") or {})
+                    merged.update(sections_patch)
+                    state["sections_markdown"] = merged
         return state
 
 

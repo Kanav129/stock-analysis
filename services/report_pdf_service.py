@@ -12,6 +12,7 @@ _SECTION_TITLES = {
     "fundamentals": "Fundamentals",
     "news": "News / Macro",
     "sentiment": "Sentiment",
+    "catalysts": "Earnings / Street",
     "flows": "Hot Money / Flows",
     "policy": "Policy",
     "lockup": "Lockup",

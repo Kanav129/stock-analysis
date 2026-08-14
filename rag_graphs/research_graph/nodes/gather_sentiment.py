@@ -76,7 +76,4 @@ Output the analysis in markdown."""),
             logger.error(f"Sentiment LLM failed: {exc}")
             markdown = f"*Sentiment analysis could not be generated: {exc}*"
 
-    sections = state.get("sections_markdown", {})
-    sections["sentiment"] = markdown
-
-    return {"sentiment_data": sentiment_summary, "sections_markdown": sections}
+    return {"sentiment_data": sentiment_summary, "sections_markdown": {"sentiment": markdown}}

@@ -21,13 +21,13 @@ def test_is_kronos_enabled_false_for_common_falsy(monkeypatch):
 def test_run_kronos_skips_when_disabled(monkeypatch):
     monkeypatch.setenv("KRONOS_ENABLED", "false")
 
-    with patch("rag_graphs.research_graph.nodes.run_kronos.yf") as mock_yf:
+    with patch("rag_graphs.research_graph.nodes.run_kronos.get_yf_ticker") as mock_ticker:
         out = run_kronos({
             "ticker": "AAPL",
             "sections_markdown": {},
         })  # type: ignore[arg-type]
 
-    mock_yf.Ticker.assert_not_called()
+    mock_ticker.assert_not_called()
     assert out["kronos_data"]["available"] is False
     assert "disabled" in out["kronos_data"]["error"].lower()
     assert "disabled" in out["kronos_data"]["summary"].lower()
@@ -41,7 +41,7 @@ def test_run_kronos_still_runs_when_enabled(monkeypatch):
     monkeypatch.setenv("KRONOS_ENABLED", "true")
 
     with patch(
-        "rag_graphs.research_graph.nodes.run_kronos.yf.Ticker",
+        "rag_graphs.research_graph.nodes.run_kronos.get_yf_ticker",
         side_effect=RuntimeError("boom"),
     ):
         out = run_kronos({

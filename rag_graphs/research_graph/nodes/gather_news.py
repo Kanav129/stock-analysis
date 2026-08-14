@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-import yfinance as yf
 from langchain_core.prompts import ChatPromptTemplate
 
 from config.llm_config import invoke_research_llm
 from rag_graphs.research_graph.state import ResearchState
 from scraper.finnhub_scraper import FinnhubClient
+from scraper.yf_cache import get_yf_ticker
 from services.news_service import NewsService
 from utils.logger import logger
 
@@ -42,7 +42,7 @@ def _articles_from_synced(ticker: str, limit: int = 15) -> list[dict[str, Any]]:
 
 def _articles_from_yfinance(ticker: str) -> list[dict[str, Any]]:
     articles: list[dict[str, Any]] = []
-    stock = yf.Ticker(ticker)
+    stock = get_yf_ticker(ticker)
     raw_news = stock.news or []
     for item in raw_news:
         content = item.get("content", {})
@@ -130,7 +130,4 @@ Output the analysis in markdown."""),
             logger.error(f"News LLM failed: {exc}")
             markdown = f"*News analysis could not be generated: {exc}*"
 
-    sections = state.get("sections_markdown", {})
-    sections["news"] = markdown
-
-    return {"news_data": news_data, "sections_markdown": sections}
+    return {"news_data": news_data, "sections_markdown": {"news": markdown}}

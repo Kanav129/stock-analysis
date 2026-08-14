@@ -1,9 +1,13 @@
 """Research report LangGraph — core-4 and deep-dive report generation."""
 from __future__ import annotations
 
+from typing import Any, Dict
+
 from langgraph.graph import END, StateGraph
 
+from config.report_config import compute_factor_scores
 from rag_graphs.research_graph.nodes.debate import debate
+from rag_graphs.research_graph.nodes.gather_catalysts import gather_catalysts
 from rag_graphs.research_graph.nodes.gather_flows import gather_flows
 from rag_graphs.research_graph.nodes.gather_fundamentals import gather_fundamentals
 from rag_graphs.research_graph.nodes.gather_lockup import gather_lockup
@@ -22,6 +26,8 @@ GATHER_PRICES = "gather_prices"
 GATHER_FUNDAMENTALS = "gather_fundamentals"
 GATHER_NEWS = "gather_news"
 GATHER_SENTIMENT = "gather_sentiment"
+GATHER_CATALYSTS = "gather_catalysts"
+JOIN_CORE = "join_core_gathers"
 SYNTHESIZE_DECISION = "synthesize_decision"
 GATHER_FLOWS = "gather_flows"
 GATHER_POLICY = "gather_policy"
@@ -30,14 +36,27 @@ RUN_KRONOS = "run_kronos"
 DEBATE = "debate"
 PERSIST = "persist"
 
+
+def join_core_gathers(state: ResearchState) -> Dict[str, Any]:
+    """Fan-in after parallel gathers; recompute factors from fresh data."""
+    scores = compute_factor_scores(
+        state.get("fundamental_data") or {},
+        state.get("market_data") or {},
+        state.get("sentiment_data") or {},
+    )
+    return {"factor_scores": scores}
+
+
 # ── Build graph ──
 graph_builder = StateGraph(state_schema=ResearchState)
 
-# Core-4 nodes
+# Core nodes
 graph_builder.add_node(GATHER_PRICES, gather_prices)
 graph_builder.add_node(GATHER_FUNDAMENTALS, gather_fundamentals)
 graph_builder.add_node(GATHER_NEWS, gather_news)
 graph_builder.add_node(GATHER_SENTIMENT, gather_sentiment)
+graph_builder.add_node(GATHER_CATALYSTS, gather_catalysts)
+graph_builder.add_node(JOIN_CORE, join_core_gathers)
 graph_builder.add_node(SYNTHESIZE_DECISION, synthesize_decision)
 
 # Deep-dive nodes
@@ -50,8 +69,6 @@ graph_builder.add_node(DEBATE, debate)
 # Shared
 graph_builder.add_node(PERSIST, persist_report)
 
-# ── Routing ──
-
 
 def should_run_deep(state: ResearchState) -> str:
     report_type = state.get("report_type", "core")
@@ -60,12 +77,16 @@ def should_run_deep(state: ResearchState) -> str:
     return SYNTHESIZE_DECISION
 
 
-# Core-4 pipeline (always runs)
 graph_builder.set_entry_point(GATHER_PRICES)
 graph_builder.add_edge(GATHER_PRICES, GATHER_FUNDAMENTALS)
-graph_builder.add_edge(GATHER_FUNDAMENTALS, GATHER_NEWS)
-graph_builder.add_edge(GATHER_NEWS, GATHER_SENTIMENT)
-graph_builder.add_conditional_edges(GATHER_SENTIMENT, should_run_deep, {
+graph_builder.add_edge(GATHER_PRICES, GATHER_NEWS)
+graph_builder.add_edge(GATHER_PRICES, GATHER_SENTIMENT)
+graph_builder.add_edge(GATHER_PRICES, GATHER_CATALYSTS)
+graph_builder.add_edge(GATHER_FUNDAMENTALS, JOIN_CORE)
+graph_builder.add_edge(GATHER_NEWS, JOIN_CORE)
+graph_builder.add_edge(GATHER_SENTIMENT, JOIN_CORE)
+graph_builder.add_edge(GATHER_CATALYSTS, JOIN_CORE)
+graph_builder.add_conditional_edges(JOIN_CORE, should_run_deep, {
     GATHER_FLOWS: GATHER_FLOWS,
     SYNTHESIZE_DECISION: SYNTHESIZE_DECISION,
 })

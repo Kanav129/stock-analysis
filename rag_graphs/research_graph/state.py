@@ -1,7 +1,16 @@
 """Research graph state definition."""
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
+
+
+def merge_dicts(left: dict | None, right: dict | None) -> dict:
+    """LangGraph reducer so parallel gather nodes can each add section keys."""
+    if not left:
+        return dict(right or {})
+    if not right:
+        return dict(left)
+    return {**left, **right}
 
 
 class ResearchState(TypedDict, total=False):
@@ -14,6 +23,7 @@ class ResearchState(TypedDict, total=False):
     fundamental_data: dict[str, Any]
     news_data: dict[str, Any]
     sentiment_data: dict[str, Any]
+    catalysts_data: dict[str, Any]
 
     # ── Deep-only sections ──
     flows_data: dict[str, Any]
@@ -24,7 +34,7 @@ class ResearchState(TypedDict, total=False):
 
     # ── Computed ──
     live_price: float
-    factor_scores: dict[str, int]
+    factor_scores: dict[str, Any]
     dimension_alignment: dict[str, Any]
 
     # ── Decision outputs ──
@@ -40,7 +50,7 @@ class ResearchState(TypedDict, total=False):
     calibration_note: str
 
     # ── Section markdown (for frontend rendering) ──
-    sections_markdown: dict[str, str]
+    sections_markdown: Annotated[dict[str, str], merge_dicts]
 
     # ── Metadata ──
     model: str

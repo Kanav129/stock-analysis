@@ -14,6 +14,8 @@ const CORE_STAGES = [
   { id: 'gather_fundamentals', label: 'Fundamentals', verb: 'Reading fundamentals' },
   { id: 'gather_news', label: 'News', verb: 'Reading news' },
   { id: 'gather_sentiment', label: 'Sentiment', verb: 'Scoring sentiment' },
+  { id: 'gather_catalysts', label: 'Street', verb: 'Reading earnings and street' },
+  { id: 'join_core_gathers', label: 'Factors', verb: 'Scoring factors' },
   { id: 'synthesize_decision', label: 'Decision', verb: 'Synthesizing call' },
   { id: 'persist', label: 'Save', verb: 'Saving report' },
 ];

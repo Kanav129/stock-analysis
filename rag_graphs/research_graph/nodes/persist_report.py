@@ -14,13 +14,18 @@ def persist_report(state: ResearchState) -> Dict[str, Any]:
     report_type = state.get("report_type", "core")
     logger.info(f"---PERSIST {report_type.upper()} REPORT {ticker}---")
 
+    decision_ok = state.get("decision_ok", True)
+    error_message = state.get("error_message")
+    if decision_ok is False or not state.get("rating"):
+        raise RuntimeError(
+            error_message or "Decision generation failed — report not saved"
+        )
+
     sections = state.get("sections_markdown", {})
     kronos_data = state.get("kronos_data") or {}
     if kronos_data.get("forecast"):
         sections = dict(sections)
         sections["_kronos_data"] = kronos_data
-    decision_ok = state.get("decision_ok", True)
-    error_message = state.get("error_message")
     rating_dict = {
         "rating": state.get("rating"),
         "score": state.get("score"),
