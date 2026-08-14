@@ -84,6 +84,20 @@ align with high conviction. Reserve STRONG_* for exceptional setups with aligned
 Keep rating and score consistent with the bands above. Be specific and actionable with
 entry/stop/target when possible.
 
+Horizon (mandatory): this is a short-to-medium decision. The user will only act on it
+this week, then hold for a few months — not a day trade and not a multi-year "core
+forever" call. The rating must answer: given the live price, should they transact
+this week?
+- BUY / STRONG_BUY means buy now, or within a few percent of the live price, this week,
+  intending to hold for months.
+- Do NOT rate BUY if the real advice is "hold the core / only add on dips" while the
+  stock is extended or at highs. Waiting for a pullback is HOLD (or ACCUMULATE only if
+  a dip this week is plausible and entry is that dip, not the live high).
+- HOLD means do nothing this week at current prices.
+- SELL / REDUCE means trim or exit this week.
+entry must be hittable this week if the rating is BUY or SELL. stop and target should
+assume a few-month hold, not a scalp.
+
 You also receive the user's Personal Portfolio holdings table when available.
 Stock research remains the primary driver of rating and score. Use the portfolio
 for position_note and posture (size, add/trim/hold relative to existing weight).
@@ -321,7 +335,10 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", DECISION_SYSTEM),
-        ("human", """Synthesize the decision for {ticker} based on this analysis:
+        ("human", """Synthesize the decision for {ticker} based on this analysis.
+
+Horizon: act this week only; intended hold is a few months. Rating must match what
+to do at/near the live price this week — not a "buy the dip later" thesis dressed as BUY.
 
 {context}
 

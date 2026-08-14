@@ -13,3 +13,10 @@ def test_tight_defaults_to_hold_language():
     assert "not overly conservative" not in TIGHT_V1_SYSTEM
     assert "+28" not in TIGHT_V1_SYSTEM
     assert "+55" not in TIGHT_V1_SYSTEM
+
+
+def test_tight_includes_short_medium_horizon():
+    assert "short-to-medium" in TIGHT_V1_SYSTEM
+    assert "this week" in TIGHT_V1_SYSTEM
+    assert "few months" in TIGHT_V1_SYSTEM
+    assert "only add on dips" in TIGHT_V1_SYSTEM
