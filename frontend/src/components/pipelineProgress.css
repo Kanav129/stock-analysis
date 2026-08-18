@@ -26,6 +26,43 @@
   will-change: transform;
 }
 
+.pipeline-meter--active .pipeline-meter__fill {
+  transition: transform 150ms linear;
+}
+
+.report-thinking-feed__label {
+  margin-bottom: 0.35rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.report-thinking-feed {
+  max-height: 12rem;
+  overflow: auto;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--color-surface-2);
+  border: 1px solid color-mix(in oklch, var(--gridline) 70%, transparent);
+}
+
+.report-thinking-feed__text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-thinking-feed__text--empty {
+  color: var(--color-text-muted);
+}
+
 .pipeline-meter__fill--error {
   background: var(--color-down);
 }

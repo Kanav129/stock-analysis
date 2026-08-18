@@ -44,8 +44,8 @@ def test_get_analysis_llm_has_no_openrouter_model_list(mock_a, mock_key):
 def test_get_research_llm_has_no_openrouter_model_list(mock_r, mock_key):
     llm = get_research_llm()
     assert llm.model_name == "qwen3.7-flash" or llm.model == "qwen3.7-flash"
-    # Research is free-text; do not force thinking off by default.
-    assert not getattr(llm, "extra_body", None)
+    # Thinking off for research saves tokens; live feed still streams draft text.
+    assert getattr(llm, "extra_body", None) == {"enable_thinking": False}
 
 
 @patch.dict("os.environ", {"ANALYSIS_MODEL": "qwen3.7-max", "RESEARCH_MODEL": "qwen3.7-flash"})

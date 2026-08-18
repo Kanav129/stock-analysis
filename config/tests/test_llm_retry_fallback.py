@@ -94,7 +94,7 @@ def test_research_retries_then_falls_back_to_analysis(
     assert result == "ok"
     assert used == "openai/gpt-4o"
     assert calls == ["research", "research", "analysis-fb"]
-    mock_chat.assert_called_once_with("openai/gpt-4o", 0.2, enable_thinking=None)
+    mock_chat.assert_called_once_with("openai/gpt-4o", 0.2, enable_thinking=False)
 
 
 @patch("config.llm_config._record_usage")

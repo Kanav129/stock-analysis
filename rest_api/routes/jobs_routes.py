@@ -52,6 +52,7 @@ def list_jobs(lite: bool = Query(False, description="Skip heavy analysis status 
         "sync": sync_payload,
         "jobs": jobs,
         "limits": job_queue_service.limits(),
+        "duration_estimates": job_queue_service.duration_estimates(),
     }
     # Full analysis status hits universe/DB — omit on idle lite polls.
     # Still include when work is active so clients can promote lite→full.

@@ -8,10 +8,13 @@ from uuid import uuid4
 import pytest
 
 from services.job_queue_service import (
+    DEFAULT_CORE_DURATION_SECONDS,
+    DEFAULT_DEEP_DURATION_SECONDS,
     JOB_CORE,
     JOB_DEEP,
     JobQueueService,
     OwnershipLostError,
+    resolve_duration_estimates,
     _row_to_job,
 )
 
@@ -392,6 +395,90 @@ def test_should_stop_false_when_owned_and_running():
                 svc = JobQueueService()
                 svc._started = True
                 assert svc._should_stop(job_id) is False
+
+
+def test_resolve_duration_estimates_fallback_with_zero_or_one_sample():
+    assert resolve_duration_estimates([]) == {
+        JOB_CORE: float(DEFAULT_CORE_DURATION_SECONDS),
+        JOB_DEEP: float(DEFAULT_DEEP_DURATION_SECONDS),
+    }
+    one = resolve_duration_estimates([(JOB_CORE, 100.0, 1)])
+    assert one[JOB_CORE] == float(DEFAULT_CORE_DURATION_SECONDS)
+    assert one[JOB_DEEP] == float(DEFAULT_DEEP_DURATION_SECONDS)
+
+
+def test_resolve_duration_estimates_uses_average_when_enough_samples():
+    out = resolve_duration_estimates(
+        [(JOB_CORE, 187.44, 8), (JOB_DEEP, 248.12, 5)]
+    )
+    assert out[JOB_CORE] == 187.4
+    assert out[JOB_DEEP] == 248.1
+
+
+def test_duration_estimates_query_filters_outliers_and_caches():
+    db = MagicMock()
+    db.fetch_query.return_value = (
+        [(JOB_CORE, 180.0, 8), (JOB_DEEP, 250.0, 3)],
+        ["job_type", "avg_seconds", "n"],
+    )
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            first = svc.duration_estimates()
+            second = svc.duration_estimates()
+
+    assert first == {JOB_CORE: 180.0, JOB_DEEP: 250.0}
+    assert second == first
+    assert db.fetch_query.call_count == 1
+    sql = db.fetch_query.call_args[0][0]
+    params = db.fetch_query.call_args[0][1]
+    assert "BETWEEN" in sql
+    assert "ROW_NUMBER" in sql
+    assert params[2] == 15
+    assert params[3] == 1800
+    assert params[4] == 8
+
+
+def test_duration_estimates_cache_expires():
+    db = MagicMock()
+    db.fetch_query.side_effect = [
+        ([(JOB_CORE, 180.0, 8)], ["job_type", "avg_seconds", "n"]),
+        ([(JOB_CORE, 200.0, 8)], ["job_type", "avg_seconds", "n"]),
+    ]
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc.duration_estimates()
+            svc._duration_cache_at = 0.0
+            out = svc.duration_estimates()
+
+    assert out[JOB_CORE] == 200.0
+    assert db.fetch_query.call_count == 2
+
+
+def test_finish_strips_thinking_key():
+    db = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = ("job-id",)
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    db.checkout.return_value.__enter__.return_value = conn
+    db.checkout.return_value.__exit__.return_value = None
+    db.fetch_query.return_value = ([], [])
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            with patch(
+                "services.job_queue_service._worker_id", return_value="me"
+            ):
+                svc = JobQueueService()
+                svc._started = True
+                svc._finish(str(uuid4()), "done", message="Done")
+
+    sql = cur.execute.call_args[0][0]
+    assert "- 'thinking'" in sql
 
 
 def test_finish_skips_checkpoint_when_ownership_lost():

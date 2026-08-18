@@ -184,8 +184,12 @@ def get_analysis_llm(temperature: float = 0.2) -> ChatOpenAI:
 
 
 def get_research_llm(temperature: float = 0.2) -> ChatOpenAI:
-    """Report section model (RESEARCH_MODEL)."""
-    return _chat_llm(resolve_research_model(), temperature)
+    """Report section model (RESEARCH_MODEL). Thinking off to cut tokens/latency."""
+    return _chat_llm(
+        resolve_research_model(),
+        temperature,
+        enable_thinking=False,
+    )
 
 
 T = TypeVar("T")
@@ -235,12 +239,12 @@ def call_with_retry_then_fallback(
 
     for fallback_name in _fallback_chain(role, primary_name):
         try:
-            # Analysis uses function calling / structured output → disable thinking.
+            # Keep thinking off for analysis (structured output) and research (cost/latency).
             result = call(
                 _chat_llm(
                     fallback_name,
                     temperature,
-                    enable_thinking=False if role == "analysis" else None,
+                    enable_thinking=False,
                 )
             )
             logger.info(f"{role} succeeded via fallback model {fallback_name}")
@@ -263,7 +267,19 @@ def invoke_research_llm(
     """Run a research prompt with retry + cross-role + env fallbacks."""
 
     def call(llm: ChatOpenAI):
-        return (prompt | llm).invoke(inputs)
+        chain = prompt | llm
+        from services.llm_progress import emit_thinking, has_thinking_sink, message_text
+
+        if not has_thinking_sink():
+            return chain.invoke(inputs)
+        accumulated = None
+        for chunk in chain.stream(inputs):
+            accumulated = chunk if accumulated is None else accumulated + chunk
+            emit_thinking(message_text(accumulated))
+        if accumulated is not None:
+            emit_thinking(message_text(accumulated), flush=True)
+            return accumulated
+        return chain.invoke(inputs)
 
     return call_with_retry_then_fallback(
         role="research",

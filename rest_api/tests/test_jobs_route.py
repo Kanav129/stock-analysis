@@ -54,6 +54,10 @@ def test_enqueue_list_cancel_flow():
             return_value=limits,
         ),
         patch(
+            "rest_api.routes.jobs_routes.job_queue_service.duration_estimates",
+            return_value={"core_analysis": 190.0, "deep_dive": 240.0},
+        ),
+        patch(
             "rest_api.routes.jobs_routes.sync_service.get_status",
             return_value={"running": False, "status": "idle"},
         ),
@@ -96,6 +100,8 @@ def test_enqueue_list_cancel_flow():
         assert body["jobs"][0]["ticker"] == "AAPL"
         assert body["limits"]["max_concurrent"] == 1
         assert body["analysis"]["status"] == "idle"
+        assert body["duration_estimates"]["core_analysis"] == 190.0
+        assert body["duration_estimates"]["deep_dive"] == 240.0
 
         cancel_resp = client.post(f"/jobs/{job_id}/cancel")
         assert cancel_resp.status_code == 200
@@ -116,6 +122,10 @@ def test_list_jobs_lite_skips_analysis_when_idle():
             return_value=limits,
         ),
         patch(
+            "rest_api.routes.jobs_routes.job_queue_service.duration_estimates",
+            return_value={"core_analysis": 190.0, "deep_dive": 240.0},
+        ),
+        patch(
             "rest_api.routes.jobs_routes.sync_service.get_status",
             return_value={"running": False, "status": "idle"},
         ),
@@ -128,6 +138,7 @@ def test_list_jobs_lite_skips_analysis_when_idle():
     body = lite_resp.json()
     assert body["jobs"] == []
     assert "analysis" not in body
+    assert body["duration_estimates"]["deep_dive"] == 240.0
     analysis.assert_not_called()
 
 

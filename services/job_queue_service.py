@@ -23,6 +23,13 @@ JOB_DEEP = "deep_dive"
 JOB_RESCORE = "rescore"
 ACTIVE_STATUSES = ("queued", "running")
 TERMINAL_RECENT_SECONDS = 120
+# Match analysis_service.DEFAULT_CORE_SECONDS_PER_TICKER; deep has no prior constant.
+DEFAULT_CORE_DURATION_SECONDS = 190
+DEFAULT_DEEP_DURATION_SECONDS = 240
+DURATION_SAMPLE_LIMIT = 8
+DURATION_MIN_SECONDS = 15
+DURATION_MAX_SECONDS = 30 * 60
+DURATION_CACHE_SECONDS = 60
 
 STAGE_LABELS = {
     "gather_prices": "Market / technicals",
@@ -137,6 +144,32 @@ def _worker_id() -> str:
     return _WORKER_ID
 
 
+def resolve_duration_estimates(rows: list[tuple[Any, ...]]) -> dict[str, float]:
+    """Map (job_type, avg_seconds, n) rows to per-type estimates with fallbacks."""
+    by_type: dict[str, tuple[float, int]] = {}
+    for row in rows:
+        if not row or len(row) < 3:
+            continue
+        job_type = str(row[0])
+        try:
+            avg = float(row[1])
+            n = int(row[2])
+        except (TypeError, ValueError):
+            continue
+        by_type[job_type] = (avg, n)
+    out: dict[str, float] = {}
+    for job_type, default in (
+        (JOB_CORE, DEFAULT_CORE_DURATION_SECONDS),
+        (JOB_DEEP, DEFAULT_DEEP_DURATION_SECONDS),
+    ):
+        avg, n = by_type.get(job_type, (float(default), 0))
+        if n < 2:
+            out[job_type] = float(default)
+        else:
+            out[job_type] = round(avg, 1)
+    return out
+
+
 def _row_to_job(row: tuple, cols: list[str]) -> dict[str, Any]:
     data = dict(zip(cols, row))
     progress = data.get("progress") or {}
@@ -185,6 +218,8 @@ class JobQueueService:
         self._worker: threading.Thread | None = None
         self._started = False
         self._last_reclaim_at = 0.0
+        self._duration_cache: dict[str, float] | None = None
+        self._duration_cache_at: float = 0.0
         self._initialized = True
 
     def ensure_started(self) -> None:
@@ -235,7 +270,8 @@ class JobQueueService:
                 updated_at = NOW(),
                 worker_id = NULL,
                 lease_until = NULL,
-                error = COALESCE(error, 'Interrupted (cancel was requested; lease expired)')
+                error = COALESCE(error, 'Interrupted (cancel was requested; lease expired)'),
+                progress = COALESCE(progress, '{}'::jsonb) - 'thinking'
             WHERE status = 'running'
               AND cancel_requested = TRUE
               AND (lease_until IS NULL OR lease_until < NOW())
@@ -249,7 +285,8 @@ class JobQueueService:
                 updated_at = NOW(),
                 worker_id = NULL,
                 lease_until = NULL,
-                progress = COALESCE(progress, '{}'::jsonb) || '{"healed": true}'::jsonb
+                progress = (COALESCE(progress, '{}'::jsonb) - 'thinking')
+                  || '{"healed": true}'::jsonb
             WHERE status = 'running'
               AND cancel_requested = FALSE
               AND (lease_until IS NULL OR lease_until < NOW())
@@ -304,6 +341,54 @@ class JobQueueService:
                 """
             )
         return int(rows[0][0] or 0) if rows else 0
+
+    def duration_estimates(self) -> dict[str, float]:
+        """Average duration of the last few successful core/deep jobs (seconds)."""
+        now = time.monotonic()
+        cached = getattr(self, "_duration_cache", None)
+        cached_at = getattr(self, "_duration_cache_at", 0.0)
+        if cached is not None and (now - cached_at) < DURATION_CACHE_SECONDS:
+            return dict(cached)
+        fallbacks = resolve_duration_estimates([])
+        try:
+            db = get_db_client()
+            rows, _ = db.fetch_query(
+                """
+                SELECT job_type, AVG(duration) AS avg_seconds, COUNT(*) AS n
+                FROM (
+                    SELECT
+                        job_type,
+                        EXTRACT(EPOCH FROM (finished_at - started_at)) AS duration,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY job_type ORDER BY finished_at DESC
+                        ) AS rn
+                    FROM desk_jobs
+                    WHERE job_type IN (%s, %s)
+                      AND status = 'done'
+                      AND started_at IS NOT NULL
+                      AND finished_at IS NOT NULL
+                      AND finished_at > started_at
+                      AND EXTRACT(EPOCH FROM (finished_at - started_at))
+                          BETWEEN %s AND %s
+                ) recent
+                WHERE rn <= %s
+                GROUP BY job_type
+                """,
+                (
+                    JOB_CORE,
+                    JOB_DEEP,
+                    DURATION_MIN_SECONDS,
+                    DURATION_MAX_SECONDS,
+                    DURATION_SAMPLE_LIMIT,
+                ),
+            )
+            estimates = resolve_duration_estimates(list(rows or []))
+        except Exception as exc:
+            logger.warning("Could not load job duration estimates: %s", exc)
+            estimates = fallbacks
+        self._duration_cache = estimates
+        self._duration_cache_at = now
+        return dict(estimates)
 
     def list_jobs(self) -> list[dict[str, Any]]:
         db = get_db_client()
@@ -621,8 +706,36 @@ class JobQueueService:
             finally:
                 cur.close()
 
+    def _set_stage_progress(
+        self,
+        job_id: str,
+        *,
+        stage: str | None,
+        stage_label: str,
+        percent: float,
+        payload: Any = None,
+    ) -> None:
+        from services.llm_progress import thinking_excerpt
+
+        fields: dict[str, Any] = {
+            "stage_label": stage_label,
+            "message": f"{stage_label}…",
+            "percent": percent,
+        }
+        if stage is not None:
+            fields["stage"] = stage
+        excerpt = thinking_excerpt(
+            stage_label,
+            payload if isinstance(payload, dict) else None,
+            stage=stage,
+        )
+        if excerpt:
+            fields["thinking"] = excerpt
+        self._set_progress(job_id, **fields)
+
     def _set_progress(self, job_id: str, **fields: Any) -> None:
         progress = {k: v for k, v in fields.items() if v is not None}
+        lease = _lease_seconds()
         lease = _lease_seconds()
         db = get_db_client()
         with db.checkout() as conn:
@@ -678,7 +791,7 @@ class JobQueueService:
                             updated_at = NOW(),
                             error = %s,
                             result = %s,
-                            progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
+                            progress = (COALESCE(progress, '{}'::jsonb) || %s::jsonb) - 'thinking',
                             worker_id = NULL,
                             lease_until = NULL
                         WHERE id = %s AND worker_id = %s
@@ -694,7 +807,7 @@ class JobQueueService:
                             finished_at = NOW(),
                             updated_at = NOW(),
                             error = %s,
-                            progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
+                            progress = (COALESCE(progress, '{}'::jsonb) || %s::jsonb) - 'thinking',
                             worker_id = NULL,
                             lease_until = NULL
                         WHERE id = %s AND worker_id = %s
@@ -886,6 +999,19 @@ class JobQueueService:
             _worker_id(),
         )
         stop_hb, _hb_thread = self._start_heartbeat(job_id)
+        thinking_token = None
+        if job_type in (JOB_CORE, JOB_DEEP):
+            from services.llm_progress import make_throttled_sink, set_thinking_sink
+
+            def _write_thinking(text: str) -> None:
+                try:
+                    self._set_progress(job_id, thinking=text)
+                except OwnershipLostError:
+                    raise
+                except Exception as exc:
+                    logger.warning("Job %s thinking progress failed: %s", job_id[:8], exc)
+
+            thinking_token = set_thinking_sink(make_throttled_sink(_write_thinking))
         try:
             if self._should_stop(job_id):
                 self._finish(job_id, "cancelled", message="Cancelled before start")
@@ -949,6 +1075,10 @@ class JobQueueService:
                 )
             self._finish(job_id, "failed", error=str(exc), message=str(exc))
         finally:
+            if thinking_token is not None:
+                from services.llm_progress import reset_thinking_sink
+
+                reset_thinking_sink(thinking_token)
             stop_hb.set()
 
     def _run_core(self, job_id: str, ticker: str) -> dict[str, Any]:
@@ -971,12 +1101,12 @@ class JobQueueService:
                 percent = 0
                 if stage in CORE_STAGES:
                     percent = round((CORE_STAGES.index(stage) + 1) / len(CORE_STAGES) * 100, 1)
-                self._set_progress(
+                self._set_stage_progress(
                     job_id,
                     stage=stage if stage in CORE_STAGES else None,
                     stage_label=label,
-                    message=f"{label}…",
                     percent=percent,
+                    payload=payload,
                 )
                 if isinstance(payload, dict):
                     final.update(payload)
@@ -1064,12 +1194,12 @@ class JobQueueService:
             for stage, payload in event.items():
                 stages_seen += 1
                 label = STAGE_LABELS.get(stage, stage.replace("_", " ").title())
-                self._set_progress(
+                self._set_stage_progress(
                     job_id,
                     stage=stage,
                     stage_label=label,
-                    message=f"{label}…",
                     percent=min(95, stages_seen * 8),
+                    payload=payload,
                 )
                 if isinstance(payload, dict):
                     final.update(payload)

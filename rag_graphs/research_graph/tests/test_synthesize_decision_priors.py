@@ -2,6 +2,7 @@
 from unittest.mock import MagicMock, patch
 
 from rag_graphs.research_graph.nodes.synthesize_decision import (
+    DecisionOutput,
     build_decision_context,
     synthesize_decision,
 )
@@ -49,12 +50,33 @@ def _base_state(**overrides):
     return state
 
 
+def _fc_llm() -> MagicMock:
+    decision = DecisionOutput(
+        rating="BUY",
+        score=42,
+        reasoning="ok",
+        key_drivers=["momentum"],
+        supporting_headlines=["headline"],
+        entry=None,
+        stop=None,
+        target=None,
+        position_note="Add modestly.",
+        posture="add",
+    )
+    structured = MagicMock()
+    structured.return_value = decision
+    structured.invoke.return_value = decision
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+    return llm
+
+
 @patch(
     "rag_graphs.research_graph.nodes.synthesize_decision.build_decision_context",
     wraps=build_decision_context,
 )
 @patch("rag_graphs.research_graph.nodes.synthesize_decision._record_usage")
-@patch("rag_graphs.research_graph.nodes.synthesize_decision.resolve_analysis_model", return_value="qwen3.7-max")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision.resolve_analysis_model", return_value="qwen3.8-max")
 @patch("rag_graphs.research_graph.nodes.synthesize_decision._chat_llm")
 @patch(
     "rag_graphs.research_graph.nodes.synthesize_decision.portfolio_markdown_for",
@@ -65,17 +87,7 @@ def _base_state(**overrides):
     return_value="## Historical performance priors\n- prior case",
 )
 def test_deep_includes_priors(mock_priors, mock_port, mock_chat_llm, mock_model, mock_usage, mock_build):
-    import json
-    llm = MagicMock()
-    raw = MagicMock()
-    raw.content = json.dumps({
-        "rating": "BUY", "score": 42, "reasoning": "ok",
-        "key_drivers": ["momentum"], "supporting_headlines": ["headline"],
-        "entry": None, "stop": None, "target": None,
-        "position_note": "Add modestly.", "posture": "add",
-    })
-    llm.invoke.return_value = raw
-    mock_chat_llm.return_value = llm
+    mock_chat_llm.return_value = _fc_llm()
 
     synthesize_decision(_base_state(report_type="deep"))  # type: ignore[arg-type]
     mock_priors.assert_called_once()
@@ -87,7 +99,7 @@ def test_deep_includes_priors(mock_priors, mock_port, mock_chat_llm, mock_model,
     wraps=build_decision_context,
 )
 @patch("rag_graphs.research_graph.nodes.synthesize_decision._record_usage")
-@patch("rag_graphs.research_graph.nodes.synthesize_decision.resolve_analysis_model", return_value="qwen3.7-max")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision.resolve_analysis_model", return_value="qwen3.8-max")
 @patch("rag_graphs.research_graph.nodes.synthesize_decision._chat_llm")
 @patch(
     "rag_graphs.research_graph.nodes.synthesize_decision.portfolio_markdown_for",
@@ -98,17 +110,7 @@ def test_deep_includes_priors(mock_priors, mock_port, mock_chat_llm, mock_model,
     return_value="## Historical performance priors\n- prior case",
 )
 def test_core_skips_priors(mock_priors, mock_port, mock_chat_llm, mock_model, mock_usage, mock_build):
-    import json
-    llm = MagicMock()
-    raw = MagicMock()
-    raw.content = json.dumps({
-        "rating": "BUY", "score": 42, "reasoning": "ok",
-        "key_drivers": ["momentum"], "supporting_headlines": ["headline"],
-        "entry": None, "stop": None, "target": None,
-        "position_note": "Add modestly.", "posture": "add",
-    })
-    llm.invoke.return_value = raw
-    mock_chat_llm.return_value = llm
+    mock_chat_llm.return_value = _fc_llm()
 
     synthesize_decision(_base_state(report_type="core"))  # type: ignore[arg-type]
     mock_priors.assert_not_called()

@@ -8,6 +8,8 @@ import {
   PipelineProgressMeter,
 } from './PipelineProgressMeter';
 import type { DeskJob, SyncProgress } from '../api/types';
+import { estimateSecondsForJobType } from '../lib/smoothedProgress';
+import { useSmoothedProgress } from '../hooks/useSmoothedProgress';
 import './jobsPanel.css';
 
 function jobTypeLabel(jobType: string): string {
@@ -230,6 +232,10 @@ export function JobsPanel() {
             <LlmJobRow
               key={job.id}
               job={job}
+              estimatedSeconds={estimateSecondsForJobType(
+                job.job_type,
+                data?.duration_estimates,
+              )}
               onCancel={() => cancelJobMut.mutate(job.id)}
               cancelling={cancelJobMut.isPending}
             />
@@ -313,15 +319,25 @@ function SyncJobRow({
 
 function LlmJobRow({
   job,
+  estimatedSeconds,
   onCancel,
   cancelling,
 }: {
   job: DeskJob;
+  estimatedSeconds: number;
   onCancel: () => void;
   cancelling: boolean;
 }) {
   const progress = job.progress || {};
-  const percent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+  const isTimeBased = job.job_type === 'core_analysis' || job.job_type === 'deep_dive';
+  const stagePercent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+  const timePercent = useSmoothedProgress({
+    active: true,
+    startedAt: job.started_at,
+    estimatedSeconds,
+    complete: false,
+  });
+  const percent = isTimeBased ? timePercent : stagePercent;
   const { step, label } = runningJobStatus(job);
   const statusLabel = step ? `Step ${step} · ${label}` : label;
   return (
@@ -341,9 +357,9 @@ function LlmJobRow({
           active
           tone="accent"
           size="compact"
-          label={`${job.ticker} ${jobTypeLabel(job.job_type)} ${percent}% — ${statusLabel}`}
+          label={`${job.ticker} ${jobTypeLabel(job.job_type)} ${percent.toFixed(0)}% — ${statusLabel}`}
         />
-        <span className="jobs-item__pct">{percent}%</span>
+        <span className="jobs-item__pct">{percent.toFixed(0)}%</span>
       </div>
       <button
         type="button"

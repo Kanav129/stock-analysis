@@ -29,9 +29,9 @@ from rag_graphs.research_graph.state import ResearchState
 from services.portfolio_context_service import portfolio_markdown_for
 from utils.logger import logger
 
-# Promoted from evals/decision_scoring variant tight_v1_think (2026-08-10).
+# Tight HOLD-default prompt; thinking off (faster, fewer tokens; FC structured output).
 DECISION_TEMPERATURE = 0.25
-DECISION_ENABLE_THINKING = True
+DECISION_ENABLE_THINKING = False
 _PRIMARY_ATTEMPTS = 2
 
 

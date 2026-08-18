@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useParams, Link, useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import type { ReportTask } from '../api/types';
+import type { JobsSnapshot, ReportTask } from '../api/types';
 import { RatingBadge } from '../components/RatingBadge';
 import { ScoreMeter } from '../components/ScoreMeter';
 import { AnalysisErrorIcon } from '../components/AnalysisErrorIcon';
@@ -13,7 +13,11 @@ import { FactorBars } from '../components/FactorBars';
 import { SectionAccordion } from '../components/SectionAccordion';
 import { DecisionBrief } from '../components/DecisionBrief';
 import { DecisionSnapshot } from '../components/DecisionSnapshot';
-import { ChartLoading, LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
+import { ChartLoading, LoadingState } from '../components/LoadingSpinner';
+import {
+  PipelineLiveBadge,
+  PipelineProgressMeter,
+} from '../components/PipelineProgressMeter';
 import {
   ChartRangeToggle,
   chartRangeHint,
@@ -22,6 +26,8 @@ import {
 import { RecentReportsPanel } from '../components/RecentReportsPanel';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
 import { useUsRegularSession } from '../hooks/useUsRegularSession';
+import { useSmoothedProgress } from '../hooks/useSmoothedProgress';
+import { estimateSecondsForJobType } from '../lib/smoothedProgress';
 
 const PriceChart = lazy(() =>
   import('../components/PriceChart').then((m) => ({ default: m.PriceChart })),
@@ -225,6 +231,37 @@ export function StockDetailPage() {
     },
     refetchIntervalInBackground: false,
   });
+
+  const jobsQ = useQuery({
+    queryKey: ['jobs'],
+    queryFn: () => api.getJobs(),
+    staleTime: 5_000,
+  });
+  const jobsSnap = jobsQ.data as JobsSnapshot | undefined;
+  const activeJob = jobsSnap?.jobs.find((j) => j.id === taskId) ?? null;
+  const genPercent = useSmoothedProgress({
+    active: Boolean(
+      generating &&
+        (activeJob?.status === 'running' || taskStatus?.status === 'running'),
+    ),
+    startedAt: activeJob?.started_at,
+    estimatedSeconds: estimateSecondsForJobType(
+      generateType === 'deep' ? 'deep_dive' : 'core_analysis',
+      jobsSnap?.duration_estimates,
+    ),
+    complete: taskStatus?.status === 'done',
+  });
+  const genVerb =
+    activeJob?.progress?.stage_label?.trim() ||
+    (generateType === 'deep' ? 'Deep dive' : 'Generating report');
+  const thinking = (activeJob?.progress?.thinking || '').trim();
+  const thinkingFeedRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    const el = thinkingFeedRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [thinking]);
 
   useEffect(() => {
     if (taskStatus?.status === 'done') {
@@ -488,15 +525,39 @@ export function StockDetailPage() {
               )}
 
               {generating && (
-                <div className="py-8 text-center">
-                  <div className="mb-3 flex justify-center">
-                    <LoadingSpinner size="lg" />
+                <div className="py-6">
+                  <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-muted)]">
+                    <span className="inline-flex items-center gap-2 font-mono">
+                      <PipelineLiveBadge verb={genVerb} />
+                    </span>
+                    <span className="font-mono tabular-nums">{genPercent.toFixed(0)}%</span>
                   </div>
-                  <p className="text-sm font-semibold">
+                  <PipelineProgressMeter
+                    percent={genPercent}
+                    active
+                    tone="accent"
+                    label={`Generating ${generateType === 'deep' ? 'deep dive' : 'core'} report`}
+                  />
+                  <div className="report-thinking-feed">
+                    <div className="report-thinking-feed__label">Live model draft</div>
+                    <pre
+                      ref={thinkingFeedRef}
+                      className={
+                        thinking
+                          ? 'report-thinking-feed__text'
+                          : 'report-thinking-feed__text report-thinking-feed__text--empty'
+                      }
+                      aria-live="polite"
+                      aria-label="Live model draft"
+                    >
+                      {thinking || 'Waiting for model output…'}
+                    </pre>
+                  </div>
+                  <p className="mt-3 text-sm font-semibold">
                     Generating {generateType === 'deep' ? 'deep dive' : 'core'} report…
                   </p>
                   <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-                    Usually 15–45s. Status survives navigation.
+                    Status survives navigation.
                   </p>
                   {taskId ? (
                     <button

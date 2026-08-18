@@ -291,6 +291,7 @@ export interface DeskJob {
     stage_label?: string | null;
     message?: string | null;
     percent?: number | null;
+    thinking?: string | null;
   };
   result: {
     report_id?: number | null;
@@ -313,6 +314,10 @@ export interface JobsSnapshot {
     max_concurrent: number;
     running: number;
     queued: number;
+  };
+  duration_estimates?: {
+    core_analysis?: number;
+    deep_dive?: number;
   };
   analysis?: AnalysisProgress;
 }
