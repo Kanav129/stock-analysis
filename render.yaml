@@ -47,8 +47,13 @@ services:
         value: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
       - key: OPENAI_MODEL
         value: qwen3.7-flash
+      # Separate from Qwen chat — Lite plans do not include embedding models.
+      - key: OPENAI_EMBEDDING_API_KEY
+        sync: false
+      - key: OPENAI_EMBEDDING_BASE_URL
+        sync: false
       - key: OPENAI_EMBEDDING_MODEL
-        value: text-embedding-v4
+        sync: false
       - key: POSTGRES_HOST
         sync: false
       - key: POSTGRES_PORT

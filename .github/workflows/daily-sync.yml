@@ -145,6 +145,8 @@ jobs:
           MAX_RESUMES=30
           TRANSIENT=0
           MAX_TRANSIENT=20
+          CHROMA_FAILS=0
+          MAX_CHROMA_FAILS=3
           echo "Polling /sync/status up to ${MAX_POLLS} times every ${POLL_SECONDS}s"
           # If Render restarts mid-run, in-memory status becomes idle but the
           # daily checkpoint still has remaining work — re-POST /cron/sync.
@@ -193,6 +195,13 @@ jobs:
           sh("daily_status", daily.get("status", ""))
           sh("can_resume", bool(daily.get("can_resume")))
           sh("already_done", bool(daily.get("already_completed_today")))
+          chroma = ""
+          for err in d.get("errors") or []:
+              msg = str((err or {}).get("error") or "")
+              if "chroma_sync" in msg:
+                  chroma = msg
+                  break
+          sh("chroma_err", chroma)
           PY
           )"
             if [ "$already_done" = "True" ] || [ "$status" = "completed" ] || [ "$daily_status" = "completed" ]; then
@@ -204,6 +213,15 @@ jobs:
             if [ "$running" = "True" ] || [ "$status" = "running" ]; then
               sleep "$POLL_SECONDS"
               continue
+            fi
+            if [ -n "${chroma_err}" ] && [ "$running" != "True" ]; then
+              CHROMA_FAILS=$((CHROMA_FAILS + 1))
+              echo "::warning::Vector indexing failed ${CHROMA_FAILS}/${MAX_CHROMA_FAILS}: ${chroma_err}"
+              if [ "$CHROMA_FAILS" -ge "$MAX_CHROMA_FAILS" ]; then
+                echo "Vector indexing failed repeatedly: ${chroma_err}" >&2
+                echo "If you are on Qwen Lite, set OPENAI_EMBEDDING_API_KEY / OPENAI_EMBEDDING_BASE_URL / OPENAI_EMBEDDING_MODEL on Render." >&2
+                exit 1
+              fi
             fi
             if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
               if [ "$RESUMES" -ge "$MAX_RESUMES" ]; then

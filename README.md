@@ -169,6 +169,9 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 | `SYNC_INTERVAL` | Render | Seconds between in-process syncs (default 86400) |
 | `ANALYSIS_INTERVAL` | Render | Seconds between in-process analyses (default 604800) |
 | `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | Qwen models (`qwen3.7-flash`, `qwen3.7-max`, etc.) |
+| `OPENAI_EMBEDDING_API_KEY` | Render | Embedding-only API key (do not reuse Qwen Lite chat key) |
+| `OPENAI_EMBEDDING_BASE_URL` | Render | Embedding provider origin, e.g. `https://api.openai.com/v1` |
+| `OPENAI_EMBEDDING_MODEL` | Render | Embedding model on that provider (`text-embedding-3-small`, …) |
 | `API_BASE_URL` | GitHub Actions | Render origin for scheduled cron |
 
 ## Testing
