@@ -12,6 +12,8 @@ load_dotenv()
 DEFAULT_LLM_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 DEFAULT_CHAT_MODEL = "qwen3.7-flash"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-v4"
+DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_ANALYSIS_MODEL = "qwen3.7-max"
 DEFAULT_RESEARCH_MODEL = "qwen3.7-flash"
 
@@ -20,6 +22,11 @@ _LLM_API_KEY_ENV_KEYS = [
     "DASHSCOPE_API_KEY",
     "OPENROUTER_API_KEY",
     "OPENAI_API_KEY",
+]
+
+_EMBEDDING_API_KEY_ENV_KEYS = [
+    "OPENAI_EMBEDDING_API_KEY",
+    "EMBEDDING_API_KEY",
 ]
 
 
@@ -135,6 +142,49 @@ def _llm_base_url() -> str:
     return resolve_llm_base_url()
 
 
+def _env_first(*env_keys: str) -> str:
+    for key in env_keys:
+        val = os.getenv(key)
+        if val and val.strip():
+            return val.strip()
+    return ""
+
+
+def resolve_embedding_api_key() -> str:
+    """API key used only for news vector embeddings (not chat/analysis)."""
+    return _env_first(*_EMBEDDING_API_KEY_ENV_KEYS) or _llm_api_key()
+
+
+def resolve_embedding_base_url() -> str:
+    """Base URL used only for embeddings.
+
+    A dedicated embedding key without a URL defaults to OpenAI, so Qwen Lite
+    chat credentials are not reused for a model that plan does not include.
+    """
+    explicit = _env_first("OPENAI_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    if _env_first(*_EMBEDDING_API_KEY_ENV_KEYS):
+        return DEFAULT_OPENAI_EMBEDDING_BASE_URL
+    return _llm_base_url()
+
+
+_QWEN_ONLY_EMBEDDING_MODELS = frozenset({"text-embedding-v4", "text-embedding-v3"})
+
+
+def resolve_embedding_model() -> str:
+    explicit = _env_first("OPENAI_EMBEDDING_MODEL")
+    using_openai = "api.openai.com" in resolve_embedding_base_url()
+    if explicit:
+        # Leftover DashScope model IDs 404 on api.openai.com.
+        if using_openai and explicit.lower() in _QWEN_ONLY_EMBEDDING_MODELS:
+            return DEFAULT_OPENAI_EMBEDDING_MODEL
+        return explicit
+    if using_openai:
+        return DEFAULT_OPENAI_EMBEDDING_MODEL
+    return DEFAULT_EMBEDDING_MODEL
+
+
 def _chat_llm(
     model: str,
     temperature: float,
@@ -170,11 +220,15 @@ def get_chat_llm(temperature: float = 0) -> ChatOpenAI:
 
 
 def get_embeddings() -> OpenAIEmbeddings:
-    """Embedding model for news vector store."""
+    """Embedding model for news vector store.
+
+    Uses OPENAI_EMBEDDING_* credentials when set so indexing can run on a
+    separate provider from Qwen chat (Lite plans do not include embeddings).
+    """
     return OpenAIEmbeddings(
-        model=os.getenv("OPENAI_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
-        api_key=_llm_api_key(),
-        base_url=_llm_base_url(),
+        model=resolve_embedding_model(),
+        api_key=resolve_embedding_api_key(),
+        base_url=resolve_embedding_base_url(),
     )
 
 
