@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import { isLoggedIn, setAuthToken } from '../auth';
+import { isLoggedIn, setAuthSession } from '../auth';
 import { useBackendWake } from '../hooks/useBackendWake';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 
@@ -13,7 +13,7 @@ export function LoginPage() {
 
   const [key, setKey] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<'key' | 'guest' | null>(null);
 
   if (isLoggedIn()) {
     return <Navigate to={from} replace />;
@@ -33,21 +33,30 @@ export function LoginPage() {
       setError('Enter your access key');
       return;
     }
-    setPending(true);
+    setPending('key');
     setError(null);
     try {
       const result = await api.login(trimmed);
-      if (!result.auth_required) {
-        setAuthToken(trimmed);
-        navigate(from, { replace: true });
-        return;
-      }
-      setAuthToken(trimmed);
+      setAuthSession(trimmed, result.role === 'guest' ? 'guest' : 'admin');
       navigate(from, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid access key');
     } finally {
-      setPending(false);
+      setPending(null);
+    }
+  }
+
+  async function onGuest() {
+    setPending('guest');
+    setError(null);
+    try {
+      const result = await api.guestLogin();
+      setAuthSession(result.token, 'guest');
+      navigate(from, { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not continue as guest');
+    } finally {
+      setPending(null);
     }
   }
 
@@ -94,6 +103,7 @@ export function LoginPage() {
             value={key}
             onChange={(e) => setKey(e.target.value)}
             placeholder="Access key"
+            disabled={pending != null}
             className="w-full rounded border border-[var(--color-surface-3)] bg-[var(--color-surface-1)] px-3 py-2.5 font-mono text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
           />
           {error && (
@@ -101,8 +111,8 @@ export function LoginPage() {
               {error}
             </p>
           )}
-          <button type="submit" disabled={pending} className="btn-terminal btn-terminal--accent mt-1 flex w-full items-center justify-center gap-2">
-            {pending ? (
+          <button type="submit" disabled={pending != null} className="btn-terminal btn-terminal--accent mt-1 flex w-full items-center justify-center gap-2">
+            {pending === 'key' ? (
               <>
                 <LoadingSpinner size="sm" />
                 Checking…
@@ -111,14 +121,42 @@ export function LoginPage() {
               'Enter desk'
             )}
           </button>
-          <p
-            className="mt-3 flex items-center justify-center gap-2 text-center text-xs text-[var(--color-text-muted)]"
-            aria-live="polite"
-          >
-            {wakeStatus !== 'ready' ? <LoadingSpinner size="sm" /> : null}
-            {wakeLabel}
-          </p>
         </form>
+
+        <div className="mt-5 flex items-center gap-3" aria-hidden="true">
+          <span className="h-px flex-1 bg-[var(--color-surface-3)]" />
+          <span className="text-[length:var(--text-label)] uppercase tracking-[0.14em] text-[var(--color-text-muted)]">
+            or
+          </span>
+          <span className="h-px flex-1 bg-[var(--color-surface-3)]" />
+        </div>
+
+        <button
+          type="button"
+          disabled={pending != null}
+          onClick={() => void onGuest()}
+          className="btn-terminal mt-4 flex w-full items-center justify-center gap-2"
+        >
+          {pending === 'guest' ? (
+            <>
+              <LoadingSpinner size="sm" />
+              Opening…
+            </>
+          ) : (
+            'Continue as guest'
+          )}
+        </button>
+        <p className="mt-2 text-center text-xs text-[var(--color-text-secondary)]">
+          View stocks, watchlist, and reports. Portfolio values stay hidden.
+        </p>
+
+        <p
+          className="mt-4 flex items-center justify-center gap-2 text-center text-xs text-[var(--color-text-muted)]"
+          aria-live="polite"
+        >
+          {wakeStatus !== 'ready' ? <LoadingSpinner size="sm" /> : null}
+          {wakeLabel}
+        </p>
       </div>
     </div>
   );

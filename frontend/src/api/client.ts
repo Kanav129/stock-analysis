@@ -123,9 +123,13 @@ function formatApiError(err: { detail?: unknown }, fallback: string): string {
 export const api = {
   getAuthStatus: () => request<{ auth_required: boolean }>('/auth/status'),
   login: (key: string) =>
-    request<{ ok: boolean; auth_required: boolean }>('/auth/login', {
+    request<{ ok: boolean; auth_required: boolean; role?: 'admin' | 'guest' }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ key }),
+    }),
+  guestLogin: () =>
+    request<{ ok: boolean; auth_required: boolean; role: 'guest'; token: string }>('/auth/guest', {
+      method: 'POST',
     }),
   getDeskSnapshot: () =>
     request<import('./types').DeskSnapshot>('/desk/snapshot'),

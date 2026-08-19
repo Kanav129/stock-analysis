@@ -9,6 +9,7 @@ import { Sparkline } from './Sparkline';
 import { DeltaValue } from './DeltaValue';
 import { CompactTable } from './CompactTable';
 import { SensitiveValue } from './SensitiveValue';
+import { isGuest } from '../auth';
 
 function fmt(n: number | null | undefined) {
   if (n == null) return '—';
@@ -55,14 +56,21 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
 
 const SORT_KEYS = new Set<string>(COLUMNS.map((c) => c.key));
 
-function readHoldingsSort(): { sortKey: SortKey; sortDir: SortDir } {
+const PERSONAL_SORT_KEYS = new Set<SortKey>(['qty', 'value', 'pnl']);
+
+function readHoldingsSort(guest: boolean): { sortKey: SortKey; sortDir: SortDir } {
+  const fallback: { sortKey: SortKey; sortDir: SortDir } = guest
+    ? { sortKey: 'price', sortDir: 'desc' }
+    : { sortKey: 'value', sortDir: 'desc' };
   const cached = readDeskCache();
   const key = cached?.holdingsSortKey;
   const dir = cached?.holdingsSortDir;
   if (key && SORT_KEYS.has(key) && (dir === 'asc' || dir === 'desc')) {
-    return { sortKey: key as SortKey, sortDir: dir };
+    const sortKey = key as SortKey;
+    if (guest && PERSONAL_SORT_KEYS.has(sortKey)) return fallback;
+    return { sortKey, sortDir: dir };
   }
-  return { sortKey: 'value', sortDir: 'desc' };
+  return fallback;
 }
 
 function sparkReturn(spark: number[] | undefined): number | null {
@@ -123,12 +131,16 @@ export function HoldingsTable({
   ratings: StockRating[];
   quotes?: Record<string, StockQuote>;
 }) {
+  const guest = isGuest();
+  const visibleColumns = guest
+    ? COLUMNS.filter((col) => !PERSONAL_SORT_KEYS.has(col.key))
+    : COLUMNS;
   const ratingMap = useMemo(
     () => Object.fromEntries(ratings.map((r) => [r.ticker, r])),
     [ratings],
   );
-  const [sortKey, setSortKey] = useState<SortKey>(() => readHoldingsSort().sortKey);
-  const [sortDir, setSortDir] = useState<SortDir>(() => readHoldingsSort().sortDir);
+  const [sortKey, setSortKey] = useState<SortKey>(() => readHoldingsSort(guest).sortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(() => readHoldingsSort(guest).sortDir);
 
   useEffect(() => {
     patchDeskCache({ holdingsSortKey: sortKey, holdingsSortDir: sortDir });
@@ -192,13 +204,19 @@ export function HoldingsTable({
   if (!holdings.length) {
     return (
       <p className="text-sm text-[var(--color-text-secondary)]">
-        No holdings yet. Use <span className="font-medium">Sync holdings</span> to
-        import IBKR stock/ETF positions, then run Analysis for ratings.
+        {guest ? (
+          'No holdings to show.'
+        ) : (
+          <>
+            No holdings yet. Use <span className="font-medium">Sync holdings</span> to
+            import IBKR stock/ETF positions, then run Analysis for ratings.
+          </>
+        )}
       </p>
     );
   }
 
-  const headers = COLUMNS.map((col) => (
+  const headers = visibleColumns.map((col) => (
     <SortHeader
       key={col.key}
       label={col.label}
@@ -215,8 +233,14 @@ export function HoldingsTable({
     />
   ));
 
+  const ratingCol = visibleColumns.findIndex((col) => col.key === 'rating');
+
   return (
-    <CompactTable headers={headers} centerCols={[7]} caption="Holdings with ratings and scores">
+    <CompactTable
+      headers={headers}
+      centerCols={ratingCol >= 0 ? [ratingCol] : undefined}
+      caption="Holdings with ratings and scores"
+    >
       {sorted.map((h) => {
         const r = ratingMap[h.ticker];
         const q = quotes?.[h.ticker];
@@ -229,22 +253,28 @@ export function HoldingsTable({
                 {h.ticker}
               </Link>
             </td>
-            <td className="font-mono">
-              <SensitiveValue>{h.quantity.toFixed(2)}</SensitiveValue>
-            </td>
+            {guest ? null : (
+              <td className="font-mono">
+                <SensitiveValue>{h.quantity != null ? h.quantity.toFixed(2) : '—'}</SensitiveValue>
+              </td>
+            )}
             <td className="font-mono">{fmt(h.market_price ?? q?.latest_close)}</td>
             <td><DeltaValue value={q?.change_pct} /></td>
             <td><Sparkline data={q?.spark ?? []} /></td>
-            <td className="font-mono">
-              <SensitiveValue>{fmt(h.market_value)}</SensitiveValue>
-            </td>
-            <td className="font-mono">
-              <SensitiveValue>
-                <span className={up ? 'text-[var(--color-up)]' : 'text-[var(--color-down)]'}>
-                  {fmt(h.unrealized_pnl)}
-                </span>
-              </SensitiveValue>
-            </td>
+            {guest ? null : (
+              <>
+                <td className="font-mono">
+                  <SensitiveValue>{fmt(h.market_value)}</SensitiveValue>
+                </td>
+                <td className="font-mono">
+                  <SensitiveValue>
+                    <span className={up ? 'text-[var(--color-up)]' : 'text-[var(--color-down)]'}>
+                      {fmt(h.unrealized_pnl)}
+                    </span>
+                  </SensitiveValue>
+                </td>
+              </>
+            )}
             <td className="is-center">
               <span className="inline-flex items-center justify-center gap-1">
                 {r?.rating ? (

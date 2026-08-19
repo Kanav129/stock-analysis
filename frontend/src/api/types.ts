@@ -33,9 +33,9 @@ export interface StockRating {
 }
 
 export interface Holding {
-  account_id: string;
+  account_id: string | null;
   ticker: string;
-  quantity: number;
+  quantity: number | null;
   avg_cost: number | null;
   market_price: number | null;
   market_value: number | null;
@@ -92,8 +92,8 @@ export interface StockTechnicals {
 }
 
 export interface PortfolioSummary {
-  total_value: number;
-  total_unrealized_pnl: number;
+  total_value: number | null;
+  total_unrealized_pnl: number | null;
   /** Weighted portfolio move vs prior daily closes. */
   day_change_pct?: number | null;
   day_change_value?: number | null;

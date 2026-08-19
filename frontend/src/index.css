@@ -1297,6 +1297,16 @@ body {
     transform 100ms ease-out;
 }
 
+.desk-header__guest {
+  padding: 6px 12px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-ui);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
 .desk-header__logout:hover {
   color: var(--color-text-primary);
   background: color-mix(in oklch, var(--color-surface-2) 88%, transparent);

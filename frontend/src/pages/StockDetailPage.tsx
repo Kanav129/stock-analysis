@@ -28,6 +28,7 @@ import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
 import { useUsRegularSession } from '../hooks/useUsRegularSession';
 import { useSmoothedProgress } from '../hooks/useSmoothedProgress';
 import { estimateSecondsForJobType } from '../lib/smoothedProgress';
+import { isGuest } from '../auth';
 
 const PriceChart = lazy(() =>
   import('../components/PriceChart').then((m) => ({ default: m.PriceChart })),
@@ -105,6 +106,7 @@ export function StockDetailPage() {
   const t = ticker.toUpperCase();
   const location = useLocation();
   const qc = useQueryClient();
+  const guest = isGuest();
   const reportRef = useRef<HTMLDivElement>(null);
   const marketOpen = useUsRegularSession();
 
@@ -397,6 +399,8 @@ export function StockDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
+          {guest ? null : (
+            <>
           <button
             type="button"
             className="btn-terminal"
@@ -435,6 +439,8 @@ export function StockDetailPage() {
               {cancelJobMut.isPending ? 'Cancelling…' : 'Cancel'}
             </button>
           ) : null}
+            </>
+          )}
           <a href="#report" className="btn-terminal">Report ↓</a>
         </div>
       </div>
@@ -640,9 +646,11 @@ export function StockDetailPage() {
                     {analysisFailed ? 'No successful report yet.' : 'No saved report yet.'}
                   </p>
                   <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-                    {generateCore.isPending
-                      ? 'Starting generation…'
-                      : 'Use Generate report or Deep dive above when you want a new analysis.'}
+                    {guest
+                      ? 'Reports appear here when the desk has already generated them.'
+                      : generateCore.isPending
+                        ? 'Starting generation…'
+                        : 'Use Generate report or Deep dive above when you want a new analysis.'}
                   </p>
                 </div>
               )}

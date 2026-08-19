@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
+import { isGuest } from '../auth';
 import { LoadingState } from '../components/LoadingSpinner';
 import { Panel } from '../components/Panel';
 
@@ -25,6 +26,7 @@ export function SuggestionDetailPage() {
   const ticker = (raw || '').toUpperCase();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const guest = isGuest();
 
   const detailQ = useQuery({
     queryKey: ['watchlist-suggestion', ticker],
@@ -96,6 +98,7 @@ export function SuggestionDetailPage() {
             {[item.sector, item.industry].filter(Boolean).join(' · ') || 'Suggestion brief'}
           </p>
         </div>
+        {guest ? null : (
         <button
           type="button"
           disabled={accept.isPending}
@@ -104,6 +107,7 @@ export function SuggestionDetailPage() {
         >
           {accept.isPending ? 'Adding…' : 'Add to watchlist'}
         </button>
+        )}
       </div>
 
       {item.company_blurb ? (
@@ -185,6 +189,7 @@ export function SuggestionDetailPage() {
       ) : null}
 
       <div className="flex flex-wrap gap-3">
+        {guest ? null : (
         <button
           type="button"
           disabled={accept.isPending}
@@ -193,6 +198,7 @@ export function SuggestionDetailPage() {
         >
           {accept.isPending ? 'Adding…' : 'Add to watchlist & run analysis'}
         </button>
+        )}
         <Link
           to="/watchlist"
           className="rounded-md border border-[var(--color-surface-3)] px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-2)]"

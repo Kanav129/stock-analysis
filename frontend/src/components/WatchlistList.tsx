@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { AnalysisErrorIcon } from './AnalysisErrorIcon';
 import { RatingBadge } from './RatingBadge';
 import { ScoreMeter } from './ScoreMeter';
+import { isGuest } from '../auth';
 
 function fmtPrice(n: number | null | undefined) {
   if (n == null) return '—';
@@ -13,6 +14,7 @@ function fmtPrice(n: number | null | undefined) {
 
 export function WatchlistList({ items }: { items: WatchlistItem[] }) {
   const qc = useQueryClient();
+  const guest = isGuest();
 
   const remove = useMutation({
     mutationFn: (ticker: string) => api.removeWatchlist(ticker),
@@ -87,6 +89,7 @@ export function WatchlistList({ items }: { items: WatchlistItem[] }) {
             {item.description ?? 'No description yet. Run sync and analysis to populate insights.'}
           </p>
 
+          {guest ? null : (
           <button
             type="button"
             onClick={() => remove.mutate(item.ticker)}
@@ -95,6 +98,7 @@ export function WatchlistList({ items }: { items: WatchlistItem[] }) {
           >
             Remove
           </button>
+          )}
         </li>
       ))}
     </ul>

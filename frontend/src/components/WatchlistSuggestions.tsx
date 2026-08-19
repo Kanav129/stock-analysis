@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import type { WatchlistSuggestion } from '../api/types';
 import { LoadingState } from './LoadingSpinner';
 import { Panel } from './Panel';
+import { isGuest } from '../auth';
 
 function truncate(text: string, max = 100) {
   const t = text.trim();
@@ -22,6 +23,7 @@ export function WatchlistSuggestions({
   maxRows?: number;
 }) {
   const qc = useQueryClient();
+  const guest = isGuest();
   const suggestionsQ = useQuery({
     queryKey: ['watchlist-suggestions'],
     queryFn: api.getWatchlistSuggestions,
@@ -95,6 +97,7 @@ export function WatchlistSuggestions({
                 {truncate(item.reason, dense ? 90 : 140)}
               </p>
             </div>
+            {guest ? null : (
             <button
               type="button"
               title={`Add ${item.ticker} to watchlist`}
@@ -108,6 +111,7 @@ export function WatchlistSuggestions({
             >
               {accepting === item.ticker ? '…' : '+'}
             </button>
+            )}
           </div>
         );
       })}

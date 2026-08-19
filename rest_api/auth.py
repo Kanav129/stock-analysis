@@ -1,9 +1,11 @@
-"""Simple admin-key auth. When ADMIN_KEY is unset, the API stays open."""
+"""Admin-key + guest-token auth. When ADMIN_KEY is unset, the API stays open."""
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
@@ -12,15 +14,22 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 load_dotenv()
 
+GUEST_TOKEN = "__desk_guest__"
+
 PUBLIC_PATHS = frozenset({
     "/",
     "/health",
     "/auth/login",
+    "/auth/guest",
     "/auth/status",
     "/openapi.json",
     "/docs",
     "/redoc",
     "/favicon.ico",
+})
+
+GUEST_ALLOWED_WRITES = frozenset({
+    ("POST", "/stock/prices/live-refresh"),
 })
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -46,22 +55,65 @@ def key_matches(provided: str | None) -> bool:
     return secrets.compare_digest(provided, expected)
 
 
+def guest_key_matches(provided: str | None) -> bool:
+    if not provided:
+        return False
+    if len(provided) != len(GUEST_TOKEN):
+        return False
+    return secrets.compare_digest(provided, GUEST_TOKEN)
+
+
+def get_auth_role(request: Any) -> str:
+    return getattr(request.state, "auth_role", "admin")
+
+
 def _normalize_path(path: str) -> str:
     # Collapse duplicate slashes and trailing slash
     cleaned = "/" + "/".join(p for p in path.split("/") if p)
     return cleaned or "/"
 
 
-def _is_public_path(path: str) -> bool:
+def _canonical_path(path: str) -> str:
     normalized = _normalize_path(path)
+    if normalized.startswith("/api/"):
+        return _normalize_path(normalized[4:])
+    return normalized
+
+
+def _is_public_path(path: str) -> bool:
+    normalized = _canonical_path(path)
     if normalized in PUBLIC_PATHS:
         return True
     if normalized.startswith("/docs") or normalized.startswith("/redoc"):
         return True
-    # Tolerate accidental /api prefix from mis-set API_BASE_URL
-    if normalized.startswith("/api/"):
-        return _is_public_path(normalized[4:])
     return False
+
+
+def _is_settings_path(path: str) -> bool:
+    normalized = _canonical_path(path)
+    return normalized == "/settings" or normalized.startswith("/settings/")
+
+
+def _is_guest_allowed_write(method: str, path: str) -> bool:
+    return (method.upper(), _canonical_path(path)) in GUEST_ALLOWED_WRITES
+
+
+def _set_role(scope: Scope, role: str) -> None:
+    state = scope.setdefault("state", {})
+    state["auth_role"] = role
+
+
+async def _send_error(send: Send, status: int, detail: str) -> None:
+    body = json.dumps({"detail": detail}).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("latin-1")),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
 
 
 class LoginBody(BaseModel):
@@ -76,10 +128,20 @@ def status():
 @router.post("/login")
 def login(body: LoginBody):
     if not auth_required():
-        return {"ok": True, "auth_required": False}
+        return {"ok": True, "auth_required": False, "role": "admin"}
     if not key_matches(body.key.strip()):
         raise HTTPException(status_code=401, detail="Invalid access key")
-    return {"ok": True, "auth_required": True}
+    return {"ok": True, "auth_required": True, "role": "admin"}
+
+
+@router.post("/guest")
+def guest_login():
+    return {
+        "ok": True,
+        "auth_required": auth_required(),
+        "role": "guest",
+        "token": GUEST_TOKEN,
+    }
 
 
 class AdminKeyMiddleware:
@@ -94,6 +156,7 @@ class AdminKeyMiddleware:
             return
 
         if not auth_required():
+            _set_role(scope, "admin")
             await self.app(scope, receive, send)
             return
 
@@ -117,16 +180,20 @@ class AdminKeyMiddleware:
             token = auth_header[7:].strip()
 
         if key_matches(token):
+            _set_role(scope, "admin")
             await self.app(scope, receive, send)
             return
 
-        body = b'{"detail":"Unauthorized"}'
-        await send({
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode("latin-1")),
-            ],
-        })
-        await send({"type": "http.response.body", "body": body})
+        if guest_key_matches(token):
+            method_u = str(method).upper()
+            if method_u in ("GET", "HEAD") and _is_settings_path(path):
+                await _send_error(send, 403, "Forbidden")
+                return
+            if method_u not in ("GET", "HEAD") and not _is_guest_allowed_write(method_u, path):
+                await _send_error(send, 403, "Forbidden")
+                return
+            _set_role(scope, "guest")
+            await self.app(scope, receive, send)
+            return
+
+        await _send_error(send, 401, "Unauthorized")

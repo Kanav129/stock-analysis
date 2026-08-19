@@ -1,17 +1,30 @@
 # Stock Data Insights Application
 
-Agentic RAG workflows for news and financial data, with a **Personal Stock Analysis Dashboard** — React frontend, watchlist management, and AI buy/hold/sell ratings.
+Agentic RAG workflows for news and financial data, with a **Personal Stock Analysis Desk** — React frontend, IBKR holdings, watchlist, live prices, and AI buy/hold/sell ratings.
 
 ## Features
 
-- **Dashboard**: Portfolio summary, holdings (from DB snapshots), AI ratings (score + tag)
-- **Watchlist**: Add/remove tickers; drives daily scraping and analysis
-- **Stock detail**: Price charts, rating history, AI reasoning and supporting headlines
-- **Research reports**: Multi-section core reports (technicals, fundamentals, news, sentiment, decision)
-- **Analysis pipeline**: Manual or scheduled sync → scrape → vector sync → LLM rating
-- **Price storage**: Multi-resolution ladder for charts — `1m` (~2d), `15m` (~8d), `30m` (~16d), `1h` (~35d), `1d` (forever); daily sync gap-fills then compacts
+- **Access**: Shared `ADMIN_KEY` login, or **Continue as guest** (read-only: stocks, watchlist, reports, live prices; quantity / cost / value / P&L stripped server-side; no sync, analysis, or settings)
+- **Trading desk**: Portfolio value and P&L, holdings table (qty, live price, spark, rating, score), calls-to-review, recent analysis, SPY/QQQ/IWM/DIA tape, universe heatmap
+- **Holdings**: IBKR Flex Open Positions sync (`Sync holdings`); prices recomputed from stored `stock_data`
+- **Watchlist**: Add/remove tickers (drives daily scrape + analysis); suggested ideas with a brief and portfolio-fit note
+- **Stock detail**: Intraday–multi-year charts, technicals, key stats, news stream, rating history, factor scores
+- **Research reports**: Core (technicals, fundamentals, news, sentiment, catalysts, decision) and **deep dive** (flows, policy, lockup, Kronos forecast, debate); history + PDF download
+- **Jobs**: Sync data and run analysis from the desk; cancel in-flight jobs; retry failed analysis
 - **Live prices**: During US RTH with the desk tab open, on-screen tickers refresh every 5 minutes (`1m` Yahoo backfill for the session)
+- **Privacy mode**: Header toggle masks quantity, value, and P&L in the browser (admin only; guests never receive those fields)
+- **Settings**: Qwen models, API key, sync/analysis intervals, LLM spend and token usage
+- **Price storage**: Multi-resolution ladder for charts — `1m` (~2d), `15m` (~8d), `30m` (~16d), `1h` (~35d), `1d` (forever); daily sync gap-fills then compacts
+- **Pipeline**: Manual or scheduled sync → scrape news/prices → vector sync → LLM rating
 - **Existing RAG APIs**: News RAG, stock price stats, chart data
+
+## Access
+
+Set `ADMIN_KEY` on the API (and the same value in GitHub Actions). The login page asks for that key.
+
+- **Enter desk** — full access: holdings dollars, sync, analysis, reports, settings.
+- **Continue as guest** — no second password. Anyone with the site URL can browse tickers, watchlist, saved reports, and live prices. The API returns 403 on mutations (except live price refresh) and nulls portfolio dollars. Settings is hidden.
+- Leave `ADMIN_KEY` empty **locally only** to disable auth entirely.
 
 ## Architecture
 
@@ -53,7 +66,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173
+Open http://localhost:5173. If `ADMIN_KEY` is set on the API, sign in with that key or **Continue as guest**.
 
 ### Kronos price forecast (deep reports)
 
@@ -131,21 +144,43 @@ You can also run workflows manually: Actions → workflow → **Run workflow**.
 
 ## API endpoints
 
+When `ADMIN_KEY` is set, non-public routes need `Authorization: Bearer <ADMIN_KEY>` (admin) or the guest token from `POST /auth/guest`. Guests may GET most reads except `/settings*`; the only guest write is `POST /stock/prices/live-refresh`.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | API info |
 | GET | `/health` | Health check (Render) |
+| GET | `/auth/status` | Whether login is required |
+| POST | `/auth/login` | Validate admin access key |
+| POST | `/auth/guest` | Issue guest token (public) |
+| GET | `/desk/snapshot` | Desk bootstrap: holdings, watchlist, ratings, quotes |
 | GET | `/universe` | Holdings + watchlist tickers |
 | GET/POST/DELETE | `/watchlist` | Manage watchlist |
-| GET | `/holdings` | Current holdings snapshot |
+| GET | `/watchlist/suggestions` | Suggested tickers |
+| GET | `/holdings` | Current holdings snapshot (guest: dollars stripped) |
 | POST | `/holdings/sync` | Sync IBKR Flex Open Positions into holdings |
 | POST | `/cron/holdings/sync` | Same as above (scheduler / weekly workflow) |
+| POST | `/cron/sync` | Scheduled price/news sync |
+| POST | `/cron/analyze` | Scheduled universe analysis |
 | GET | `/ratings` | Latest rating per ticker |
 | GET | `/ratings/{ticker}` | Rating history |
 | POST | `/analysis/run` | Trigger analysis |
-| GET/PUT | `/settings` | App settings |
+| GET | `/analysis/status` | Analysis job status |
+| GET | `/jobs` | Job queue snapshot |
+| POST | `/sync/data` | Manual news/price sync |
+| GET | `/settings` | App settings (admin only) |
+| PUT | `/settings` | Update models, key, intervals |
+| GET | `/stock/quotes` | Latest close, change, sparkline |
+| POST | `/stock/prices/live-refresh` | RTH `1m` backfill for on-screen tickers |
 | GET | `/stock/{ticker}/chart` | Price chart data |
+| GET | `/stock/{ticker}/technicals` | RSI, MACD, SMAs, ATR |
+| GET | `/research/{ticker}` | Latest core/deep report |
+| POST | `/research/{ticker}` | Generate core report |
+| POST | `/research/{ticker}/deep` | Generate deep report |
+| GET | `/research/{ticker}/history` | Report history |
+| GET | `/research/{ticker}/reports/{id}/pdf` | Download report PDF |
 | GET | `/news/{ticker}` | News RAG |
+| GET | `/news/{ticker}/articles` | Recent headlines |
 
 ## Environment variables
 
@@ -154,7 +189,7 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 | Variable | Where | Purpose |
 |----------|--------|---------|
 | `CORS_ORIGINS` | Render | Allowed browser origins (comma-separated) |
-| `ADMIN_KEY` | Render (+ GitHub Actions) | Access key for login + cron Bearer auth |
+| `ADMIN_KEY` | Render (+ GitHub Actions) | Access key for admin login + cron Bearer auth. Empty disables auth (local only). Guest login needs this set so the desk is locked. |
 | `IBKR_FLEX_TOKEN` / `IBKR_FLEX_QUERY_ID` | Render | IBKR Flex holdings import (never log the token) |
 | `VITE_API_BASE_URL` | Vercel | Render API origin for the SPA |
 | `PORT` | Render | Injected automatically |

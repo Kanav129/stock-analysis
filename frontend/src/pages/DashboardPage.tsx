@@ -22,6 +22,7 @@ import { useUsRegularSession } from '../hooks/useUsRegularSession';
 import { isUsRegularSession } from '../lib/usMarketHours';
 import { patchDeskCache, readDeskCache } from '../lib/deskCache';
 import { scoreTextClass } from '../lib/reportDepth';
+import { isGuest } from '../auth';
 
 const MARKET_TICKERS = ['SPY', 'QQQ', 'IWM', 'DIA'];
 /** Heatmap prefers watchlist; holdings fill remaining slots up to this cap. */
@@ -81,6 +82,7 @@ function seedDeskCaches(qc: ReturnType<typeof useQueryClient>, snap: DeskSnapsho
 export function DashboardPage() {
   const qc = useQueryClient();
   const marketOpen = useUsRegularSession();
+  const guest = isGuest();
 
   // Polling owned by useSyncKeepAlive — subscribe only; prefer jobs snapshot cache.
   const syncQ = useQuery({
@@ -260,11 +262,11 @@ export function DashboardPage() {
           <LiveSessionIndicator />
         </div>
         <div className="flex flex-wrap items-center justify-center gap-3 sm:justify-end">
-          <DeskRunActions />
+          {guest ? null : <DeskRunActions />}
         </div>
       </div>
 
-      <JobsPanel />
+      {guest ? null : <JobsPanel />}
 
       {deskError ? (
         <p className="text-xs text-[var(--color-down)]">
@@ -272,7 +274,7 @@ export function DashboardPage() {
         </p>
       ) : null}
 
-      {deskPending ? (
+      {guest ? null : deskPending ? (
         <LoadingState label="Loading portfolio…" compact minHeight="3rem" />
       ) : (
         <PortfolioSummaryCard summary={summary} />
@@ -356,7 +358,7 @@ export function DashboardPage() {
           <Panel
             title="Holdings"
             subtitle={`${holdingsTickers.length} positions · ${freshnessLine}`}
-            actions={<SyncHoldingsButton />}
+            actions={guest ? undefined : <SyncHoldingsButton />}
           >
             {deskPending ? (
               <LoadingState label="Loading holdings…" minHeight="12rem" />
@@ -405,7 +407,7 @@ export function DashboardPage() {
             subtitle="Watchlist · holdings"
             actions={
               <Link to="/watchlist" className="btn-terminal">
-                Manage
+                {guest ? 'Watchlist' : 'Manage'}
               </Link>
             }
             dense

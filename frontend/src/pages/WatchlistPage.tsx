@@ -6,11 +6,13 @@ import { JobsPanel } from '../components/JobsPanel';
 import { WatchlistList } from '../components/WatchlistList';
 import { WatchlistSuggestions } from '../components/WatchlistSuggestions';
 import { LoadingState } from '../components/LoadingSpinner';
+import { isGuest } from '../auth';
 
 export function WatchlistPage() {
   const [ticker, setTicker] = useState('');
   const [notes, setNotes] = useState('');
   const qc = useQueryClient();
+  const guest = isGuest();
 
   const watchlistQ = useQuery({ queryKey: ['watchlist'], queryFn: api.getWatchlist });
 
@@ -32,14 +34,17 @@ export function WatchlistPage() {
         <div>
           <h2 className="font-display font-display-title text-2xl font-semibold">Watchlist</h2>
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-            Add tickers you want to track. They will be included in daily scraping and AI analysis.
+            {guest
+              ? 'Tickers on the desk watchlist, with live prices and ratings.'
+              : 'Add tickers you want to track. They will be included in daily scraping and AI analysis.'}
           </p>
         </div>
-        <DeskRunActions showAnalysis={false} />
+        {guest ? null : <DeskRunActions showAnalysis={false} />}
       </div>
 
-      <JobsPanel />
+      {guest ? null : <JobsPanel />}
 
+      {guest ? null : (
       <form
         className="flex flex-wrap gap-3 rounded-lg bg-[var(--color-surface-1)] p-6"
         onSubmit={(e) => {
@@ -67,6 +72,7 @@ export function WatchlistPage() {
           Add
         </button>
       </form>
+      )}
 
       <div className="rounded-lg bg-[var(--color-surface-1)]">
         {watchlistQ.isLoading ? (

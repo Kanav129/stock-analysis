@@ -1,3 +1,4 @@
+import { Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -11,6 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 import { api, type LlmUsagePeriod } from '../api/client';
+import { isGuest } from '../auth';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 
 const MODEL_PRESETS = [
@@ -69,20 +71,27 @@ function PeriodTile({
 }
 
 export function SettingsPage() {
+  const guest = isGuest();
   const qc = useQueryClient();
-  const settingsQ = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
+  const settingsQ = useQuery({
+    queryKey: ['settings'],
+    queryFn: api.getSettings,
+    enabled: !guest,
+  });
   const llmQ = useQuery({
     queryKey: ['llm-status'],
     queryFn: api.getLlmStatus,
-    refetchInterval: 60_000,
+    refetchInterval: guest ? false : 60_000,
     staleTime: 30_000,
+    enabled: !guest,
   });
   const [chartRange, setChartRange] = useState<'week' | 'month'>('week');
   const usageQ = useQuery({
     queryKey: ['llm-usage', chartRange],
     queryFn: () => api.getLlmUsage(chartRange),
-    refetchInterval: 60_000,
+    refetchInterval: guest ? false : 60_000,
     staleTime: 30_000,
+    enabled: !guest,
   });
   const [analysisModel, setAnalysisModel] = useState('');
   const [researchModel, setResearchModel] = useState('');
@@ -127,6 +136,10 @@ export function SettingsPage() {
   const usage = usageQ.data;
   const periods = usage?.periods;
   const hasSpend = (usage?.daily ?? []).some((d) => (d.total_cost ?? 0) > 0 || (d.total_tokens ?? 0) > 0);
+
+  if (guest) {
+    return <Navigate to="/" replace />;
+  }
 
   if (settingsQ.isLoading && !settingsQ.data) {
     return (

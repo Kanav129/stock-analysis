@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { clearAuthToken } from '../auth';
+import { clearAuthToken, isGuest } from '../auth';
 import { LivePriceProvider } from '../context/LivePriceContext';
 import { useSyncKeepAlive } from '../hooks/useSyncKeepAlive';
 import { PrivacyToggle } from './PrivacyToggle';
@@ -16,6 +16,7 @@ export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const guest = isGuest();
   useSyncKeepAlive();
 
   function logout() {
@@ -24,6 +25,8 @@ export function Layout() {
     qc.clear();
     navigate('/login', { replace: true });
   }
+
+  const navItems = guest ? nav.filter((item) => item.to !== '/settings') : nav;
 
   return (
     <LivePriceProvider>
@@ -37,7 +40,7 @@ export function Layout() {
               </div>
 
               <nav className="desk-header__nav" aria-label="Primary">
-                {nav.map((item) => {
+                {navItems.map((item) => {
                   const active =
                     item.to === '/'
                       ? location.pathname === '/'
@@ -56,7 +59,11 @@ export function Layout() {
               </nav>
 
               <div className="desk-header__actions">
-                <PrivacyToggle />
+                {guest ? (
+                  <span className="desk-header__guest">Guest</span>
+                ) : (
+                  <PrivacyToggle />
+                )}
                 <button type="button" onClick={logout} className="desk-header__logout desk-press">
                   Log out
                 </button>
