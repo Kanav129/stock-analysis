@@ -155,6 +155,16 @@ def resolve_embedding_api_key() -> str:
     return _env_first(*_EMBEDDING_API_KEY_ENV_KEYS) or _llm_api_key()
 
 
+def _normalize_embedding_base_url(url: str) -> str:
+    """SDK clients append `/embeddings`; docs URLs that already include it 400."""
+    url = url.strip().rstrip("/")
+    if url.endswith("/embeddings"):
+        url = url[: -len("/embeddings")].rstrip("/")
+    if url in {"https://api.openai.com", "http://api.openai.com"}:
+        url = f"{url}/v1"
+    return url
+
+
 def resolve_embedding_base_url() -> str:
     """Base URL used only for embeddings.
 
@@ -163,10 +173,10 @@ def resolve_embedding_base_url() -> str:
     """
     explicit = _env_first("OPENAI_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL")
     if explicit:
-        return explicit.rstrip("/")
+        return _normalize_embedding_base_url(explicit)
     if _env_first(*_EMBEDDING_API_KEY_ENV_KEYS):
         return DEFAULT_OPENAI_EMBEDDING_BASE_URL
-    return _llm_base_url()
+    return _normalize_embedding_base_url(_llm_base_url())
 
 
 _QWEN_ONLY_EMBEDDING_MODELS = frozenset({"text-embedding-v4", "text-embedding-v3"})
@@ -229,6 +239,10 @@ def get_embeddings() -> OpenAIEmbeddings:
         model=resolve_embedding_model(),
         api_key=resolve_embedding_api_key(),
         base_url=resolve_embedding_base_url(),
+        # Default True sends tiktoken ids; many OpenAI-compatible endpoints
+        # (and a copied `/v1/embeddings` base URL) reject that with HTTP 400.
+        check_embedding_ctx_length=False,
+        chunk_size=16,
     )
 
 

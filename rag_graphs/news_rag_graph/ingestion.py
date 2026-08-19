@@ -75,12 +75,21 @@ class DocumentSyncManager:
             logger.info("No unsynced documents found in MongoDB!")
             return
 
-        descriptions = [article['description'] for article in unsynced_articles if 'description' in article]
-        document_ids = [article['_id'] for article in unsynced_articles]
+        document_ids = [article["_id"] for article in unsynced_articles]
+        descriptions = []
+        for article in unsynced_articles:
+            text = (article.get("description") or "").strip()
+            if text:
+                descriptions.append(text)
 
         if descriptions:
-            doc_splits = self.process_content(descriptions)
-            self.store_documents_in_chroma(doc_splits)
+            doc_splits = [
+                doc
+                for doc in self.process_content(descriptions)
+                if (doc.page_content or "").strip()
+            ]
+            if doc_splits:
+                self.store_documents_in_chroma(doc_splits)
             self.mark_documents_as_synced(document_ids)
             logger.info("Documents processed, stored, and marked as synced.")
 

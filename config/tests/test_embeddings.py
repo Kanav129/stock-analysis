@@ -32,11 +32,26 @@ def test_dedicated_embedding_creds_do_not_use_qwen(monkeypatch):
         model="text-embedding-3-small",
         api_key="sk-embed",
         base_url="https://api.openai.com/v1",
+        check_embedding_ctx_length=False,
+        chunk_size=16,
     )
 
 
 def test_embedding_base_url_strips_trailing_slash(monkeypatch):
     monkeypatch.setenv("OPENAI_EMBEDDING_BASE_URL", "https://api.openai.com/v1/")
+    assert resolve_embedding_base_url() == "https://api.openai.com/v1"
+
+
+def test_embedding_base_url_strips_docs_embeddings_path(monkeypatch):
+    monkeypatch.setenv(
+        "OPENAI_EMBEDDING_BASE_URL",
+        "https://api.openai.com/v1/embeddings",
+    )
+    assert resolve_embedding_base_url() == "https://api.openai.com/v1"
+
+
+def test_embedding_base_url_adds_v1_for_openai_origin(monkeypatch):
+    monkeypatch.setenv("OPENAI_EMBEDDING_BASE_URL", "https://api.openai.com")
     assert resolve_embedding_base_url() == "https://api.openai.com/v1"
 
 
