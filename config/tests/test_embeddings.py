@@ -6,6 +6,7 @@ from config.llm_config import (
     get_embeddings,
     resolve_embedding_api_key,
     resolve_embedding_base_url,
+    resolve_embedding_chunk_size,
     resolve_embedding_model,
 )
 
@@ -32,11 +33,43 @@ def test_dedicated_embedding_creds_do_not_use_qwen(monkeypatch):
         model="text-embedding-3-small",
         api_key="sk-embed",
         base_url="https://api.openai.com/v1",
+        check_embedding_ctx_length=False,
+        chunk_size=16,
+    )
+
+
+def test_dashscope_embedding_url_uses_batch_size_10(monkeypatch):
+    monkeypatch.setenv("OPENAI_EMBEDDING_API_KEY", "sk-embed")
+    monkeypatch.setenv(
+        "OPENAI_EMBEDDING_BASE_URL",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    )
+    assert resolve_embedding_chunk_size() == 10
+    with patch("config.llm_config.OpenAIEmbeddings") as ctor:
+        ctor.return_value = MagicMock()
+        get_embeddings()
+    assert ctor.call_args.kwargs["check_embedding_ctx_length"] is False
+    assert ctor.call_args.kwargs["chunk_size"] == 10
+    assert ctor.call_args.kwargs["base_url"].startswith(
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     )
 
 
 def test_embedding_base_url_strips_trailing_slash(monkeypatch):
     monkeypatch.setenv("OPENAI_EMBEDDING_BASE_URL", "https://api.openai.com/v1/")
+    assert resolve_embedding_base_url() == "https://api.openai.com/v1"
+
+
+def test_embedding_base_url_strips_docs_embeddings_path(monkeypatch):
+    monkeypatch.setenv(
+        "OPENAI_EMBEDDING_BASE_URL",
+        "https://api.openai.com/v1/embeddings",
+    )
+    assert resolve_embedding_base_url() == "https://api.openai.com/v1"
+
+
+def test_embedding_base_url_adds_v1_for_openai_origin(monkeypatch):
+    monkeypatch.setenv("OPENAI_EMBEDDING_BASE_URL", "https://api.openai.com")
     assert resolve_embedding_base_url() == "https://api.openai.com/v1"
 
 

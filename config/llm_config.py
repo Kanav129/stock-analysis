@@ -155,6 +155,16 @@ def resolve_embedding_api_key() -> str:
     return _env_first(*_EMBEDDING_API_KEY_ENV_KEYS) or _llm_api_key()
 
 
+def _normalize_embedding_base_url(url: str) -> str:
+    """SDK clients append `/embeddings`; docs URLs that already include it 400."""
+    url = url.strip().rstrip("/")
+    if url.endswith("/embeddings"):
+        url = url[: -len("/embeddings")].rstrip("/")
+    if url in {"https://api.openai.com", "http://api.openai.com"}:
+        url = f"{url}/v1"
+    return url
+
+
 def resolve_embedding_base_url() -> str:
     """Base URL used only for embeddings.
 
@@ -163,10 +173,10 @@ def resolve_embedding_base_url() -> str:
     """
     explicit = _env_first("OPENAI_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL")
     if explicit:
-        return explicit.rstrip("/")
+        return _normalize_embedding_base_url(explicit)
     if _env_first(*_EMBEDDING_API_KEY_ENV_KEYS):
         return DEFAULT_OPENAI_EMBEDDING_BASE_URL
-    return _llm_base_url()
+    return _normalize_embedding_base_url(_llm_base_url())
 
 
 _QWEN_ONLY_EMBEDDING_MODELS = frozenset({"text-embedding-v4", "text-embedding-v3"})
@@ -219,6 +229,21 @@ def get_chat_llm(temperature: float = 0) -> ChatOpenAI:
     )
 
 
+def _is_dashscope_embedding_url(url: str) -> bool:
+    host = url.lower()
+    return any(
+        token in host
+        for token in ("dashscope", "aliyuncs.com", "qwencloud", "token-plan")
+    )
+
+
+def resolve_embedding_chunk_size() -> int:
+    """DashScope compatible-mode embeddings cap batch size at 10."""
+    if _is_dashscope_embedding_url(resolve_embedding_base_url()):
+        return 10
+    return 16
+
+
 def get_embeddings() -> OpenAIEmbeddings:
     """Embedding model for news vector store.
 
@@ -229,6 +254,10 @@ def get_embeddings() -> OpenAIEmbeddings:
         model=resolve_embedding_model(),
         api_key=resolve_embedding_api_key(),
         base_url=resolve_embedding_base_url(),
+        # Default True sends tiktoken ids. DashScope then 400s:
+        # "contents is neither str nor list of str.: input.contents"
+        check_embedding_ctx_length=False,
+        chunk_size=resolve_embedding_chunk_size(),
     )
 
 

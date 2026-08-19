@@ -620,8 +620,20 @@ class SyncService:
                 except Exception as exc:
                     if not _is_current():
                         return
-                    logger.error(f"Chroma sync failed: {exc}")
-                    errors.append({"ticker": "*", "error": f"chroma_sync: {exc}"})
+                    from config.llm_config import (
+                        resolve_embedding_base_url,
+                        resolve_embedding_model,
+                    )
+
+                    body = getattr(exc, "body", None)
+                    detail = f"{exc}" if body is None else f"{exc} body={body}"
+                    logger.error(
+                        "Chroma sync failed: %s (model=%s base_url=%s)",
+                        detail,
+                        resolve_embedding_model(),
+                        resolve_embedding_base_url(),
+                    )
+                    errors.append({"ticker": "*", "error": f"chroma_sync: {detail}"})
                     checkpoint.update(status="partial", errors=errors, vectors_done=False)
                     terminal_checkpoint = dict(checkpoint)
                     if not _abandon_current():
