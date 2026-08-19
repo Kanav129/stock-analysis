@@ -229,6 +229,21 @@ def get_chat_llm(temperature: float = 0) -> ChatOpenAI:
     )
 
 
+def _is_dashscope_embedding_url(url: str) -> bool:
+    host = url.lower()
+    return any(
+        token in host
+        for token in ("dashscope", "aliyuncs.com", "qwencloud", "token-plan")
+    )
+
+
+def resolve_embedding_chunk_size() -> int:
+    """DashScope compatible-mode embeddings cap batch size at 10."""
+    if _is_dashscope_embedding_url(resolve_embedding_base_url()):
+        return 10
+    return 16
+
+
 def get_embeddings() -> OpenAIEmbeddings:
     """Embedding model for news vector store.
 
@@ -239,10 +254,10 @@ def get_embeddings() -> OpenAIEmbeddings:
         model=resolve_embedding_model(),
         api_key=resolve_embedding_api_key(),
         base_url=resolve_embedding_base_url(),
-        # Default True sends tiktoken ids; many OpenAI-compatible endpoints
-        # (and a copied `/v1/embeddings` base URL) reject that with HTTP 400.
+        # Default True sends tiktoken ids. DashScope then 400s:
+        # "contents is neither str nor list of str.: input.contents"
         check_embedding_ctx_length=False,
-        chunk_size=16,
+        chunk_size=resolve_embedding_chunk_size(),
     )
 
 
