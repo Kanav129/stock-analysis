@@ -1,6 +1,19 @@
 from rag_graphs.research_graph.nodes.synthesize_decision import build_decision_context
 
 
+def test_build_decision_context_includes_desk_scores():
+    ctx = build_decision_context(
+        ticker="AAPL",
+        live_price=190.0,
+        factor_scores={"value": 50, "growth": 50, "quality": 50, "momentum": 50, "low_risk": 50, "sentiment": 50},
+        sections={"fundamentals": "Fund"},
+        portfolio_markdown="## Personal Portfolio\n- none",
+        desk_scores_markdown="## Desk scores (other holdings)\n- MSFT +11 (HOLD)",
+    )
+    assert "## Desk scores (other holdings)" in ctx
+    assert "MSFT +11" in ctx
+
+
 def test_build_decision_context_uses_market_not_fundamentals_fallback():
     ctx = build_decision_context(
         ticker="AAPL",

@@ -195,7 +195,7 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 | `PORT` | Render | Injected automatically |
 | `AUTO_PIPELINE_ENABLED` | Render | Prefer `false` on free tier |
 | `JOB_QUEUE_CLAIM_DELAY_SECONDS` | Render (`45`) / local (`0`) | Seconds a job must sit queued before this worker may claim it (local preferred) |
-| `JOB_LEASE_SECONDS` / `JOB_HEARTBEAT_SECONDS` | Both | Job ownership lease TTL (60) and renew interval (30) |
+| `JOB_LEASE_SECONDS` / `JOB_HEARTBEAT_SECONDS` | Both | Job ownership lease TTL (90) and renew interval (30). Bump lease to ~120s if decision thinking is on. |
 | `JOB_RECLAIM_INTERVAL_SECONDS` | Both | Idle reclaim cadence for expired leases (default 20) |
 | `SYNC_MAX_CONCURRENT` | Render (`1`) / local | Parallel tickers during news/price sync |
 | `JOB_MAX_CONCURRENT` | Render (`1`) / local | Parallel LLM analysis jobs |
@@ -203,7 +203,10 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 | `KRONOS_ENABLED` | Render | `false` on free/Starter (512 MB); `true` locally / Standard+ |
 | `SYNC_INTERVAL` | Render | Seconds between in-process syncs (default 86400) |
 | `ANALYSIS_INTERVAL` | Render | Seconds between in-process analyses (default 604800) |
-| `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | Qwen models (`qwen3.7-flash`, `qwen3.7-max`, etc.) |
+| `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | Qwen models (`qwen3.7-plus`, `qwen3.8-max`, etc.) |
+| `LLM_MAX_CONCURRENT` | Render / local | In-flight DashScope chat calls (`1` or `2`) |
+| `RESEARCH_FALLBACK_MODEL` | Render | Cheap research fallback (`qwen3.7-flash`); never Max |
+| `DECISION_ENABLE_THINKING` | Render / Settings | `false` until score_first_think eval wins |
 | `OPENAI_EMBEDDING_API_KEY` | Render | Embedding-only API key (do not reuse Qwen Lite chat key) |
 | `OPENAI_EMBEDDING_BASE_URL` | Render | Embedding provider origin, e.g. `https://api.openai.com/v1` |
 | `OPENAI_EMBEDDING_MODEL` | Render | Embedding model on that provider (`text-embedding-3-small`, …) |

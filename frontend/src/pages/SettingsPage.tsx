@@ -16,10 +16,10 @@ import { isGuest } from '../auth';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 
 const MODEL_PRESETS = [
+  'qwen3.8-max',
+  'qwen3.7-plus',
   'qwen3.7-max',
   'qwen3.7-flash',
-  'qwen3.7-plus',
-  'qwen3.8-max',
   'qwen3.5-flash',
   'text-embedding-v4',
 ];
@@ -95,6 +95,7 @@ export function SettingsPage() {
   });
   const [analysisModel, setAnalysisModel] = useState('');
   const [researchModel, setResearchModel] = useState('');
+  const [decisionThinking, setDecisionThinking] = useState(false);
   const [syncInterval, setSyncInterval] = useState('86400');
   const [analysisInterval, setAnalysisInterval] = useState('604800');
   const [apiKey, setApiKey] = useState('');
@@ -104,6 +105,11 @@ export function SettingsPage() {
     if (settingsQ.data) {
       setAnalysisModel(settingsQ.data.analysis_model ?? '');
       setResearchModel(settingsQ.data.research_model ?? '');
+      setDecisionThinking(
+        ['1', 'true', 'yes', 'on'].includes(
+          (settingsQ.data.decision_enable_thinking ?? 'false').toLowerCase(),
+        ),
+      );
       setSyncInterval(settingsQ.data.sync_interval ?? '86400');
       setAnalysisInterval(settingsQ.data.analysis_interval ?? '604800');
       setApiKey('');
@@ -115,6 +121,7 @@ export function SettingsPage() {
       const payload: Record<string, string | number> = {
         analysis_model: analysisModel.trim(),
         research_model: researchModel.trim(),
+        decision_enable_thinking: decisionThinking ? 'true' : 'false',
         sync_interval: Number(syncInterval),
         analysis_interval: Number(analysisInterval),
       };
@@ -420,6 +427,21 @@ export function SettingsPage() {
                 <option key={`r-${m}`} value={m} />
               ))}
             </datalist>
+          </label>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={decisionThinking}
+              onChange={(e) => setDecisionThinking(e.target.checked)}
+            />
+            <span>
+              Decision thinking{' '}
+              <span className="text-[var(--color-text-muted)]">
+                (3.8-max; keep off until score_first_think eval wins)
+              </span>
+            </span>
           </label>
 
           <label className="flex flex-col gap-1 text-sm">

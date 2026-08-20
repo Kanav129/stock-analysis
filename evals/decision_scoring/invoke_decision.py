@@ -10,8 +10,14 @@ from typing import Literal
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
-from config.llm_config import _chat_llm, resolve_analysis_model
-from evals.decision_scoring.structure import StructureResult, validate_decision_payload
+from config.llm_config import (
+    DEFAULT_THINKING_BUDGET,
+    DEFAULT_THINKING_TIMEOUT_SECONDS,
+    _chat_llm,
+    resolve_analysis_model,
+)
+from evals.decision_scoring.legacy_output import LegacyDecisionOutput
+from evals.decision_scoring.structure import SchemaKind, StructureResult, validate_decision_payload
 from rag_graphs.research_graph.nodes.synthesize_decision import DecisionOutput
 
 
@@ -73,6 +79,7 @@ def invoke_decision(
     enable_thinking: bool,
     ticker: str,
     context: str,
+    schema: SchemaKind = "rubric",
 ) -> InvokeResult:
     started = perf_counter()
     model = resolve_analysis_model()
@@ -90,13 +97,43 @@ def invoke_decision(
         model,
         temperature,
         enable_thinking=enable_thinking,
+        thinking_budget=DEFAULT_THINKING_BUDGET if enable_thinking else None,
+        json_object=enable_thinking,
+        request_timeout=(
+            DEFAULT_THINKING_TIMEOUT_SECONDS if enable_thinking else None
+        ),
     )
 
-    function_error: Exception | None = None
     last_payload: dict[str, Any] | None = None
+    output_cls = DecisionOutput if schema == "rubric" else LegacyDecisionOutput
+    if enable_thinking:
+        try:
+            raw = llm.invoke(prompt_value)
+            last_payload = _extract_json_object(_message_text(raw.content))
+            validated = output_cls.model_validate(last_payload).model_dump()
+            structure = validate_decision_payload(validated, schema=schema)
+            return InvokeResult(
+                call_ok=True,
+                schema_method="json_parse",
+                structure=structure,
+                raw_error=None,
+                latency_ms=(perf_counter() - started) * 1000,
+                model=model,
+            )
+        except Exception as exc:
+            structure = validate_decision_payload(last_payload or {}, schema=schema)
+            return InvokeResult(
+                call_ok=False,
+                schema_method="failed",
+                structure=structure,
+                raw_error=str(exc),
+                latency_ms=(perf_counter() - started) * 1000,
+                model=model,
+            )
+
     try:
         structured_llm = llm.with_structured_output(
-            DecisionOutput,
+            output_cls,
             method="function_calling",
             include_raw=True,
         )
@@ -111,8 +148,8 @@ def invoke_decision(
         else:
             parsed = response
         last_payload = _as_payload(parsed)
-        validated = DecisionOutput.model_validate(last_payload).model_dump()
-        structure = validate_decision_payload(validated)
+        validated = output_cls.model_validate(last_payload).model_dump()
+        structure = validate_decision_payload(validated, schema=schema)
         return InvokeResult(
             call_ok=True,
             schema_method="function_calling",
@@ -122,35 +159,12 @@ def invoke_decision(
             model=model,
         )
     except Exception as exc:
-        function_error = exc
-
-    if enable_thinking:
-        try:
-            raw = llm.invoke(prompt_value)
-            last_payload = _extract_json_object(_message_text(raw.content))
-            validated = DecisionOutput.model_validate(last_payload).model_dump()
-            structure = validate_decision_payload(validated)
-            return InvokeResult(
-                call_ok=True,
-                schema_method="json_parse",
-                structure=structure,
-                raw_error=str(function_error),
-                latency_ms=(perf_counter() - started) * 1000,
-                model=model,
-            )
-        except Exception as fallback_error:
-            raw_error = (
-                f"function_calling: {function_error}; json_parse: {fallback_error}"
-            )
-    else:
-        raw_error = str(function_error)
-
-    structure = validate_decision_payload(last_payload or {})
-    return InvokeResult(
-        call_ok=False,
-        schema_method="failed",
-        structure=structure,
-        raw_error=raw_error,
-        latency_ms=(perf_counter() - started) * 1000,
-        model=model,
-    )
+        structure = validate_decision_payload(last_payload or {}, schema=schema)
+        return InvokeResult(
+            call_ok=False,
+            schema_method="failed",
+            structure=structure,
+            raw_error=str(exc),
+            latency_ms=(perf_counter() - started) * 1000,
+            model=model,
+        )

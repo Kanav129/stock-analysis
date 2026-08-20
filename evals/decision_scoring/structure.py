@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from config.rating_config import RATING_SET
+from config.rating_config import RATING_SET, clamp_score, rating_from_score
+from config.score_composite import composite_score
+from evals.decision_scoring.legacy_output import LegacyDecisionOutput
 from rag_graphs.research_graph.nodes.synthesize_decision import DecisionOutput
+
+SchemaKind = Literal["score_first", "rubric"]
 
 
 @dataclass
@@ -70,7 +74,11 @@ def _levels_types_are_valid(obj: dict[str, Any]) -> bool:
     return True
 
 
-def validate_decision_payload(obj: Any) -> StructureResult:
+def validate_decision_payload(
+    obj: Any,
+    *,
+    schema: SchemaKind = "rubric",
+) -> StructureResult:
     if not isinstance(obj, dict):
         return StructureResult(
             parsed_ok=False,
@@ -83,18 +91,16 @@ def validate_decision_payload(obj: Any) -> StructureResult:
             normalized=None,
         )
 
-    rating_ok = _rating_is_valid(obj.get("rating"))
-    score_ok = _score_in_range(obj.get("score"))
     reasoning_ok = _reasoning_is_valid(obj.get("reasoning"))
     drivers_ok = _drivers_are_valid(obj.get("key_drivers"))
     levels_types_ok = _levels_types_are_valid(obj)
+    model_cls = DecisionOutput if schema == "rubric" else LegacyDecisionOutput
 
     normalized: dict | None = None
     parsed_ok = False
     errors: list[str] = []
-
     try:
-        model = DecisionOutput.model_validate(obj)
+        model = model_cls.model_validate(obj)
         parsed_ok = True
         normalized = model.model_dump()
     except ValidationError as exc:
@@ -102,6 +108,24 @@ def validate_decision_payload(obj: Any) -> StructureResult:
             f"{'.'.join(str(part) for part in err.get('loc', ()))}: {err.get('msg', 'invalid')}"
             for err in exc.errors()
         )
+
+    if schema == "rubric" and parsed_ok and normalized is not None:
+        score, _note = composite_score(normalized)
+        rating = rating_from_score(score)
+        normalized["score"] = score
+        normalized["rating"] = rating
+        score_ok = _score_in_range(score)
+        rating_ok = _rating_is_valid(rating)
+    else:
+        score_ok = _score_in_range(obj.get("score"))
+        rating_ok = _rating_is_valid(obj.get("rating"))
+        if parsed_ok and normalized is not None and normalized.get("score") is not None:
+            try:
+                normalized["rating"] = rating_from_score(
+                    clamp_score(normalized.get("score"))
+                )
+            except Exception:
+                pass
 
     return StructureResult(
         parsed_ok=parsed_ok,

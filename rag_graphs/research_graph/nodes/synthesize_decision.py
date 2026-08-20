@@ -1,23 +1,25 @@
-"""Decision synthesis — structured LLM call producing rating tag + AI score (−100…+100)."""
+"""Decision synthesis — Max fills a 1–5 rubric; Python computes the desk score."""
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from config.llm_config import (
+    DEFAULT_THINKING_BUDGET,
+    DEFAULT_THINKING_TIMEOUT_SECONDS,
     _chat_llm,
     _fallback_chain,
     _record_usage,
     resolve_analysis_model,
+    resolve_decision_enable_thinking,
 )
 from config.rating_config import (
-    RATING_TAGS,
     clamp_score,
-    normalize_rating,
+    rating_from_score,
     reconcile_horizon_decision,
 )
 from config.report_config import (
@@ -25,29 +27,80 @@ from config.report_config import (
     compute_factor_scores,
     fundamentals_from_inputs,
 )
+from config.score_composite import composite_score
 from rag_graphs.research_graph.state import ResearchState
 from services.portfolio_context_service import portfolio_markdown_for
 from utils.logger import logger
 
-# Tight HOLD-default prompt; thinking off (faster, fewer tokens; FC structured output).
+# Rubric-composite prompt; thinking off unless Settings/env enable it.
 DECISION_TEMPERATURE = 0.25
 DECISION_ENABLE_THINKING = False
 _PRIMARY_ATTEMPTS = 2
+DESK_SCORES_LIMIT = 40
+CONTEXT_TRUNCATE_CHARS = 5000
+
+WeekAction = Literal[
+    "strong_sell",
+    "sell",
+    "reduce",
+    "hold",
+    "accumulate",
+    "buy",
+    "strong_buy",
+]
+
+
+class DimensionRating(BaseModel):
+    bearish: list[str] = Field(
+        description="1–4 bearish points from the matching research section",
+        min_length=1,
+        max_length=4,
+    )
+    bullish: list[str] = Field(
+        description="1–4 bullish points from the matching research section",
+        min_length=1,
+        max_length=4,
+    )
+    score_1_to_5: int = Field(
+        ge=1,
+        le=5,
+        description="Fill only after bearish and bullish lists",
+    )
 
 
 class DecisionOutput(BaseModel):
-    rating: str = Field(
+    bearish_factors: list[str] = Field(
+        description="Overall key risks (2–5)",
+        min_length=2,
+        max_length=5,
+    )
+    bullish_factors: list[str] = Field(
+        description="Overall key catalysts (2–5)",
+        min_length=2,
+        max_length=5,
+    )
+    fundamental_health: DimensionRating = Field(
+        description="Growth, margins, balance sheet from fundamentals research"
+    )
+    valuation: DimensionRating = Field(
+        description="Multiples vs history/peers"
+    )
+    technical_momentum: DimensionRating = Field(
+        description="Trend, MAs, RSI, extension from market/technicals"
+    )
+    sentiment_and_news: DimensionRating = Field(
+        description="Revisions, headlines, social from news + sentiment"
+    )
+    this_week_setup: DimensionRating = Field(
+        description="Is live a good place to transact this week?"
+    )
+    this_week_action: WeekAction = Field(
         description=(
-            "One of: STRONG_SELL, SELL, REDUCE, HOLD, ACCUMULATE, BUY, STRONG_BUY"
+            "What to do at/near live this week. Does not set the numeric score."
         )
     )
-    score: int = Field(
-        ge=-100,
-        le=100,
-        description="Overall AI score from -100 (strong sell) to +100 (strong buy)",
-    )
     reasoning: str = Field(description="Full reasoning for the decision in markdown")
-    key_drivers: list[str] = Field(description="Top 3-5 drivers of the rating")
+    key_drivers: list[str] = Field(description="Top 3-5 drivers of the decision")
     supporting_headlines: list[str] = Field(
         description="Relevant news headlines supporting the decision"
     )
@@ -63,71 +116,71 @@ class DecisionOutput(BaseModel):
         description="Brief posture statement for the decision brief",
     )
 
+    @field_validator("this_week_action", mode="before")
+    @classmethod
+    def _normalize_action(cls, value: Any) -> str:
+        raw = str(value or "hold").strip().lower().replace(" ", "_").replace("-", "_")
+        aliases = {"strongsell": "strong_sell", "strongbuy": "strong_buy"}
+        return aliases.get(raw, raw)
 
-DECISION_SYSTEM = f"""You are a senior portfolio manager on a personal trading desk. You receive
+
+DECISION_SYSTEM = """You are a senior portfolio manager on a personal trading desk. You receive
 multi-analyst research on a stock (market/technicals, fundamentals, news, sentiment).
 
-Produce:
-1) A rating tag from this set (exactly): {", ".join(RATING_TAGS)}
-2) An overall AI score from -100 to +100:
-   -100 = strongest sell conviction
-   0 = true neutral / no edge
-   +100 = strongest buy conviction
+Do NOT pick an overall integer score or a rating tag. The server computes the desk
+score from your 1–5 dimension ratings and this_week_action.
 
-Score is NOT "confidence %". A HOLD at +12 means a mild bullish lean; a HOLD at -18 means
-a mild bearish lean.
+Work in this order:
+1. Book-level bearish_factors then bullish_factors (2–5 each) from the research.
+2. For EACH dimension: fill bearish, then bullish, THEN score_1_to_5. Never pick
+   the 1–5 first and justify it after. Use only evidence in the provided sections.
+3. this_week_action: strong_sell | sell | reduce | hold | accumulate | buy | strong_buy.
+   This is the this-week horizon (transact near live vs wait). It does not set the
+   integer — the 1–5 mix does. Do not default every name to hold. Use accumulate when
+   the real advice is add on a nearby dip; buy/strong_buy when transacting near live
+   this week is warranted. Do not pick buy/strong_buy if the real advice is wait for
+   a dip while the stock is extended.
+4. reasoning, key_drivers, headlines, entry/stop/target, position_note, posture.
 
-Typical bands (use the full range — do not cluster near 0):
-- STRONG_SELL: -100 to -70
-- SELL: -70 to -40
-- REDUCE: -40 to -15
-- HOLD: -15 to +15
-- ACCUMULATE: +15 to +40
-- BUY: +40 to +70
-- STRONG_BUY: +70 to +100
+1–5 anchors (same for every dimension):
+- 1 deteriorating / very expensive / breakdown / do not transact
+- 2 weak / rich / fading / wait
+- 3 mixed / fair / range / no edge this week
+- 4 healthy / reasonable / constructive / add on a nearby dip
+- 5 accelerating / cheap / breakout / buy near live this week
 
-Default to HOLD when evidence is mixed or inconclusive. Use REDUCE/ACCUMULATE when there
-is a clear but moderate lean. Move to BUY/SELL or STRONG_* only when multiple factors
-align with high conviction. Reserve STRONG_* for exceptional setups with aligned factors.
+Dimensions:
+- fundamental_health — fundamentals section (growth, margins, balance sheet)
+- valuation — multiples vs history/peers (use the full 1–5; rich mega-caps are often 1–2)
+- technical_momentum — market/technicals
+- sentiment_and_news — news + sentiment
+- this_week_setup — is live a good place to transact this week? Extended/high → 1–2;
+  washout/attractive → 4–5
 
-Keep rating and score consistent with the bands above. Be specific and actionable with
-entry/stop/target when possible.
+Horizon: act this week only; intended hold is a few months. entry must be hittable
+this week if this_week_action is buy or strong_buy (or sell / strong_sell). stop and
+target assume a few-month hold.
 
-Horizon (mandatory): this is a short-to-medium decision. The user will only act on it
-this week, then hold for a few months — not a day trade and not a multi-year "core
-forever" call. The rating must answer: given the live price, should they transact
-this week?
-- BUY / STRONG_BUY means buy now, or within a few percent of the live price, this week,
-  intending to hold for months.
-- Do NOT rate BUY if the real advice is "hold the core / only add on dips" while the
-  stock is extended or at highs. Waiting for a pullback is HOLD (or ACCUMULATE only if
-  a dip this week is plausible and entry is that dip, not the live high).
-- HOLD means do nothing this week at current prices.
-- SELL / REDUCE means trim or exit this week.
-entry must be hittable this week if the rating is BUY or SELL. stop and target should
-assume a few-month hold, not a scalp.
+Portfolio is for position_note and posture. Stock research drives dimension 1–5s.
+If a desk scores table is present, do not copy a neighbor's 1–5s or action.
+Priors calibrate conviction only; current research dominates; do not copy the last
+tag. If last +20d missed, say so in reasoning rather than blindly reversing.
+Do not invent flows, insider prints, or catalysts missing from the sections.
 
-You also receive the user's Personal Portfolio holdings table when available.
-Stock research remains the primary driver of rating and score. Use the portfolio
-for position_note and posture (size, add/trim/hold relative to existing weight).
-You may slightly nudge rating and/or score when concentration or position size
-has a clear, material effect (e.g. already a very large weight or sector cluster);
-keep nudges modest and state them explicitly in reasoning. If portfolio influence
-is none, say so briefly in reasoning.
+Examples (structure only — no overall score):
 
-When extra sections are present (Earnings / Street, Flows, Lockup, Kronos, Research
-plan), they are first-class evidence — do not ignore them in favor of fundamentals
-alone. Do not invent options flow, insider prints, or catalysts that are not in
-the provided sections.
+Broken name: bearish_factors emphasize deteriorating FCF and a technical breakdown;
+fundamental_health and this_week_setup 1s; valuation maybe 2 if already cheap;
+this_week_action strong_sell or sell.
 
-When Historical performance priors are present (deep analysis), use them only to
-calibrate conviction and score magnitude. Current research remains the primary
-driver — do not copy prior ratings. If priors conflict with the present evidence,
-prefer the evidence and note the conflict briefly in reasoning.
+Mixed mega-cap: strong franchise (fund 4) but rich multiples (val 2) and extended
+price (setup 2); this_week_action hold or accumulate. Do not mark buy just because
+the business is high quality.
 
-Output Format: JSON with fields rating, score, reasoning (markdown), key_drivers (list),
-supporting_headlines (list), entry (number or null), stop (number or null), target
-(number or null), position_note (string), posture (string)."""
+Strong setup: accelerating results, reasonable/cheap valuation, washout, constructive
+tape; several 4–5s; this_week_action buy or strong_buy.
+
+Output the structured object. Fill lists before every 1–5."""
 
 
 def build_decision_context(
@@ -138,8 +191,9 @@ def build_decision_context(
     sections: dict[str, Any],
     portfolio_markdown: str,
     priors_markdown: str = "",
+    desk_scores_markdown: str = "",
 ) -> str:
-    def truncate(text: str, max_chars: int = 3000) -> str:
+    def truncate(text: str, max_chars: int = CONTEXT_TRUNCATE_CHARS) -> str:
         text = text or ""
         return text[:max_chars] + ("..." if len(text) > max_chars else "")
 
@@ -195,9 +249,11 @@ def build_decision_context(
 ## Live Price
 ${float(live_price):.2f}
 
-{portfolio_markdown}
+    {portfolio_markdown}
 """
     )
+    if desk_scores_markdown.strip():
+        parts.append(desk_scores_markdown.strip())
     base = "\n\n".join(parts)
     if priors_markdown:
         return base.rstrip() + "\n\n" + priors_markdown.strip() + "\n"
@@ -216,6 +272,38 @@ def _message_text(content: Any) -> str:
                 parts.append(block["text"])
         return "\n".join(parts)
     raise TypeError("LLM response content must be text")
+
+
+def desk_scores_markdown_for(ticker: str) -> str:
+    """Other holdings' latest scores so this name can be ranked relatively."""
+    try:
+        from services.ratings_service import RatingsService
+
+        rows = RatingsService().get_latest_ratings()
+    except Exception as exc:
+        logger.warning(f"Desk scores lookup failed for {ticker}: {exc}")
+        return ""
+    lines: list[str] = []
+    exclude = ticker.upper()
+    for row in rows:
+        other = str(row.get("ticker") or "").upper()
+        if not other or other == exclude:
+            continue
+        raw = row.get("score")
+        if raw is None:
+            continue
+        score = clamp_score(raw)
+        tag = rating_from_score(score)
+        lines.append(f"- {other} {score:+d} ({tag})")
+        if len(lines) >= DESK_SCORES_LIMIT:
+            break
+    if not lines:
+        return ""
+    return (
+        "## Desk scores (other holdings)\n"
+        + "\n".join(lines)
+        + "\n\nDo not copy a neighbor's 1–5s or this_week_action; place this name relative to them."
+    )
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -271,6 +359,7 @@ def _call_decision_llm(
     inputs: dict[str, Any],
 ) -> tuple[Any, str]:
     primary_name = resolve_analysis_model()
+    thinking = resolve_decision_enable_thinking()
     last_exc: Exception | None = None
 
     for attempt in range(1, _PRIMARY_ATTEMPTS + 1):
@@ -278,13 +367,18 @@ def _call_decision_llm(
             llm = _chat_llm(
                 primary_name,
                 DECISION_TEMPERATURE,
-                enable_thinking=DECISION_ENABLE_THINKING,
+                enable_thinking=thinking,
+                thinking_budget=DEFAULT_THINKING_BUDGET if thinking else None,
+                json_object=thinking,
+                request_timeout=(
+                    DEFAULT_THINKING_TIMEOUT_SECONDS if thinking else None
+                ),
             )
             result = _invoke_decision_on_llm(
                 llm,
                 prompt,
                 inputs,
-                enable_thinking=DECISION_ENABLE_THINKING,
+                enable_thinking=thinking,
             )
             _record_usage("analysis", primary_name, result)
             return result, primary_name
@@ -351,23 +445,31 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
         )
 
     priors_md = ""
-    if report_type == "deep":
-        try:
-            from services.analysis_knowledge_service import analysis_knowledge_service
+    try:
+        from services.analysis_knowledge_service import analysis_knowledge_service
 
+        if report_type == "deep":
             priors_md = analysis_knowledge_service.priors_for_deep(
                 ticker,
                 score=state.get("score"),
                 factor_scores=factor_scores,
                 key_drivers=list(state.get("key_drivers") or []),
             )
-        except Exception as exc:
-            logger.warning(f"Deep priors failed for {ticker}: {exc}")
-            priors_md = (
-                "## Historical performance priors\n"
-                "- Priors unavailable (lookup failed). "
-                "Score from current research only."
-            )
+        else:
+            priors_md = analysis_knowledge_service.priors_for_core(ticker)
+    except Exception as exc:
+        logger.warning(f"Priors failed for {ticker}: {exc}")
+        priors_md = (
+            "## Historical performance priors\n"
+            "- Priors unavailable (lookup failed). "
+            "Score from current research only."
+        )
+
+    try:
+        desk_md = desk_scores_markdown_for(ticker)
+    except Exception as exc:
+        logger.warning(f"Desk scores failed for {ticker}: {exc}")
+        desk_md = ""
 
     context = build_decision_context(
         ticker=ticker,
@@ -376,18 +478,23 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
         sections=sections,
         portfolio_markdown=portfolio_md,
         priors_markdown=priors_md,
+        desk_scores_markdown=desk_md,
     )
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", DECISION_SYSTEM),
         ("human", """Synthesize the decision for {ticker} based on this analysis.
 
-Horizon: act this week only; intended hold is a few months. Rating must match what
-to do at/near the live price this week — not a "buy the dip later" thesis dressed as BUY.
+Horizon: act this week only; intended hold is a few months. this_week_action must
+match what to do at/near the live price this week — not a "buy the dip later"
+thesis dressed as buy/strong_buy.
+
+For each dimension, list bearish then bullish evidence from the research before
+the 1–5. The server computes the numeric score.
 
 {context}
 
-Return your structured decision with rating tag + score (−100…+100)."""),
+Return the structured rubric (no overall score or rating tag)."""),
     ])
 
     used_model = "analysis"
@@ -473,8 +580,8 @@ Return your structured decision with rating tag + score (−100…+100)."""),
         # Duck-typed objects (incl. test doubles) exposing DecisionOutput fields.
         decision = result
 
-    rating = normalize_rating(decision.rating)
-    score = clamp_score(decision.score)
+    score, construction = composite_score(decision)
+    rating = rating_from_score(score)
     rating, score, entry = reconcile_horizon_decision(
         rating=rating,
         score=score,
@@ -502,16 +609,20 @@ Return your structured decision with rating tag + score (−100…+100)."""),
     if fundamental_data and fundamental_data.get("overview", {}).get("forward_pe") is None:
         data_flags.append("missing forward P/E")
     calibration_note = (
-        f"AI score {score:+d} · {rating}"
+        f"AI score {score:+d} · {rating} · {construction}"
         + (f" · gaps: {', '.join(data_flags)}" if data_flags else "")
     )
+
+    reasoning = decision.reasoning or ""
+    if construction not in reasoning:
+        reasoning = f"### Score construction\n{construction}\n\n{reasoning}".rstrip()
 
     return {
         "decision_ok": True,
         "error_message": None,
         "rating": rating,
         "score": score,
-        "reasoning": decision.reasoning,
+        "reasoning": reasoning,
         "key_drivers": decision.key_drivers[:5],
         "supporting_headlines": [{"headline": h} for h in decision.supporting_headlines[:5]],
         "entry_levels": entry_levels,

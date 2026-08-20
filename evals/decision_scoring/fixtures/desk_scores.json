@@ -1,0 +1,12 @@
+{
+  "rows": [
+    {"ticker": "MSFT", "score": 11},
+    {"ticker": "AMZN", "score": 22},
+    {"ticker": "GOOGL", "score": 8},
+    {"ticker": "JPM", "score": -6},
+    {"ticker": "XOM", "score": 3},
+    {"ticker": "UNH", "score": -22},
+    {"ticker": "CAT", "score": 31},
+    {"ticker": "BRK.B", "score": 14}
+  ]
+}

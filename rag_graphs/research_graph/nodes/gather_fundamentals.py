@@ -21,7 +21,7 @@ Include:
 4. **Bull case** and **Bear case** (3 bullets each).
 5. A final **Verdict** paragraph.
 
-Be specific; reference the exact numbers provided. Keep it under 600 words."""
+Be specific; reference the exact numbers provided. Keep it under 900 words."""
 
 
 def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:

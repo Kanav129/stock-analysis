@@ -33,8 +33,12 @@ def _env_llm_api_key() -> str:
 
 class SettingsService:
     DEFAULTS = {
-        "analysis_model": os.getenv("ANALYSIS_MODEL", "qwen3.7-max"),
-        "research_model": os.getenv("RESEARCH_MODEL", "qwen3.7-flash"),
+        "analysis_model": os.getenv("ANALYSIS_MODEL", "qwen3.8-max"),
+        "research_model": os.getenv("RESEARCH_MODEL", "qwen3.7-plus"),
+        "research_fallback_model": os.getenv(
+            "RESEARCH_FALLBACK_MODEL", "qwen3.7-flash"
+        ),
+        "decision_enable_thinking": os.getenv("DECISION_ENABLE_THINKING", "false"),
         "sync_interval": os.getenv("SYNC_INTERVAL", DEFAULT_SYNC_INTERVAL),
         "analysis_interval": os.getenv(
             "ANALYSIS_INTERVAL",
@@ -95,6 +99,8 @@ class SettingsService:
         allowed = {
             "analysis_model",
             "research_model",
+            "research_fallback_model",
+            "decision_enable_thinking",
             "sync_interval",
             "analysis_interval",
             "llm_api_key",
@@ -110,6 +116,9 @@ class SettingsService:
                 text = str(value).strip()
                 if not text or text.startswith("••••") or "…" in text:
                     continue
+            if store_key == "decision_enable_thinking":
+                text = str(value).strip().lower()
+                value = "true" if text in {"1", "true", "yes", "on"} else "false"
             db.execute_query(
                 """
                 INSERT INTO app_settings (key, value, updated_at)

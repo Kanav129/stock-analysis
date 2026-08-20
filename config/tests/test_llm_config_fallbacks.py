@@ -18,13 +18,15 @@ def test_analysis_falls_back_to_research(mock_a, mock_r):
 
 @patch("config.llm_config.resolve_research_model", return_value="deepseek/deepseek-v4-flash")
 @patch("config.llm_config.resolve_analysis_model", return_value="openai/gpt-4o")
-def test_research_falls_back_to_analysis(mock_a, mock_r):
-    assert resolve_research_fallbacks() == ["openai/gpt-4o"]
+@patch("config.llm_config.resolve_research_fallback_model", return_value="qwen3.7-flash")
+def test_research_falls_back_to_flash_not_analysis(mock_fb, mock_a, mock_r):
+    assert resolve_research_fallbacks() == ["qwen3.7-flash"]
 
 
+@patch("config.llm_config.resolve_research_fallback_model", return_value="openai/gpt-4o")
 @patch("config.llm_config.resolve_research_model", return_value="openai/gpt-4o")
 @patch("config.llm_config.resolve_analysis_model", return_value="openai/gpt-4o")
-def test_no_fallback_when_models_identical(mock_a, mock_r):
+def test_no_fallback_when_models_identical(mock_a, mock_r, mock_fb):
     assert resolve_analysis_fallbacks() == []
     assert resolve_research_fallbacks() == []
 
@@ -59,3 +61,10 @@ def test_env_fallback_models_skip_primary():
 @patch.dict("os.environ", {"ANALYSIS_MODEL": "qwen3.7-max", "RESEARCH_MODEL": "qwen3.7-max"})
 def test_env_fallback_deduplicates_identical_models():
     assert resolve_env_fallback_models("openai/gpt-4o") == ["qwen3.7-max"]
+
+
+@patch("config.llm_config.resolve_research_fallback_model", return_value="qwen3.8-max")
+@patch("config.llm_config.resolve_research_model", return_value="qwen3.7-plus")
+@patch("config.llm_config.resolve_analysis_model", return_value="openai/gpt-4o")
+def test_research_never_falls_back_to_max(mock_a, mock_r, mock_fb):
+    assert resolve_research_fallbacks() == []

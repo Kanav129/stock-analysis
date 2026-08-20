@@ -23,7 +23,7 @@ def assemble_debate_context(
     for sid in section_ids:
         md = sections.get(sid, "")
         if md:
-            parts.append(f"## {sid.title()}\n{md[:2000]}")
+            parts.append(f"## {sid.title()}\n{md[:4000]}")
     body = "\n\n".join(parts)
     return f"{body}\n\n{portfolio_markdown}".strip()
 

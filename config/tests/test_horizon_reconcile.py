@@ -11,7 +11,7 @@ def test_buy_with_dip_posture_becomes_accumulate():
         position_note="Wait for a pullback",
     )
     assert rating == "ACCUMULATE"
-    assert score <= 40
+    assert score == 38
     assert entry is not None and entry < 53.26
 
 
@@ -29,7 +29,7 @@ def test_buy_at_live_price_stays_buy():
     assert entry == 225.3
 
 
-def test_buy_entry_well_below_live_becomes_accumulate():
+def test_buy_entry_well_below_live_with_dip_wait_becomes_hold():
     rating, score, entry = reconcile_horizon_decision(
         rating="BUY",
         score=55,
@@ -38,8 +38,8 @@ def test_buy_entry_well_below_live_becomes_accumulate():
         posture="Wait for a pullback to $62-$65.",
         position_note="Do not chase.",
     )
-    assert rating in ("HOLD", "ACCUMULATE")
-    assert score <= 40
+    assert rating == "HOLD"
+    assert score == 15
 
 
 def test_buy_with_null_entry_keeps_buy_at_market():
@@ -54,3 +54,17 @@ def test_buy_with_null_entry_keeps_buy_at_market():
     assert rating == "BUY"
     assert score == 55
     assert entry == 100.0
+
+
+def test_in_band_score_is_not_replaced_with_midpoint():
+    rating, score, entry = reconcile_horizon_decision(
+        rating="ACCUMULATE",
+        score=32,
+        entry=None,
+        live_price=100.0,
+        posture="Held; modest add is fine.",
+        position_note="Keep size in line with the book.",
+    )
+    assert rating == "ACCUMULATE"
+    assert score == 32
+    assert entry is None

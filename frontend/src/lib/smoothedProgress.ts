@@ -1,6 +1,6 @@
 /** Time-based progress that tracks an estimated duration, then decelerates if late. */
 
-export const DEFAULT_CORE_SECONDS = 190;
+export const DEFAULT_CORE_SECONDS = 260;
 export const DEFAULT_DEEP_SECONDS = 240;
 
 export function estimateSecondsForJobType(

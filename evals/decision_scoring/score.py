@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from config.rating_config import clamp_score, rating_from_score
 from evals.decision_scoring.invoke_decision import InvokeResult
 from evals.decision_scoring.street_map import (
     tag_within_tolerance,
@@ -27,6 +28,12 @@ def score_call(invoke: InvokeResult, gold: dict[str, Any]) -> dict[str, Any]:
     normalized = structure.normalized or {}
     rating = normalized.get("rating")
     score = normalized.get("score")
+    if score is not None:
+        try:
+            derived = rating_from_score(clamp_score(score))
+            rating = derived
+        except Exception:
+            pass
     target = normalized.get("target")
 
     recommendation_key = gold.get("recommendation_key")

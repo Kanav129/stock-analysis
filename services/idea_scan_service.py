@@ -417,7 +417,7 @@ class IdeaScanService:
 
         try:
             result, _model = call_with_retry_then_fallback(
-                role="analysis",
+                role="research",
                 temperature=0.2,
                 call=_invoke,
             )
@@ -521,7 +521,7 @@ class IdeaScanService:
 
         try:
             result, _model = call_with_retry_then_fallback(
-                role="analysis",
+                role="research",
                 temperature=0.25,
                 call=_invoke,
             )

@@ -70,15 +70,15 @@ def test_succeeds_on_primary_retry_without_fallback(
 @patch("config.llm_config.resolve_env_fallback_models", return_value=[])
 @patch("config.llm_config._chat_llm")
 @patch("config.llm_config.get_research_llm")
-@patch("config.llm_config.resolve_research_fallbacks", return_value=["openai/gpt-4o"])
-@patch("config.llm_config.resolve_research_model", return_value="deepseek/deepseek-v4-flash")
-def test_research_retries_then_falls_back_to_analysis(
+@patch("config.llm_config.resolve_research_fallbacks", return_value=["qwen3.7-flash"])
+@patch("config.llm_config.resolve_research_model", return_value="qwen3.7-plus")
+def test_research_retries_then_falls_back_to_flash(
     mock_model, mock_fb, mock_research, mock_chat, mock_env, mock_rec
 ):
     research = MagicMock(name="research")
-    analysis = MagicMock(name="analysis-fb")
+    flash = MagicMock(name="flash-fb")
     mock_research.return_value = research
-    mock_chat.return_value = analysis
+    mock_chat.return_value = flash
 
     calls: list[str] = []
 
@@ -92,9 +92,9 @@ def test_research_retries_then_falls_back_to_analysis(
         role="research", temperature=0.2, call=call
     )
     assert result == "ok"
-    assert used == "openai/gpt-4o"
-    assert calls == ["research", "research", "analysis-fb"]
-    mock_chat.assert_called_once_with("openai/gpt-4o", 0.2, enable_thinking=False)
+    assert used == "qwen3.7-flash"
+    assert calls == ["research", "research", "flash-fb"]
+    mock_chat.assert_called_once_with("qwen3.7-flash", 0.2, enable_thinking=False)
 
 
 @patch("config.llm_config._record_usage")

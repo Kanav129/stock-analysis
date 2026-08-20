@@ -72,6 +72,24 @@ def clamp_score(score: int | float | None, default: int = 0) -> int:
         return default
 
 
+def rating_from_score(score: int) -> str:
+    """Map a clamped AI score onto a rating tag (score is primary)."""
+    value = clamp_score(score)
+    if value >= 70:
+        return "STRONG_BUY"
+    if value >= 40:
+        return "BUY"
+    if value >= 16:
+        return "ACCUMULATE"
+    if value >= -15:
+        return "HOLD"
+    if value >= -39:
+        return "REDUCE"
+    if value >= -69:
+        return "SELL"
+    return "STRONG_SELL"
+
+
 def score_from_legacy_confidence(rating: str, confidence: int | None) -> int:
     """Best-effort map old 0–100 confidence + 3-way rating into signed score."""
     conf = 50 if confidence is None else max(0, min(100, int(confidence)))
@@ -99,13 +117,6 @@ def score_from_legacy_confidence(rating: str, confidence: int | None) -> int:
     return clamp_score(sign * intensity)
 
 
-def _band_score_for_rating(rating: str, current: int) -> int:
-    lo, hi = RATING_SCORE_BANDS.get(rating, (-15, 15))
-    if lo <= current <= hi:
-        return current
-    return clamp_score((lo + hi) // 2)
-
-
 def _text_signals_wait_for_dip(*parts: str | None) -> bool:
     blob = " ".join(p or "" for p in parts).lower()
     return any(phrase in blob for phrase in _DIP_PHRASES)
@@ -122,10 +133,18 @@ def reconcile_horizon_decision(
 ) -> tuple[str, int, float | None]:
     """Keep rating/score/entry consistent with a this-week horizon.
 
-    BUY/STRONG_BUY means transact near the live price this week. Waiting for a
-    dip is HOLD or ACCUMULATE with entry below live.
+    Score is primary; rating is derived after any horizon cap. BUY/STRONG_BUY
+    means transact near the live price this week. Waiting for a dip is HOLD or
+    ACCUMULATE with entry below live.
     """
-    tag = normalize_rating(rating)
+    score = clamp_score(score)
+    tag = rating_from_score(score)
+    # Incoming tag still flags a market-buy claim if the model scored below BUY
+    # but labeled BUY (hint only). Treat either as a this-week buy.
+    claimed_buy = tag in ("BUY", "STRONG_BUY") or normalize_rating(rating) in (
+        "BUY",
+        "STRONG_BUY",
+    )
     live = float(live_price) if live_price else 0.0
     wait = _text_signals_wait_for_dip(posture, position_note)
     entry_val = None
@@ -135,7 +154,7 @@ def reconcile_horizon_decision(
         except (TypeError, ValueError):
             entry_val = None
 
-    if tag in ("BUY", "STRONG_BUY") and live > 0:
+    if claimed_buy and live > 0:
         if entry_val is None:
             entry_val = live
         discount = (live - entry_val) / live
@@ -144,13 +163,12 @@ def reconcile_horizon_decision(
         far_above = premium > BUY_ENTRY_MAX_DISTANCE
         if wait or far_below:
             if wait and far_below and discount >= 0.08:
-                tag = "HOLD"
+                score = min(int(score), 15)
             else:
-                tag = "ACCUMULATE"
-            score = _band_score_for_rating(tag, min(int(score), 38))
+                score = min(int(score), 38)
         elif far_above:
             entry_val = live
-        score = _band_score_for_rating(tag, int(score))
+        tag = rating_from_score(score)
 
     if tag == "ACCUMULATE" and live > 0 and entry_val is None and wait:
         entry_val = round(live * (1 - DIP_ENTRY_MIN_DISCOUNT), 2)

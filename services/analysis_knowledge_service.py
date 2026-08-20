@@ -199,6 +199,29 @@ class AnalysisKnowledgeService:
                 "Score from current research only."
             )
 
+    def priors_for_core(self, ticker: str) -> str:
+        """Same-ticker last ratings + 5d/20d returns for every Max decision."""
+        try:
+            same = self._same_ticker_cases(ticker)
+            if not same:
+                return ""
+            lines = ["## Historical performance priors", "### Same ticker"]
+            for case in same[:SAME_TICKER_LIMIT]:
+                lines.append(format_case_line(case))
+            lines.append(
+                "_Use these priors to calibrate conviction only. "
+                "Current research dominates; do not copy the last tag. "
+                "If last +20d missed, say so in reasoning rather than blindly reversing._"
+            )
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("Core priors failed for %s: %s", ticker, exc)
+            return (
+                "## Historical performance priors\n"
+                "- Priors unavailable (lookup failed). "
+                "Score from current research only."
+            )
+
     def _same_ticker_cases(self, ticker: str) -> list[dict[str, Any]]:
         rows, cols = self._db.fetch_query(
             """

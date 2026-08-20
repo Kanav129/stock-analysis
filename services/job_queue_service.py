@@ -24,7 +24,7 @@ JOB_RESCORE = "rescore"
 ACTIVE_STATUSES = ("queued", "running")
 TERMINAL_RECENT_SECONDS = 120
 # Match analysis_service.DEFAULT_CORE_SECONDS_PER_TICKER; deep has no prior constant.
-DEFAULT_CORE_DURATION_SECONDS = 190
+DEFAULT_CORE_DURATION_SECONDS = 260
 DEFAULT_DEEP_DURATION_SECONDS = 240
 DURATION_SAMPLE_LIMIT = 8
 DURATION_MIN_SECONDS = 15
@@ -105,11 +105,12 @@ def _max_concurrent() -> int:
 
 
 def _lease_seconds() -> int:
-    raw = os.getenv("JOB_LEASE_SECONDS", "60")
+    # 90s covers a slow Plus gather. Bump to ~120s if decision thinking is on.
+    raw = os.getenv("JOB_LEASE_SECONDS", "90")
     try:
         return max(5, int(raw))
     except ValueError:
-        return 60
+        return 90
 
 
 def _heartbeat_seconds() -> int:

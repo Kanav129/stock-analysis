@@ -7,11 +7,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from config.llm_config import resolve_analysis_model
+from config.llm_pricing import normalize_model_id
+from config.rating_config import clamp_score, rating_from_score
 from evals.decision_scoring import build_fixtures
 from evals.decision_scoring.invoke_decision import invoke_decision
-from evals.decision_scoring.prompts import VARIANTS, get_variant
+from evals.decision_scoring.prompts import DEFAULT_EVAL_VARIANTS, get_variant
 from evals.decision_scoring.score import aggregate_variant, score_call
-from rag_graphs.research_graph.nodes.synthesize_decision import build_decision_context
+from rag_graphs.research_graph.nodes.synthesize_decision import (
+    DESK_SCORES_LIMIT,
+    build_decision_context,
+)
 
 FIXTURES_DIR = Path(__file__).with_name("fixtures")
 RESULTS_DIR = Path(__file__).with_name("results")
@@ -33,14 +39,53 @@ def _normalize_csv(value: str | None, defaults: list[str]) -> list[str]:
     return items
 
 
+def _frozen_desk_scores_markdown(fixtures_dir: Path, ticker: str) -> str:
+    """Deterministic desk table for A/B; per-ticker JSON can override."""
+    path = fixtures_dir / "desk_scores.json"
+    if not path.exists():
+        return ""
+    payload = _load_json(path)
+    rows = payload.get("rows") or []
+    exclude = ticker.upper()
+    lines: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        other = str(row.get("ticker") or "").upper()
+        if not other or other == exclude:
+            continue
+        raw = row.get("score")
+        if raw is None:
+            continue
+        score = clamp_score(raw)
+        tag = rating_from_score(score)
+        lines.append(f"- {other} {score:+d} ({tag})")
+        if len(lines) >= DESK_SCORES_LIMIT:
+            break
+    if not lines:
+        return ""
+    return (
+        "## Desk scores (other holdings)\n"
+        + "\n".join(lines)
+        + "\n\nDo not copy a neighbor's score; place this name relative to them."
+    )
+
+
 def run_evaluation(
     *,
     variants: list[str],
     tickers: list[str],
     fixtures_dir: Path = FIXTURES_DIR,
     results_dir: Path = RESULTS_DIR,
+    allow_any_model: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Run every selected prompt variant against every selected frozen fixture."""
+    model = resolve_analysis_model()
+    if not allow_any_model and normalize_model_id(model) != "qwen3.8-max":
+        raise ValueError(
+            f"Decision eval expects ANALYSIS_MODEL=qwen3.8-max, got {model!r}. "
+            "Pass allow_any_model=True / --allow-any-model to override."
+        )
     selected_variants = [name.strip() for name in variants]
     selected_tickers = [ticker.strip().upper() for ticker in tickers]
     configs = {name: get_variant(name) for name in selected_variants}
@@ -51,12 +96,16 @@ def run_evaluation(
     for variant_name, config in configs.items():
         for ticker in selected_tickers:
             fixture = _load_json(fixtures_dir / f"{ticker}.json")
+            desk_md = fixture.get("desk_scores_markdown")
+            if not isinstance(desk_md, str) or not desk_md.strip():
+                desk_md = _frozen_desk_scores_markdown(fixtures_dir, ticker)
             context = build_decision_context(
                 ticker=ticker,
                 live_price=fixture["live_price"],
                 factor_scores=fixture.get("factor_scores") or {},
                 sections=fixture.get("sections_markdown") or {},
                 portfolio_markdown=fixture.get("portfolio_markdown") or "",
+                desk_scores_markdown=desk_md,
             )
             invoke = invoke_decision(
                 system_prompt=config.system_prompt,
@@ -64,6 +113,7 @@ def run_evaluation(
                 enable_thinking=config.enable_thinking,
                 ticker=ticker,
                 context=context,
+                schema=config.schema,  # type: ignore[arg-type]
             )
             row = score_call(invoke, gold_by_ticker.get(ticker) or {})
             rows.append({"variant": variant_name, "ticker": ticker, **row})
@@ -133,6 +183,11 @@ def _parser() -> argparse.ArgumentParser:
     run_parser = commands.add_parser("run", help="run model evaluations")
     run_parser.add_argument("--variants", help="comma-separated prompt variants")
     run_parser.add_argument("--tickers", help="comma-separated fixture tickers")
+    run_parser.add_argument(
+        "--allow-any-model",
+        action="store_true",
+        help="Allow ANALYSIS_MODEL other than qwen3.8-max",
+    )
     summarize_parser = commands.add_parser("summarize", help="summarize a result JSON")
     summarize_parser.add_argument("path", type=Path)
     return parser
@@ -150,9 +205,13 @@ def main() -> None:
         print(summarize_payload(_load_json(args.path)))
         return
 
-    variants = _normalize_csv(args.variants, list(VARIANTS))
+    variants = _normalize_csv(args.variants, list(DEFAULT_EVAL_VARIANTS))
     tickers = _normalize_csv(args.tickers, build_fixtures.DEFAULT_TICKERS)
-    output_path, payload = run_evaluation(variants=variants, tickers=tickers)
+    output_path, payload = run_evaluation(
+        variants=variants,
+        tickers=tickers,
+        allow_any_model=bool(args.allow_any_model),
+    )
     print(summarize_payload(payload))
     print(f"\nResults: {output_path}")
 

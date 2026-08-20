@@ -20,6 +20,7 @@ class AnalysisRunRequest(BaseModel):
 class SettingsUpdate(BaseModel):
     analysis_model: Optional[str] = None
     research_model: Optional[str] = None
+    decision_enable_thinking: Optional[str] = None
     analysis_interval: Optional[int] = None
     llm_api_key: Optional[str] = Field(
         default=None,

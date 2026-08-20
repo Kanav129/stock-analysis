@@ -43,6 +43,15 @@ def test_score_call_requires_call_and_all_structure_checks():
     assert row["score"] == 55
 
 
+def test_score_call_derives_rating_from_score():
+    row = score_call(
+        _invoke(normalized={"rating": "HOLD", "score": 55, "target": 120.0}),
+        {"recommendation_key": "buy", "target_mean": 120.0},
+    )
+    assert row["rating"] == "BUY"
+    assert row["tag_hit"] is True
+
+
 def test_score_call_skips_missing_gold_values():
     row = score_call(
         _invoke(),

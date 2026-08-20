@@ -128,3 +128,27 @@ def test_build_priors_respects_max_chars():
     )
     assert len(md) <= 180
     assert md.endswith("...")
+
+
+def test_priors_for_core_formats_same_ticker_only(monkeypatch):
+    from services.analysis_knowledge_service import AnalysisKnowledgeService
+
+    cases = [
+        {
+            "ticker": "AAPL",
+            "rated_at": "2026-01-02T00:00:00+00:00",
+            "rating": "BUY",
+            "score": 48,
+            "return_5d": 0.02,
+            "return_20d": -0.01,
+            "direction_hit_5d": True,
+            "direction_hit_20d": False,
+        }
+    ]
+    svc = AnalysisKnowledgeService.__new__(AnalysisKnowledgeService)
+    svc._same_ticker_cases = lambda ticker: cases  # type: ignore[method-assign]
+    md = svc.priors_for_core("AAPL")
+    assert "### Same ticker" in md
+    assert "AAPL" in md
+    assert "Similar cases" not in md
+    assert "Aggregate" not in md

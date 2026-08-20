@@ -1,9 +1,12 @@
 from unittest.mock import MagicMock, patch
 
+from langchain_core.messages import AIMessage
+
 from rag_graphs.research_graph.nodes.synthesize_decision import (
     DECISION_ENABLE_THINKING,
     DECISION_TEMPERATURE,
     DecisionOutput,
+    DimensionRating,
     build_decision_context,
     synthesize_decision,
 )
@@ -37,10 +40,20 @@ def _base_state():
     }
 
 
+def _dim(level: int) -> DimensionRating:
+    return DimensionRating(bearish=["risk"], bullish=["ok"], score_1_to_5=level)
+
+
 def _decision(**overrides) -> DecisionOutput:
     payload = {
-        "rating": "BUY",
-        "score": 42,
+        "bearish_factors": ["valuation", "extension"],
+        "bullish_factors": ["franchise", "cash flow"],
+        "fundamental_health": _dim(5),
+        "valuation": _dim(4),
+        "technical_momentum": _dim(3),
+        "sentiment_and_news": _dim(3),
+        "this_week_setup": _dim(4),
+        "this_week_action": "buy",
         "reasoning": "ok",
         "key_drivers": ["momentum"],
         "supporting_headlines": ["headline"],
@@ -73,8 +86,12 @@ def _fc_llm(decision: DecisionOutput) -> MagicMock:
 def test_synthesize_decision_passes_portfolio_to_llm(mock_port, mock_chat_llm, mock_model, mock_usage):
     assert DECISION_ENABLE_THINKING is False
     decision = _decision(
-        rating="HOLD",
-        score=5,
+        this_week_action="hold",
+        fundamental_health=_dim(3),
+        valuation=_dim(3),
+        technical_momentum=_dim(3),
+        sentiment_and_news=_dim(3),
+        this_week_setup=_dim(3),
         reasoning="ok",
         key_drivers=["a"],
         supporting_headlines=["h"],
@@ -90,13 +107,16 @@ def test_synthesize_decision_passes_portfolio_to_llm(mock_port, mock_chat_llm, m
         "qwen3.8-max",
         DECISION_TEMPERATURE,
         enable_thinking=False,
+        thinking_budget=None,
+        json_object=False,
+        request_timeout=None,
     )
     structured = llm.with_structured_output.return_value
     call = structured.invoke.call_args or structured.call_args
     assert call is not None
     assert "## Personal Portfolio" in str(call.args[0])
     assert out["rating"] == "HOLD"
-    assert out["score"] == 5
+    assert out["score"] == 0
     llm.invoke.assert_not_called()
 
 
@@ -129,7 +149,7 @@ def test_synthesize_decision_retries_primary_then_falls_back(
     assert last_call.args[0] == "deepseek/deepseek-v4-flash"
     assert last_call.kwargs.get("enable_thinking") is False
     assert out["rating"] == "BUY"
-    assert out["score"] == 42
+    assert out["score"] == 48
     assert out["model"] == "deepseek/deepseek-v4-flash"
 
 
@@ -145,7 +165,15 @@ def test_synthesize_decision_recovers_on_primary_retry(
     mock_port, mock_chat_llm, mock_analysis_model, mock_fb, mock_usage
 ):
     region_err = Exception("Error code: 403 - region")
-    recovered = _decision(rating="ACCUMULATE", score=28, reasoning="retry ok")
+    recovered = _decision(
+        this_week_action="accumulate",
+        fundamental_health=_dim(4),
+        valuation=_dim(4),
+        technical_momentum=_dim(3),
+        sentiment_and_news=_dim(3),
+        this_week_setup=_dim(3),
+        reasoning="retry ok",
+    )
     structured = MagicMock()
     structured.side_effect = [region_err, recovered]
     structured.invoke.side_effect = [region_err, recovered]
@@ -157,7 +185,7 @@ def test_synthesize_decision_recovers_on_primary_retry(
 
     assert mock_chat_llm.call_count == 2
     assert out["rating"] == "ACCUMULATE"
-    assert out["score"] == 28
+    assert out["score"] == 25
     assert out["model"] == "openai/gpt-4o"
 
 
@@ -199,7 +227,7 @@ def test_synthesize_decision_failure_sets_decision_ok_false_not_hold(
 def test_synthesize_decision_uses_function_calling_when_thinking_off(
     mock_port, mock_chat_llm, mock_model, mock_fb, mock_usage
 ):
-    decision = _decision(rating="BUY", score=55, reasoning="fc path")
+    decision = _decision(this_week_action="buy", reasoning="fc path")
     llm = _fc_llm(decision)
     mock_chat_llm.return_value = llm
 
@@ -207,6 +235,46 @@ def test_synthesize_decision_uses_function_calling_when_thinking_off(
 
     assert out["decision_ok"] is True
     assert out["rating"] == "BUY"
-    assert out["score"] == 55
+    assert out["score"] == 48
     llm.with_structured_output.assert_called()
     llm.invoke.assert_not_called()
+
+
+@patch("rag_graphs.research_graph.nodes.synthesize_decision._record_usage")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision._fallback_chain", return_value=[])
+@patch(
+    "rag_graphs.research_graph.nodes.synthesize_decision.resolve_decision_enable_thinking",
+    return_value=True,
+)
+@patch("rag_graphs.research_graph.nodes.synthesize_decision.resolve_analysis_model", return_value="qwen3.8-max")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision._chat_llm")
+@patch(
+    "rag_graphs.research_graph.nodes.synthesize_decision.portfolio_markdown_for",
+    return_value="## Personal Portfolio\n- Analyzing AAPL: **held**",
+)
+def test_thinking_path_never_uses_structured_output(
+    mock_port, mock_chat_llm, mock_model, mock_thinking, mock_fb, mock_usage
+):
+    decision = _decision(
+        this_week_action="hold",
+        fundamental_health=_dim(3),
+        valuation=_dim(3),
+        technical_momentum=_dim(3),
+        sentiment_and_news=_dim(3),
+        this_week_setup=_dim(3),
+        reasoning="think path",
+    )
+    llm = MagicMock()
+    llm.invoke.return_value = AIMessage(content=decision.model_dump_json())
+    mock_chat_llm.return_value = llm
+
+    out = synthesize_decision(_base_state())  # type: ignore[arg-type]
+
+    assert out["decision_ok"] is True
+    assert out["score"] == 0
+    assert out["rating"] == "HOLD"
+    llm.with_structured_output.assert_not_called()
+    llm.invoke.assert_called_once()
+    assert mock_chat_llm.call_args.kwargs.get("enable_thinking") is True
+    assert mock_chat_llm.call_args.kwargs.get("json_object") is True
+    assert mock_chat_llm.call_args.kwargs.get("thinking_budget") == 4096

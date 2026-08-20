@@ -1,8 +1,9 @@
-"""Deep analysis injects historical priors; core does not."""
+"""Deep analysis injects rich priors; core gets same-ticker priors only."""
 from unittest.mock import MagicMock, patch
 
 from rag_graphs.research_graph.nodes.synthesize_decision import (
     DecisionOutput,
+    DimensionRating,
     build_decision_context,
     synthesize_decision,
 )
@@ -52,8 +53,14 @@ def _base_state(**overrides):
 
 def _fc_llm() -> MagicMock:
     decision = DecisionOutput(
-        rating="BUY",
-        score=42,
+        bearish_factors=["valuation", "extension"],
+        bullish_factors=["franchise", "cash flow"],
+        fundamental_health=DimensionRating(bearish=["risk"], bullish=["ok"], score_1_to_5=5),
+        valuation=DimensionRating(bearish=["risk"], bullish=["ok"], score_1_to_5=4),
+        technical_momentum=DimensionRating(bearish=["risk"], bullish=["ok"], score_1_to_5=3),
+        sentiment_and_news=DimensionRating(bearish=["risk"], bullish=["ok"], score_1_to_5=3),
+        this_week_setup=DimensionRating(bearish=["risk"], bullish=["ok"], score_1_to_5=4),
+        this_week_action="buy",
         reasoning="ok",
         key_drivers=["momentum"],
         supporting_headlines=["headline"],
@@ -106,12 +113,12 @@ def test_deep_includes_priors(mock_priors, mock_port, mock_chat_llm, mock_model,
     return_value="## Personal Portfolio\n- held",
 )
 @patch(
-    "services.analysis_knowledge_service.analysis_knowledge_service.priors_for_deep",
-    return_value="## Historical performance priors\n- prior case",
+    "services.analysis_knowledge_service.analysis_knowledge_service.priors_for_core",
+    return_value="## Historical performance priors\n- core prior",
 )
-def test_core_skips_priors(mock_priors, mock_port, mock_chat_llm, mock_model, mock_usage, mock_build):
+def test_core_includes_same_ticker_priors(mock_priors, mock_port, mock_chat_llm, mock_model, mock_usage, mock_build):
     mock_chat_llm.return_value = _fc_llm()
 
     synthesize_decision(_base_state(report_type="core"))  # type: ignore[arg-type]
-    mock_priors.assert_not_called()
-    assert mock_build.call_args.kwargs.get("priors_markdown", "") == ""
+    mock_priors.assert_called_once()
+    assert "core prior" in (mock_build.call_args.kwargs.get("priors_markdown") or "")

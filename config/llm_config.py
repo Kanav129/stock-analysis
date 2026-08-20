@@ -1,4 +1,5 @@
 import os
+import threading
 from collections.abc import Callable
 from typing import Any, Literal, TypeVar
 
@@ -10,12 +11,15 @@ from utils.logger import logger
 load_dotenv()
 
 DEFAULT_LLM_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-DEFAULT_CHAT_MODEL = "qwen3.7-flash"
+DEFAULT_CHAT_MODEL = "qwen3.7-plus"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-v4"
 DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_ANALYSIS_MODEL = "qwen3.7-max"
-DEFAULT_RESEARCH_MODEL = "qwen3.7-flash"
+DEFAULT_ANALYSIS_MODEL = "qwen3.8-max"
+DEFAULT_RESEARCH_MODEL = "qwen3.7-plus"
+DEFAULT_RESEARCH_FALLBACK_MODEL = "qwen3.7-flash"
+DEFAULT_THINKING_BUDGET = 4096
+DEFAULT_THINKING_TIMEOUT_SECONDS = 180.0
 
 _LLM_API_KEY_ENV_KEYS = [
     "QWEN_API_KEY",
@@ -73,6 +77,24 @@ def resolve_research_model() -> str:
     )
 
 
+def resolve_research_fallback_model() -> str:
+    """Cheap research fallback; never Max."""
+    return _setting(
+        "research_fallback_model",
+        ["RESEARCH_FALLBACK_MODEL"],
+        DEFAULT_RESEARCH_FALLBACK_MODEL,
+    )
+
+
+def resolve_decision_enable_thinking() -> bool:
+    raw = _setting(
+        "decision_enable_thinking",
+        ["DECISION_ENABLE_THINKING"],
+        "false",
+    )
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def resolve_analysis_fallbacks() -> list[str]:
     """When ANALYSIS_MODEL fails (after retry), try RESEARCH_MODEL (if different)."""
     primary = resolve_analysis_model().strip()
@@ -82,12 +104,24 @@ def resolve_analysis_fallbacks() -> list[str]:
     return []
 
 
+def _is_max_tier(model: str) -> bool:
+    """True for Max-class ids (qwen3.8-max, qwen3.7-max). Never a research fallback."""
+    name = model.rsplit("/", 1)[-1].lower()
+    return name.endswith("-max") or ".max" in name
+
+
 def resolve_research_fallbacks() -> list[str]:
-    """When RESEARCH_MODEL fails (after retry), try ANALYSIS_MODEL (if different)."""
+    """When RESEARCH_MODEL fails (after retry), try Flash — never Max."""
     primary = resolve_research_model().strip()
+    fallback = resolve_research_fallback_model().strip()
     analysis = resolve_analysis_model().strip()
-    if analysis and analysis != primary:
-        return [analysis]
+    if (
+        fallback
+        and fallback != primary
+        and fallback != analysis
+        and not _is_max_tier(fallback)
+    ):
+        return [fallback]
     return []
 
 
@@ -115,7 +149,7 @@ def resolve_env_fallback_models(primary: str) -> list[str]:
 
 
 def _fallback_chain(role: Literal["analysis", "research"], primary_name: str) -> list[str]:
-    """Cross-role configured fallbacks, then env-only models."""
+    """Cross-role configured fallbacks, then env-only models (analysis only)."""
     if role == "analysis":
         cross = resolve_analysis_fallbacks()
     else:
@@ -124,9 +158,10 @@ def _fallback_chain(role: Literal["analysis", "research"], primary_name: str) ->
     for model in cross:
         if model and model not in chain:
             chain.append(model)
-    for model in resolve_env_fallback_models(primary_name):
-        if model not in chain:
-            chain.append(model)
+    if role == "analysis":
+        for model in resolve_env_fallback_models(primary_name):
+            if model not in chain:
+                chain.append(model)
     return chain
 
 
@@ -195,37 +230,106 @@ def resolve_embedding_model() -> str:
     return DEFAULT_EMBEDDING_MODEL
 
 
+def _llm_max_concurrent() -> int:
+    raw = os.getenv("LLM_MAX_CONCURRENT", "1")
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(2, n))
+
+
+_llm_slot_lock = threading.Lock()
+_llm_slot: threading.BoundedSemaphore | None = None
+_llm_slot_n: int | None = None
+
+
+def reset_llm_slot_for_tests() -> None:
+    """Drop the cached semaphore so tests can change LLM_MAX_CONCURRENT."""
+    global _llm_slot, _llm_slot_n
+    with _llm_slot_lock:
+        _llm_slot = None
+        _llm_slot_n = None
+
+
+def _llm_semaphore() -> threading.BoundedSemaphore:
+    global _llm_slot, _llm_slot_n
+    n = _llm_max_concurrent()
+    with _llm_slot_lock:
+        if _llm_slot is None or _llm_slot_n != n:
+            _llm_slot = threading.BoundedSemaphore(n)
+            _llm_slot_n = n
+        return _llm_slot
+
+
+def _bind_llm_slot(llm: ChatOpenAI) -> ChatOpenAI:
+    """Hold one of LLM_MAX_CONCURRENT in-flight DashScope calls for invoke/stream."""
+    orig_invoke = llm.invoke
+    orig_stream = llm.stream
+
+    def invoke(*args: Any, **kwargs: Any):
+        slot = _llm_semaphore()
+        slot.acquire()
+        try:
+            return orig_invoke(*args, **kwargs)
+        finally:
+            slot.release()
+
+    def stream(*args: Any, **kwargs: Any):
+        slot = _llm_semaphore()
+        slot.acquire()
+        try:
+            yield from orig_stream(*args, **kwargs)
+        finally:
+            slot.release()
+
+    object.__setattr__(llm, "invoke", invoke)
+    object.__setattr__(llm, "stream", stream)
+    return llm
+
+
 def _chat_llm(
     model: str,
     temperature: float,
     *,
     enable_thinking: bool | None = None,
+    thinking_budget: int | None = None,
+    json_object: bool = False,
+    request_timeout: float | None = None,
 ) -> ChatOpenAI:
     """Build a ChatOpenAI client.
 
     Qwen thinking mode rejects tool_choice=required (used by structured output /
     function calling). Pass enable_thinking=False for analysis / tool calls.
     """
+    extra_body: dict[str, Any] = {}
+    if enable_thinking is not None:
+        extra_body["enable_thinking"] = enable_thinking
+    if enable_thinking and thinking_budget is not None:
+        extra_body["thinking_budget"] = thinking_budget
+
     kwargs: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
         "api_key": _llm_api_key(),
         "base_url": _llm_base_url(),
     }
-    if enable_thinking is not None:
-        kwargs["extra_body"] = {"enable_thinking": enable_thinking}
-    return ChatOpenAI(**kwargs)
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    if json_object:
+        kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
+    if request_timeout is not None:
+        kwargs["request_timeout"] = request_timeout
+    return _bind_llm_slot(ChatOpenAI(**kwargs))
 
 
 def get_chat_llm(temperature: float = 0) -> ChatOpenAI:
     """General chat model (OPENAI_MODEL) for RAG helpers."""
     # Graders use with_structured_output → needs tool_choice; disable thinking.
-    return ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", DEFAULT_CHAT_MODEL),
-        temperature=temperature,
-        api_key=_llm_api_key(),
-        base_url=_llm_base_url(),
-        extra_body={"enable_thinking": False},
+    return _chat_llm(
+        os.getenv("OPENAI_MODEL", DEFAULT_CHAT_MODEL),
+        temperature,
+        enable_thinking=False,
     )
 
 
@@ -298,8 +402,8 @@ def call_with_retry_then_fallback(
 
     Order:
     1. Primary model (analysis or research), retried up to primary_attempts
-    2. Cross-role configured fallback (analysis↔research from settings)
-    3. Env-only models (ANALYSIS_MODEL / RESEARCH_MODEL from .env, skip DB)
+    2. Configured fallback: analysis → research (Plus); research → Flash (never Max)
+    3. Analysis only: env-only models (ANALYSIS_MODEL / RESEARCH_MODEL from .env)
     """
     if role == "analysis":
         primary_name = resolve_analysis_model()
@@ -347,7 +451,7 @@ def invoke_research_llm(
     *,
     temperature: float = 0.2,
 ) -> tuple[T, str]:
-    """Run a research prompt with retry + cross-role + env fallbacks."""
+    """Run a research prompt with retry + Flash fallback (never Max)."""
 
     def call(llm: ChatOpenAI):
         chain = prompt | llm

@@ -21,7 +21,9 @@ services:
       - key: JOB_QUEUE_CLAIM_DELAY_SECONDS
         value: "45"
       - key: JOB_LEASE_SECONDS
-        value: "60"
+        value: "90"
+      - key: LLM_MAX_CONCURRENT
+        value: "1"
       - key: JOB_HEARTBEAT_SECONDS
         value: "30"
       - key: SYNC_MAX_CONCURRENT
@@ -46,7 +48,7 @@ services:
       - key: OPENAI_BASE_URL
         value: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
       - key: OPENAI_MODEL
-        value: qwen3.7-flash
+        value: qwen3.7-plus
       # Separate from Qwen chat — Lite plans do not include embedding models.
       - key: OPENAI_EMBEDDING_API_KEY
         sync: false
@@ -79,6 +81,10 @@ services:
       - key: ALPHA_VANTAGE_API_KEY
         sync: false
       - key: ANALYSIS_MODEL
-        value: qwen3.7-max
+        value: qwen3.8-max
       - key: RESEARCH_MODEL
+        value: qwen3.7-plus
+      - key: RESEARCH_FALLBACK_MODEL
         value: qwen3.7-flash
+      - key: DECISION_ENABLE_THINKING
+        value: "false"
