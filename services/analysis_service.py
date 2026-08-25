@@ -55,8 +55,9 @@ RESCORE_STAGE_LABELS = {
     "persist": "Saving score & rating",
 }
 
-# From Jul 19 full-universe core-report batch: consecutive report gaps averaged ~189s/ticker.
-DEFAULT_CORE_SECONDS_PER_TICKER = 260
+# From Aug 24 weekly run: core reports averaged ~12–14 min/ticker on free Render + Qwen.
+# (Earlier Jul 19 batch was ~190s; Aug 17 still ~3 min — budget for the slower regime.)
+DEFAULT_CORE_SECONDS_PER_TICKER = 780
 DEFAULT_RESCORE_SECONDS_PER_TICKER = 45
 DEFAULT_TIMEOUT_BUFFER = 1.2  # +20% headroom
 MIN_ANALYSIS_TIMEOUT_SECONDS = 10 * 60
@@ -384,6 +385,9 @@ class AnalysisService:
         out = job_queue_service.enqueue(JOB_CORE, target, force=force)
         status = self.get_status()
         skipped = out.get("skipped_completed") or []
+        remaining = len(out.get("enqueued") or []) + len(out.get("reused") or [])
+        timeout_n = remaining if remaining > 0 else max(1, len(target) - len(skipped))
+        timeouts = compute_analysis_timeouts(timeout_n, mode="core_report")
         return {
             **status,
             "started": out.get("started", False),
@@ -396,6 +400,8 @@ class AnalysisService:
             "skipped": len(skipped),
             "resumed": bool(skipped) and bool(out.get("enqueued") or out.get("reused")),
             "jobs": out.get("jobs") or [],
+            "total": remaining if remaining > 0 else status.get("total") or len(target),
+            "timeouts": timeouts,
         }
 
     def run(self, tickers: list[str] | None = None) -> dict[str, Any]:

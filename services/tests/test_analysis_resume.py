@@ -1,12 +1,18 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from services.analysis_service import AnalysisService
+from services.analysis_service import AnalysisService, compute_analysis_timeouts
 
 
 def _service() -> AnalysisService:
     AnalysisService._instance = None
     return AnalysisService()
+
+
+def test_compute_analysis_timeouts_uses_aug24_core_default():
+    # 28 tickers × 780s × 1.2 buffer
+    out = compute_analysis_timeouts(28, mode="core_report")
+    assert out == {"per_ticker": 780, "total": 26208, "mode": "core_report"}
 
 
 def test_core_reports_done_today_queries_pinned_hkt_utc_window():
@@ -108,6 +114,8 @@ def test_start_resumes_only_todo_and_pins_day():
     assert result["started"] is True
     assert result["resumed"] is True
     assert result["skipped"] == 2
+    assert result["timeouts"] == {"per_ticker": 780, "total": 936, "mode": "core_report"}
+    assert result["total"] == 1
     enq.assert_called_once()
     assert enq.call_args.args[1] == universe
 
