@@ -5,7 +5,7 @@
 #   ADMIN_KEY     — same as Render ADMIN_KEY
 #
 # Wait timeout is derived from ticker count × measured avg core-report time (+20%),
-# matching services/analysis_service.compute_analysis_timeouts().
+# matching services/analysis_service.compute_analysis_timeouts() (default ~780s/ticker).
 
 name: Weekly analysis
 
@@ -19,8 +19,9 @@ on:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    # Ceiling for large universes; actual poll loop uses calculated timeout (~1.5h for 22 tickers).
-    timeout-minutes: 240
+    # GitHub-hosted max is 6h. At ~13 min/ticker, 28 names need most of that window
+    # (sync + wake included); poll budget comes from compute_analysis_timeouts.
+    timeout-minutes: 360
     steps:
       - name: Wake dyno
         env:
@@ -224,7 +225,7 @@ jobs:
           echo "$body"
 
           # Same formula as services/analysis_service.compute_analysis_timeouts (defaults):
-          # core=190s/ticker, buffer=1.2, min total=600s
+          # core=780s/ticker (~13 min), buffer=1.2, min total=600s — Aug 24 measured rate.
           ANALYSIS_START_BODY="$body" python3 <<'PY'
           import json, math, os
           body = json.loads(os.environ["ANALYSIS_START_BODY"])
@@ -247,7 +248,7 @@ jobs:
               total_s = int(timeouts["total"])
               per_s = int(timeouts.get("per_ticker") or max(1, total_s // n))
           else:
-              per_s = 190
+              per_s = 780
               total_s = max(600, int(math.ceil(n * per_s * 1.2)))
           # Extra 10% on the Actions poll window beyond API timeout
           wait_s = int(math.ceil(total_s * 1.1))
