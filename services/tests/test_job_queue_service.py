@@ -10,6 +10,8 @@ import pytest
 from services.job_queue_service import (
     DEFAULT_CORE_DURATION_SECONDS,
     DEFAULT_DEEP_DURATION_SECONDS,
+    DURATION_MAX_SECONDS,
+    DURATION_MIN_SECONDS,
     JOB_CORE,
     JOB_DEEP,
     JobQueueService,
@@ -435,8 +437,8 @@ def test_duration_estimates_query_filters_outliers_and_caches():
     params = db.fetch_query.call_args[0][1]
     assert "BETWEEN" in sql
     assert "ROW_NUMBER" in sql
-    assert params[2] == 15
-    assert params[3] == 1800
+    assert params[2] == DURATION_MIN_SECONDS
+    assert params[3] == DURATION_MAX_SECONDS
     assert params[4] == 8
 
 

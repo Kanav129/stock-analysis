@@ -14,13 +14,16 @@ on:
     # Monday 06:00 America/New_York (EST) → 11:00 UTC Monday.
     # During EDT (Mar–Nov) this fires at 07:00 ET — still before the 09:30 open.
     - cron: "0 11 * * 1"
+    # GitHub jobs die at 6h; 28 names need ~6.3h at the Aug 24 rate. Resume leftovers.
+    # 17:30 UTC Monday = 01:30 HKT Tuesday — skip uses a 24h report lookback.
+    - cron: "30 17 * * 1"
   workflow_dispatch:
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    # GitHub-hosted max is 6h. At ~13 min/ticker, 28 names need most of that window
-    # (sync + wake included); poll budget comes from compute_analysis_timeouts.
+    # GitHub-hosted max is 6h. 28 names need ~6.3h of analysis plus wake/sync, so
+    # this run may go partial; the 17:30 UTC schedule resumes leftovers.
     timeout-minutes: 360
     steps:
       - name: Wake dyno
@@ -253,6 +256,9 @@ jobs:
           # Extra 10% on the Actions poll window beyond API timeout
           wait_s = int(math.ceil(total_s * 1.1))
           wait_s = max(wait_s, 20 * 60)
+          # Whole job is timeout-minutes: 360. Reserve wake+sync+cleanup so the
+          # wait step exits cleanly instead of GitHub cancelling the job.
+          wait_s = min(wait_s, 330 * 60)
           poll_s = 60
           max_polls = max(1, int(math.ceil(wait_s / poll_s)))
           print(f"Tickers={n} per_ticker≈{per_s}s API timeout={total_s}s ({total_s/60:.1f} min)")
@@ -283,6 +289,8 @@ jobs:
           MAX_RESUMES=30
           TRANSIENT=0
           MAX_TRANSIENT=20
+          completed_count=0
+          can_resume=False
           echo "Polling /analysis/status up to ${MAX_POLLS} times every ${POLL_SECONDS}s"
           # Poll keeps the free dyno awake while the background job runs.
           # If Render restarts mid-run, in-memory status becomes idle but the
@@ -365,5 +373,9 @@ jobs:
             echo "Analysis failed with status=${status}, daily.status=${daily_status}" >&2
             exit 1
           done
-          echo "Timed out waiting for analysis after ${MAX_POLLS} polls" >&2
+          echo "Timed out waiting for analysis after ${MAX_POLLS} polls (completed_count=${completed_count})" >&2
+          if [ "${completed_count:-0}" -gt 0 ] && [ "$can_resume" = "True" ]; then
+            echo "::warning::Partial run — Monday 17:30 UTC resume will continue remaining tickers."
+            exit 0
+          fi
           exit 1

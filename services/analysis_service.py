@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from rag_graphs.research_graph.graph import app as research_graph
@@ -63,6 +63,9 @@ DEFAULT_TIMEOUT_BUFFER = 1.2  # +20% headroom
 MIN_ANALYSIS_TIMEOUT_SECONDS = 10 * 60
 # Idle /analysis/status polls reuse the daily Done/Resume gate for this long.
 DAILY_STATUS_CACHE_SECONDS = 30
+# Weekly analysis can cross HKT midnight (GitHub 6h cap). Skip reports from
+# this rolling window so a Monday 17:30 UTC resume does not redo Monday's work.
+CORE_REPORT_SKIP_HOURS = 24
 
 
 def _env_float(name: str, default: float) -> float:
@@ -289,7 +292,7 @@ class AnalysisService:
             for item in completed
         }
         try:
-            db_done = self._core_reports_done_today(day)
+            db_done = self._core_reports_done_for_skip(day)
         except Exception as exc:
             logger.warning("Could not read today's core reports for status: %s", exc)
             db_done = set()
@@ -344,6 +347,34 @@ class AnalysisService:
             (start, end),
         )
         return {str(row[0]).upper() for row in rows if row and row[0]}
+
+    def _core_reports_done_since(self, since: datetime) -> set[str]:
+        """Core reports persisted at or after `since` (UTC)."""
+        db = get_db_client()
+        rows, _ = db.fetch_query(
+            """
+            SELECT DISTINCT ticker
+            FROM stock_reports
+            WHERE report_type = 'core'
+              AND created_at >= %s
+            """,
+            (since,),
+        )
+        return {str(row[0]).upper() for row in rows if row and row[0]}
+
+    def _core_reports_done_for_skip(self, day: str | None = None) -> set[str]:
+        """Tickers to skip: HKT-today reports union the rolling lookback window."""
+        since = datetime.now(timezone.utc) - timedelta(hours=CORE_REPORT_SKIP_HOURS)
+        done: set[str] = set()
+        try:
+            done |= self._core_reports_done_today(day)
+        except Exception as exc:
+            logger.warning("Could not read today's core reports: %s", exc)
+        try:
+            done |= self._core_reports_done_since(since)
+        except Exception as exc:
+            logger.warning("Could not read recent core reports: %s", exc)
+        return done
 
     def _update(self, **kwargs: Any) -> None:
         with self._state_lock:

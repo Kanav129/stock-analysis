@@ -13,6 +13,36 @@ def test_compute_analysis_timeouts_uses_aug24_core_default():
     # 28 tickers × 780s × 1.2 buffer
     out = compute_analysis_timeouts(28, mode="core_report")
     assert out == {"per_ticker": 780, "total": 26208, "mode": "core_report"}
+    # GitHub-hosted jobs max out at 6h (21600s). The API budget is larger, so
+    # weekly-analysis.yml must cap its poll window and resume leftovers.
+    assert out["total"] > 6 * 60 * 60
+
+
+def test_core_reports_done_since_queries_created_at_ge():
+    svc = _service()
+    db = MagicMock()
+    db.fetch_query.return_value = ([("googl",), ("IBKR",)], ["ticker"])
+    since = datetime(2026, 8, 24, 11, 0, tzinfo=timezone.utc)
+
+    with patch("services.analysis_service.get_db_client", return_value=db):
+        result = svc._core_reports_done_since(since)
+
+    assert result == {"GOOGL", "IBKR"}
+    sql, params = db.fetch_query.call_args.args
+    assert "report_type = 'core'" in sql
+    assert "created_at >= %s" in sql
+    assert params == (since,)
+
+
+def test_core_reports_done_for_skip_unions_today_and_recent():
+    svc = _service()
+    with (
+        patch.object(svc, "_core_reports_done_today", return_value={"AAPL"}),
+        patch.object(svc, "_core_reports_done_since", return_value={"IBKR"}),
+    ):
+        result = svc._core_reports_done_for_skip("2026-08-25")
+
+    assert result == {"AAPL", "IBKR"}
 
 
 def test_core_reports_done_today_queries_pinned_hkt_utc_window():
@@ -247,7 +277,7 @@ def test_get_status_daily_summary_includes_core_reports_done_today():
         patch("services.analysis_service.rcs.load_analysis", return_value=checkpoint),
         patch.object(
             svc,
-            "_core_reports_done_today",
+            "_core_reports_done_for_skip",
             return_value={"AAPL", "MSFT"},
         ) as done_today,
         patch("services.job_queue_service.job_queue_service.ensure_started"),
@@ -263,7 +293,6 @@ def test_get_status_daily_summary_includes_core_reports_done_today():
         result = svc.get_status()
 
     assert result["daily"]["already_completed_today"] is True
-    done_today.assert_called()
     assert result["daily"]["completed_count"] == 2
     done_today.assert_called_once_with("2026-07-22")
 
@@ -277,7 +306,7 @@ def test_get_status_idle_reuses_daily_cache():
         patch.object(svc.universe, "get_tickers", return_value=universe),
         patch("services.analysis_service.rcs.today_key", return_value="2026-07-22"),
         patch("services.analysis_service.rcs.load_analysis", return_value=None),
-        patch.object(svc, "_core_reports_done_today", return_value=set()) as done_today,
+        patch.object(svc, "_core_reports_done_for_skip", return_value=set()) as done_today,
         patch(
             "services.analysis_service.rcs.daily_analysis_summary",
             return_value=daily,

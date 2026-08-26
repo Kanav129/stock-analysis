@@ -484,7 +484,7 @@ class JobQueueService:
             from services.analysis_service import analysis_service
 
             try:
-                db_done = analysis_service._core_reports_done_today(day)
+                db_done = analysis_service._core_reports_done_for_skip(day)
             except Exception:
                 db_done = set()
             done = checkpoint_done | db_done
