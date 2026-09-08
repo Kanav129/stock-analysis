@@ -197,6 +197,17 @@ def _row_to_job(row: tuple, cols: list[str]) -> dict[str, Any]:
     }
 
 
+def _job_without_thinking(job: dict[str, Any]) -> dict[str, Any]:
+    """Drop LLM thinking blobs so enqueue/start JSON stays small."""
+    out = dict(job)
+    progress = out.get("progress")
+    if isinstance(progress, dict) and "thinking" in progress:
+        progress = dict(progress)
+        progress.pop("thinking", None)
+        out["progress"] = progress
+    return out
+
+
 class JobQueueService:
     """Postgres-backed queue with in-process workers (concurrency capped)."""
 
@@ -428,20 +439,42 @@ class JobQueueService:
         return _row_to_job(rows[0], cols)
 
     def find_active(self, ticker: str, job_type: str) -> Optional[dict[str, Any]]:
+        found = self.find_active_many([ticker], job_type)
+        key = (ticker or "").strip().upper()
+        return found.get(key)
+
+    def find_active_many(
+        self, tickers: list[str], job_type: str
+    ) -> dict[str, dict[str, Any]]:
+        """Latest queued/running job per ticker for *job_type* (one query)."""
+        symbols = []
+        seen: set[str] = set()
+        for raw in tickers:
+            t = (raw or "").strip().upper()
+            if t and t not in seen:
+                seen.add(t)
+                symbols.append(t)
+        if not symbols:
+            return {}
         db = get_db_client()
         rows, cols = db.fetch_query(
             f"""
             SELECT {_JOB_SELECT_COLS}
             FROM desk_jobs
-            WHERE ticker = %s AND job_type = %s AND status IN ('queued', 'running')
+            WHERE job_type = %s
+              AND status IN ('queued', 'running')
+              AND ticker = ANY(%s)
             ORDER BY created_at DESC
-            LIMIT 1
             """,
-            (ticker.upper(), job_type),
+            (job_type, symbols),
         )
-        if not rows:
-            return None
-        return _row_to_job(rows[0], cols)
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows or []:
+            job = _row_to_job(row, cols)
+            ticker = str(job.get("ticker") or "").upper()
+            if ticker and ticker not in out:
+                out[ticker] = job
+        return out
 
     def enqueue(
         self,
@@ -547,34 +580,65 @@ class JobQueueService:
             checkpoint.setdefault("started_at", _utcnow().isoformat())
             rcs.save_analysis(checkpoint, day=day)
 
+        # One SELECT + one multi-row INSERT. Per-ticker find/insert/get_job
+        # round-trips took ~2 min for 28 names on Render+Supabase and blew the
+        # weekly workflow's 120s POST /cron/analyze budget (curl 28).
         enqueued: list[dict[str, Any]] = []
         reused: list[dict[str, Any]] = []
-        db = get_db_client()
+        active_by_ticker = self.find_active_many(symbols, job_type)
+        to_insert: list[tuple[Any, ...]] = []
+        created_at = _utcnow()
 
         for ticker in symbols:
-            existing = self.find_active(ticker, job_type)
+            existing = active_by_ticker.get(ticker)
             if existing:
-                reused.append(existing)
+                reused.append(_job_without_thinking(existing))
                 continue
             job_id = str(uuid4())
-            db.execute_query(
-                """
-                INSERT INTO desk_jobs (
-                    id, job_type, ticker, status, cancel_requested,
-                    progress, result, created_at, updated_at
-                ) VALUES (%s, %s, %s, 'queued', FALSE, %s, %s, NOW(), NOW())
-                """,
+            progress = {"message": "Queued"}
+            to_insert.append(
                 (
                     job_id,
                     job_type,
                     ticker,
-                    Json({"message": "Queued"}),
+                    "queued",
+                    False,
+                    Json(progress),
                     Json({}),
-                ),
+                    created_at,
+                    created_at,
+                )
             )
-            job = self.get_job(job_id)
-            if job:
-                enqueued.append(job)
+            enqueued.append(
+                {
+                    "id": job_id,
+                    "job_type": job_type,
+                    "ticker": ticker,
+                    "status": "queued",
+                    "cancel_requested": False,
+                    "progress": progress,
+                    "result": {},
+                    "error": None,
+                    "worker_id": None,
+                    "lease_until": None,
+                    "created_at": created_at.isoformat(),
+                    "started_at": None,
+                    "finished_at": None,
+                    "updated_at": created_at.isoformat(),
+                }
+            )
+
+        if to_insert:
+            db = get_db_client()
+            db.execute_values(
+                """
+                INSERT INTO desk_jobs (
+                    id, job_type, ticker, status, cancel_requested,
+                    progress, result, created_at, updated_at
+                ) VALUES %s
+                """,
+                to_insert,
+            )
 
         return {
             "started": bool(enqueued or reused),
