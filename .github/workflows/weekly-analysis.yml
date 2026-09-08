@@ -220,31 +220,88 @@ jobs:
           set -euo pipefail
           BASE="${API_BASE_URL%/}"
           BASE="${BASE%/api}"
-          body=$(curl -fsS --max-time 120 \
-            -X POST "${BASE}/cron/analyze" \
-            -H "Authorization: Bearer ${ADMIN_KEY}" \
-            -H "Content-Type: application/json" \
-            -d '{}')
-          echo "$body"
+          # POST /cron/analyze used to insert 28 desk_jobs one-by-one and exceed
+          # --max-time 120 (Sep 7 weekly: curl 28, 0 bytes). Retry transients;
+          # enqueue is now a bulk insert and is idempotent (reuses queued jobs).
+          body=""
+          http_code=""
+          MAX_ATTEMPTS=5
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            set +e
+            raw=$(curl -sS --max-time 180 \
+              -w "\nHTTP_STATUS:%{http_code}" \
+              -X POST "${BASE}/cron/analyze" \
+              -H "Authorization: Bearer ${ADMIN_KEY}" \
+              -H "Content-Type: application/json" \
+              -d '{}' 2>&1)
+            curl_rc=$?
+            set -e
+            http_code=$(printf '%s\n' "$raw" | sed -n 's/^HTTP_STATUS://p' | tail -n1)
+            body=$(printf '%s\n' "$raw" | sed '/^HTTP_STATUS:/d')
+            if [ "$curl_rc" -eq 0 ] && [ -n "$http_code" ] && [ "$http_code" -lt 400 ] \
+              && printf '%s' "$body" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' >/dev/null 2>&1; then
+              echo "$body"
+              break
+            fi
+            echo "::warning::Start analysis attempt ${attempt}/${MAX_ATTEMPTS} failed (curl_rc=${curl_rc}, HTTP ${http_code:-n/a})"
+            printf '%s\n' "$body" | tail -n 5
+            body=""
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              curl -sS --max-time 30 \
+                -H "Authorization: Bearer ${ADMIN_KEY}" \
+                "${BASE}/health" >/dev/null || true
+              sleep 15
+            fi
+          done
+
+          if [ -z "$body" ]; then
+            # Client timed out while the dyno was still enqueueing. Jobs may
+            # already be queued — continue from /analysis/status if so.
+            set +e
+            raw=$(curl -sS --max-time 60 \
+              -w "\nHTTP_STATUS:%{http_code}" \
+              "${BASE}/analysis/status" \
+              -H "Authorization: Bearer ${ADMIN_KEY}" 2>&1)
+            set -e
+            http_code=$(printf '%s\n' "$raw" | sed -n 's/^HTTP_STATUS://p' | tail -n1)
+            body=$(printf '%s\n' "$raw" | sed '/^HTTP_STATUS:/d')
+            echo "$body"
+            if [ -z "$http_code" ] || [ "$http_code" -ge 400 ]; then
+              echo "POST /cron/analyze failed and /analysis/status returned HTTP ${http_code:-n/a}" >&2
+              exit 1
+            fi
+          fi
 
           # Same formula as services/analysis_service.compute_analysis_timeouts (defaults):
           # core=780s/ticker (~13 min), buffer=1.2, min total=600s — Aug 24 measured rate.
           ANALYSIS_START_BODY="$body" python3 <<'PY'
           import json, math, os
           body = json.loads(os.environ["ANALYSIS_START_BODY"])
+          daily = body.get("daily") or {}
           if body.get("reason") == "sync_not_complete":
               print("Sync not complete — cannot start analysis")
               raise SystemExit(1)
           if body.get("reason") == "already_completed_today" or (
               body.get("started") is False and body.get("reason") == "already_completed_today"
-          ):
-              print(f"Already completed today ({body.get('date')}) — no-op success")
+          ) or daily.get("already_completed_today"):
+              print(f"Already completed today ({body.get('date') or daily.get('date')}) — no-op success")
               with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
                   fh.write("skip_wait=true\n")
                   fh.write("max_polls=0\n")
                   fh.write("poll_seconds=30\n")
                   fh.write("ticker_count=0\n")
               raise SystemExit(0)
+          running = bool(body.get("running"))
+          status = str(body.get("status") or "")
+          can_resume = bool(daily.get("can_resume"))
+          if (
+              body.get("started") is not True
+              and not running
+              and status not in ("running", "pending")
+              and not can_resume
+          ):
+              print(f"Analysis did not start (status={status!r}, reason={body.get('reason')!r})")
+              raise SystemExit(1)
           n = max(1, int(body.get("total") or len(body.get("tickers") or []) or 1))
           timeouts = body.get("timeouts") or {}
           if timeouts.get("total"):

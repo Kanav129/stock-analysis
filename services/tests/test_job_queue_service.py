@@ -80,7 +80,7 @@ def test_enqueue_dedupes_active_job():
     existing_id = str(uuid4())
     cols = _job_cols()
     row = _job_row(existing_id, job_type=JOB_DEEP, ticker="AAPL", status="queued")
-    # find_active then limits()
+    # find_active_many then limits()
     db.fetch_query.side_effect = [
         ([row], cols),
         ([(1, 0)], ["running", "queued"]),
@@ -97,6 +97,111 @@ def test_enqueue_dedupes_active_job():
     assert out["reused"][0]["id"] == existing_id
     assert out["enqueued"] == []
     db.execute_query.assert_not_called()
+    db.execute_values.assert_not_called()
+
+
+def test_enqueue_bulk_inserts_new_tickers_in_one_round_trip():
+    db = MagicMock()
+    cols = _job_cols()
+    db.fetch_query.side_effect = [
+        ([], cols),
+        ([(0, 3)], ["running", "queued"]),
+    ]
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc._started = True
+            out = svc.enqueue(JOB_DEEP, ["AAPL", "MSFT", "NVDA"])
+
+    assert out["started"] is True
+    assert {job["ticker"] for job in out["enqueued"]} == {"AAPL", "MSFT", "NVDA"}
+    assert out["reused"] == []
+    db.execute_query.assert_not_called()
+    db.execute_values.assert_called_once()
+    sql, rows = db.execute_values.call_args.args
+    assert "INSERT INTO desk_jobs" in sql
+    assert "VALUES %s" in sql
+    assert len(rows) == 3
+    assert [row[2] for row in rows] == ["AAPL", "MSFT", "NVDA"]
+    # find_active_many then limits — not one SELECT per ticker
+    assert db.fetch_query.call_count == 2
+
+
+def test_enqueue_mixes_reuse_and_bulk_insert():
+    db = MagicMock()
+    cols = _job_cols()
+    existing_id = str(uuid4())
+    existing = _job_row(existing_id, job_type=JOB_DEEP, ticker="AAPL", status="queued")
+    db.fetch_query.side_effect = [
+        ([existing], cols),
+        ([(0, 3)], ["running", "queued"]),
+    ]
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc._started = True
+            out = svc.enqueue(JOB_DEEP, ["AAPL", "MSFT", "NVDA"])
+
+    assert {job["ticker"] for job in out["reused"]} == {"AAPL"}
+    assert {job["ticker"] for job in out["enqueued"]} == {"MSFT", "NVDA"}
+    _sql, rows = db.execute_values.call_args.args
+    assert [row[2] for row in rows] == ["MSFT", "NVDA"]
+
+
+def test_enqueue_strips_thinking_from_reused_jobs():
+    db = MagicMock()
+    existing_id = str(uuid4())
+    cols = _job_cols()
+    row = (
+        existing_id,
+        JOB_DEEP,
+        "AAPL",
+        "running",
+        False,
+        {"message": "Sentiment…", "thinking": "x" * 5000},
+        {},
+        None,
+        "worker-1",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    db.fetch_query.side_effect = [
+        ([row], cols),
+        ([(1, 0)], ["running", "queued"]),
+    ]
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc._started = True
+            out = svc.enqueue(JOB_DEEP, ["AAPL"])
+
+    assert "thinking" not in (out["reused"][0].get("progress") or {})
+    assert out["reused"][0]["progress"]["message"] == "Sentiment…"
+
+
+def test_find_active_uses_batch_lookup():
+    db = MagicMock()
+    cols = _job_cols()
+    job_id = str(uuid4())
+    row = _job_row(job_id, job_type=JOB_CORE, ticker="MSFT", status="queued")
+    db.fetch_query.return_value = ([row], cols)
+
+    with patch("services.job_queue_service.get_db_client", return_value=db):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            found = svc.find_active("msft", JOB_CORE)
+
+    assert found is not None
+    assert found["id"] == job_id
+    sql, params = db.fetch_query.call_args.args
+    assert "ticker = ANY(%s)" in sql
+    assert params == (JOB_CORE, ["MSFT"])
 
 
 def test_cancel_queued_marks_cancelled():
