@@ -255,7 +255,7 @@ export function PriceChart({
               }}
             />
             <Area
-              type="monotone"
+              type="linear"
               dataKey="price"
               stroke={stroke}
               strokeWidth={2}

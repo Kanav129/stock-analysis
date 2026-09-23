@@ -188,3 +188,12 @@ CREATE TABLE IF NOT EXISTS analysis_calibration_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_calibration_snapshots_as_of
     ON analysis_calibration_snapshots (as_of DESC, horizon);
+
+-- Statement history changes when a company files, not every week.
+CREATE TABLE IF NOT EXISTS av_fundamentals (
+    ticker VARCHAR(16) PRIMARY KEY,
+    fiscal_date_ending DATE,
+    fetched_at TIMESTAMPTZ NOT NULL,
+    checked_at TIMESTAMPTZ NOT NULL,
+    snapshot JSONB NOT NULL
+);

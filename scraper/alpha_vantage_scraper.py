@@ -1,15 +1,17 @@
-"""Alpha Vantage API client with aggressive caching for the 25 req/day free tier."""
+"""Alpha Vantage API client with durable statement caching for the 25 req/day free tier."""
 from __future__ import annotations
 
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
 
+from scraper.av_fundamentals_store import AvFundamentalsStore
+from scraper.av_refresh import latest_fiscal_date, reported_earnings_at, should_refresh_fundamentals
 from utils.logger import logger
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / ".av_cache"
@@ -17,9 +19,40 @@ CACHE_TTL_DAYS = 7
 RATE_LIMIT_WINDOW = 60  # seconds for 5-call-per-minute limit
 
 
+def _optional_yahoo_attr(stock: Any, name: str, ticker: str) -> Any:
+    try:
+        return getattr(stock, name)
+    except Exception as exc:
+        logger.warning("%s lookup failed for %s: %s", name, ticker, exc)
+        return None
+
+
+def lookup_reported_earnings(ticker: str) -> Optional[datetime]:
+    """Latest earnings print from Yahoo. None when the date is unknown."""
+    try:
+        from scraper.yf_cache import get_yf_ticker
+
+        stock = get_yf_ticker(ticker)
+    except Exception as exc:
+        logger.warning("Earnings date lookup failed for %s: %s", ticker, exc)
+        return None
+    # History and the calendar are separate Yahoo calls. A failure in the
+    # earnings table (it needs lxml) must not discard a usable calendar date.
+    frame = _optional_yahoo_attr(stock, "earnings_dates", ticker)
+    calendar = _optional_yahoo_attr(stock, "calendar", ticker)
+    try:
+        return reported_earnings_at(frame, calendar, now=datetime.now(timezone.utc))
+    except Exception as exc:
+        logger.warning("Earnings date lookup failed for %s: %s", ticker, exc)
+        return None
+
+
 class AlphaVantageClient:
-    """Free-tier AV client (25 req/day). Results are cached to disk for 7 days.
-    Reports reuse cached data; only regenerated reports with expired cache trigger new calls."""
+    """Free-tier AV client (25 req/day).
+
+    Statement snapshots live in Postgres and are refreshed after a new earnings
+    print. The on-disk cache only avoids repeat HTTP calls inside one fetch.
+    """
 
     BASE_URL = "https://www.alphavantage.co/query"
 
@@ -87,10 +120,18 @@ class AlphaVantageClient:
             logger.error(f"AV request failed: {params.get('function')} — {exc}")
             return {"_error": str(exc)}
 
-    def _get_with_cache(self, ticker: str, function: str, extra_params: Optional[dict] = None) -> dict[str, Any]:
-        cached = self._read_cache(ticker, function)
-        if cached is not None:
-            return cached
+    def _get_with_cache(
+        self,
+        ticker: str,
+        function: str,
+        extra_params: Optional[dict] = None,
+        *,
+        bypass_disk_cache: bool = False,
+    ) -> dict[str, Any]:
+        if not bypass_disk_cache:
+            cached = self._read_cache(ticker, function)
+            if cached is not None:
+                return cached
         params: dict[str, str] = {"function": function, "symbol": ticker.upper()}
         if extra_params:
             params.update(extra_params)
@@ -132,40 +173,162 @@ class AlphaVantageClient:
         reports = data.get(key, []) or data.get("quarterlyReports", [])
         return reports[:count] if isinstance(reports, list) else []
 
-    def get_financial_snapshot(self, ticker: str) -> dict[str, Any]:
-        """Return a structured financial snapshot for the fundamentals report node.
-        Cached for 7 days; re-fetches only when cache expires."""
-        income = self.get_income_statement(ticker)
-        balance = self.get_balance_sheet(ticker)
-        cashflow = self.get_cash_flow(ticker)
-        overview = self.get_overview(ticker)
+    def get_financial_snapshot(
+        self,
+        ticker: str,
+        *,
+        store: Any = None,
+        now: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        """Statement snapshot for the fundamentals node.
 
-        return {
-            "overview": {
-                "market_cap": overview.get("MarketCapitalization"),
-                "pe_ratio": overview.get("PERatio"),
-                "forward_pe": overview.get("ForwardPE"),
-                "peg_ratio": overview.get("PEGRatio"),
-                "price_to_book": overview.get("PriceToBookRatio"),
-                "eps": overview.get("EPS"),
-                "beta": overview.get("Beta"),
-                "sector": overview.get("Sector"),
-                "industry": overview.get("Industry"),
-                "week_52_high": overview.get("52WeekHigh"),
-                "week_52_low": overview.get("52WeekLow"),
-                "employees": overview.get("FullTimeEmployees"),
-                "description": overview.get("Description"),
-            },
-            "income_annual": self._safe_annual(income, "annualReports"),
-            "income_quarterly": self._safe_quarterly(income, "quarterlyReports"),
-            "balance_annual": self._safe_annual(balance, "annualReports"),
-            "balance_quarterly": self._safe_quarterly(balance, "quarterlyReports"),
-            "cashflow_annual": self._safe_annual(cashflow, "annualReports"),
-            "cashflow_quarterly": self._safe_quarterly(cashflow, "quarterlyReports"),
-            "errors": {
-                k: v.get("_error") for k, v in [
-                    ("income", income), ("balance", balance),
-                    ("cashflow", cashflow), ("overview", overview),
-                ] if v.get("_error")
-            },
-        }
+        Reuses the Postgres copy until Yahoo shows an earnings print newer than
+        that save. A same-day retry is skipped when Alpha Vantage still has the
+        previous fiscal period.
+        """
+        moment = now or datetime.now(timezone.utc)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        holder = store if store is not None else AvFundamentalsStore()
+        stored = _load_stored(holder, ticker)
+        earnings_at = lookup_reported_earnings(ticker)
+        fetched_at = stored.get("fetched_at") if stored else None
+        checked_at = stored.get("checked_at") if stored else None
+        if stored and not should_refresh_fundamentals(
+            fetched_at=fetched_at,
+            checked_at=checked_at,
+            reported_earnings_at=earnings_at,
+            now=moment,
+        ):
+            logger.info(
+                "AV fundamentals reused for %s (fiscal %s)",
+                ticker,
+                stored.get("fiscal_date_ending"),
+            )
+            return stored["snapshot"]
+
+        # Always read Alpha Vantage itself. A 7-day disk file can predate the
+        # filing and would then be stamped as current.
+        snapshot = self._build_snapshot(ticker, bypass_disk_cache=True)
+        return _persist_refresh(holder, ticker, stored, snapshot, moment)
+
+
+    def _build_snapshot(self, ticker: str, *, bypass_disk_cache: bool) -> dict[str, Any]:
+        income = self._get_with_cache(ticker, "INCOME_STATEMENT", bypass_disk_cache=bypass_disk_cache)
+        balance = self._get_with_cache(ticker, "BALANCE_SHEET", bypass_disk_cache=bypass_disk_cache)
+        cashflow = self._get_with_cache(ticker, "CASH_FLOW", bypass_disk_cache=bypass_disk_cache)
+        overview = self._get_with_cache(ticker, "OVERVIEW", bypass_disk_cache=bypass_disk_cache)
+        return _assemble_snapshot(self, income, balance, cashflow, overview)
+
+
+def _assemble_snapshot(
+    client: AlphaVantageClient,
+    income: dict[str, Any],
+    balance: dict[str, Any],
+    cashflow: dict[str, Any],
+    overview: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "overview": {
+            "market_cap": overview.get("MarketCapitalization"),
+            "pe_ratio": overview.get("PERatio"),
+            "forward_pe": overview.get("ForwardPE"),
+            "peg_ratio": overview.get("PEGRatio"),
+            "price_to_book": overview.get("PriceToBookRatio"),
+            "eps": overview.get("EPS"),
+            "beta": overview.get("Beta"),
+            "sector": overview.get("Sector"),
+            "industry": overview.get("Industry"),
+            "week_52_high": overview.get("52WeekHigh"),
+            "week_52_low": overview.get("52WeekLow"),
+            "employees": overview.get("FullTimeEmployees"),
+            "description": overview.get("Description"),
+        },
+        "income_annual": client._safe_annual(income, "annualReports"),
+        "income_quarterly": client._safe_quarterly(income, "quarterlyReports"),
+        "balance_annual": client._safe_annual(balance, "annualReports"),
+        "balance_quarterly": client._safe_quarterly(balance, "quarterlyReports"),
+        "cashflow_annual": client._safe_annual(cashflow, "annualReports"),
+        "cashflow_quarterly": client._safe_quarterly(cashflow, "quarterlyReports"),
+        "errors": {
+            k: v.get("_error")
+            for k, v in (
+                ("income", income),
+                ("balance", balance),
+                ("cashflow", cashflow),
+                ("overview", overview),
+            )
+            if isinstance(v, dict) and v.get("_error")
+        },
+    }
+
+
+def _load_stored(store: Any, ticker: str) -> Optional[dict[str, Any]]:
+    try:
+        stored = store.load(ticker)
+    except Exception as exc:
+        logger.warning("AV fundamentals load failed for %s: %s", ticker, exc)
+        return None
+    if not stored or not isinstance(stored.get("snapshot"), dict):
+        return None
+    return stored
+
+
+def _persist_refresh(
+    store: Any,
+    ticker: str,
+    stored: Optional[dict[str, Any]],
+    snapshot: dict[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    new_fiscal = latest_fiscal_date(snapshot)
+    old_fiscal = _coerce_date(stored.get("fiscal_date_ending")) if stored else None
+    advanced = new_fiscal is not None and (old_fiscal is None or new_fiscal > old_fiscal)
+    if stored and not advanced:
+        logger.info(
+            "AV fundamentals unchanged for %s after earnings check (fiscal %s)",
+            ticker,
+            old_fiscal,
+        )
+        _save_stored(
+            store,
+            ticker,
+            snapshot=stored["snapshot"],
+            fiscal_date_ending=old_fiscal,
+            fetched_at=stored["fetched_at"],
+            checked_at=now,
+        )
+        return stored["snapshot"]
+    if new_fiscal is None:
+        logger.info("AV fundamentals not stored for %s — no statement period returned", ticker)
+        return snapshot
+    logger.info("AV fundamentals saved for %s (fiscal %s)", ticker, new_fiscal)
+    _save_stored(
+        store,
+        ticker,
+        snapshot=snapshot,
+        fiscal_date_ending=new_fiscal,
+        fetched_at=now,
+        checked_at=now,
+    )
+    return snapshot
+
+
+def _save_stored(store: Any, ticker: str, **kwargs: Any) -> None:
+    try:
+        store.save(ticker, **kwargs)
+    except Exception as exc:
+        logger.warning("AV fundamentals save failed for %s: %s", ticker, exc)
+
+
+def _coerce_date(value: Any) -> Optional[date]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
