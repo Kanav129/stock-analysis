@@ -197,3 +197,13 @@ CREATE TABLE IF NOT EXISTS av_fundamentals (
     checked_at TIMESTAMPTZ NOT NULL,
     snapshot JSONB NOT NULL
 );
+
+-- RLS, no policies. Render uses the postgres role (BYPASSRLS); the SPA never
+-- uses PostgREST. Zero policies denies anon/authenticated. Tables that already
+-- had RLS are not altered here.
+ALTER TABLE desk_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE llm_usage ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rating_outcomes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE watchlist_suggestions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE av_fundamentals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE analysis_calibration_snapshots ENABLE ROW LEVEL SECURITY;
