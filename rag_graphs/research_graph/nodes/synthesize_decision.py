@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping
 from typing import Any, Dict, Literal
 
@@ -23,9 +24,10 @@ from config.rating_config import (
     reconcile_horizon_decision,
 )
 from config.report_config import (
+    apply_previous_fundamentals,
     compute_dimension_alignment,
     compute_factor_scores,
-    fundamentals_from_inputs,
+    inputs_have_real_fundamentals,
 )
 from config.score_composite import composite_score
 from rag_graphs.research_graph.state import ResearchState
@@ -414,6 +416,67 @@ def _call_decision_llm(
     raise last_exc
 
 
+def _state_previous_inputs(previous_scores: dict[str, Any] | None) -> tuple[dict[str, Any] | None, str | None]:
+    """Usable ``_inputs`` already on the state, plus their snapshot date."""
+    if not isinstance(previous_scores, dict):
+        return None, None
+    inputs = previous_scores.get("_inputs")
+    if not isinstance(inputs, dict) or not inputs_have_real_fundamentals(inputs):
+        return None, None
+    as_of = inputs.get("as_of")
+    return inputs, as_of if isinstance(as_of, str) and as_of else None
+
+
+def _load_last_good_fundamentals(
+    ticker: str, report_type: str | None
+) -> dict[str, Any] | None:
+    """Newest stored report whose factor inputs are real numbers, with its date."""
+    if not os.getenv("POSTGRES_HOST"):
+        return None
+    try:
+        from services.report_service import ReportService
+
+        return ReportService().find_last_good_fundamentals(ticker, report_type or "core")
+    except Exception as exc:
+        logger.warning("Previous fundamentals lookup failed for %s: %s", ticker, exc)
+        return None
+
+
+def resolve_fundamental_data(
+    fundamental_data: dict[str, Any] | None,
+    previous_scores: dict[str, Any] | None,
+    *,
+    ticker: str,
+    report_type: str | None,
+) -> dict[str, Any]:
+    """Use today's numbers, filling gaps from the last good snapshot.
+
+    An overview dict of nulls is a failed fetch. That used to look "present"
+    and blocked the previous-report fallback, so growth and quality became 0.
+    """
+    data = dict(fundamental_data or {})
+    inputs, as_of = _state_previous_inputs(previous_scores)
+    if inputs is None or not as_of:
+        loaded = _load_last_good_fundamentals(ticker, report_type)
+        if isinstance(loaded, dict):
+            loaded_inputs = loaded.get("inputs")
+            loaded_as_of = loaded.get("as_of")
+            if inputs is None and isinstance(loaded_inputs, dict):
+                inputs = loaded_inputs
+                as_of = loaded_as_of if isinstance(loaded_as_of, str) else None
+            elif not as_of and isinstance(loaded_as_of, str):
+                as_of = loaded_as_of
+    merged = apply_previous_fundamentals(data, inputs, as_of)
+    if merged.get("fundamentals_reused"):
+        when = (
+            merged.get("fundamentals_as_of")
+            or merged.get("fundamentals_reused_as_of")
+            or "unknown date"
+        )
+        logger.info("Reused last good fundamentals for %s as of %s", ticker, when)
+    return merged
+
+
 def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
     ticker = state["ticker"]
     logger.info(f"---SYNTHESIZE DECISION {ticker}---")
@@ -421,14 +484,15 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
     live_price = state.get("live_price") or 0.0
     report_type = (state.get("report_type") or "core").strip().lower()
 
-    fundamental_data = dict(state.get("fundamental_data") or {})
     market_data = state.get("market_data") or {}
     sentiment_data = state.get("sentiment_data") or {}
     previous_scores = state.get("factor_scores") or {}
-    if not fundamental_data.get("overview"):
-        inputs = (previous_scores or {}).get("_inputs") if isinstance(previous_scores, dict) else None
-        if inputs:
-            fundamental_data = {**fundamentals_from_inputs(inputs), **fundamental_data}
+    fundamental_data = resolve_fundamental_data(
+        state.get("fundamental_data") or {},
+        previous_scores if isinstance(previous_scores, dict) else {},
+        ticker=ticker,
+        report_type=report_type,
+    )
     factor_scores = compute_factor_scores(
         fundamental_data, market_data, sentiment_data
     )
@@ -608,6 +672,16 @@ Return the structured rubric (no overall score or rating tag)."""),
         data_flags.append("thin sentiment feed")
     if fundamental_data and fundamental_data.get("overview", {}).get("forward_pe") is None:
         data_flags.append("missing forward P/E")
+    if fundamental_data.get("fundamentals_reused"):
+        when = (
+            fundamental_data.get("fundamentals_as_of")
+            or fundamental_data.get("fundamentals_reused_as_of")
+            or "unknown date"
+        )
+        data_flags.append(f"fundamentals reused as of {when}")
+    missing_inputs = factor_scores.get("data_missing") or []
+    if missing_inputs:
+        data_flags.append("data missing: " + ", ".join(str(item) for item in missing_inputs))
     calibration_note = (
         f"AI score {score:+d} · {rating} · {construction}"
         + (f" · gaps: {', '.join(data_flags)}" if data_flags else "")

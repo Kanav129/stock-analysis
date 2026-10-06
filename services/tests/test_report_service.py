@@ -68,6 +68,50 @@ def test_get_latest_report_any_type_orders_by_created_at(mock_db):
 
 
 @patch("services.report_service.get_db_client")
+def test_find_last_good_fundamentals_skips_zero_defaults(mock_db):
+    import json
+
+    zeros = {
+        "_inputs": {
+            "forward_pe": None,
+            "beta": None,
+            "revenue_growth_pct": 0,
+            "gross_margin_pct": 0,
+            "fcf_margin_pct": 0,
+            "cash_exceeds_debt": False,
+        }
+    }
+    good = {
+        "_inputs": {
+            "forward_pe": 30.0,
+            "beta": 1.2,
+            "revenue_growth_pct": 40.0,
+            "gross_margin_pct": 70.0,
+            "fcf_margin_pct": 20.0,
+            "cash_exceeds_debt": True,
+        }
+    }
+    db = MagicMock()
+    db.fetch_query.return_value = (
+        [
+            (json.dumps(zeros), "2026-10-06T00:00:00"),
+            (json.dumps(good), "2026-09-29T00:00:00"),
+        ],
+        ["factor_scores", "created_at"],
+    )
+    mock_db.return_value = db
+
+    found = ReportService().find_last_good_fundamentals("nvda", "core")
+
+    assert found is not None
+    assert found["inputs"]["forward_pe"] == 30.0
+    assert found["as_of"] == "2026-09-29T00:00:00"
+    sql, params = db.fetch_query.call_args.args
+    assert "ORDER BY created_at DESC" in sql
+    assert params == ("NVDA", "core", 12)
+
+
+@patch("services.report_service.get_db_client")
 def test_get_latest_report_typed_still_filters(mock_db):
     db = MagicMock()
     db.fetch_query.return_value = ([], ["id"])
