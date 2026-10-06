@@ -86,7 +86,9 @@ class AvBackfillRequest(BaseModel):
 def cron_av_backfill(body: AvBackfillRequest = Body(default_factory=AvBackfillRequest)):
     """Refresh a few equity snapshots into av_fundamentals.
 
-    Not scheduled. ``dry_run`` selects tickers and does not call Alpha Vantage.
+    The daily price+news sync calls this after a successful run. Alpha Vantage
+    is contacted only when a Yahoo fundamentals sample is failing. ``dry_run``
+    plans that batch and does not call Alpha Vantage.
     """
     try:
         result = av_backfill_service.run(dry_run=body.dry_run)

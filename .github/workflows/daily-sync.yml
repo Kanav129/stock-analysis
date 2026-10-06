@@ -1,4 +1,5 @@
-# Daily price + news sync. Wakes the Render free dyno via HTTP.
+# Daily price + news sync, then an Alpha Vantage fundamentals drip only when
+# Yahoo fundamentals are failing. Wakes the Render free dyno via HTTP.
 #
 # Repo secrets (Settings → Secrets and variables → Actions):
 #   API_BASE_URL  — https://your-service.onrender.com  (no trailing slash, no /api)
@@ -125,6 +126,7 @@ jobs:
           PY
 
       - name: Wait until sync finishes
+        id: wait
         if: steps.guard.outputs.skip != 'true'
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
@@ -243,3 +245,22 @@ jobs:
           done
           echo "Timed out waiting for sync after ${MAX_POLLS} polls" >&2
           exit 1
+
+      - name: Alpha Vantage drip when Yahoo fundamentals are down
+        if: steps.guard.outputs.skip != 'true' && steps.wait.outcome == 'success'
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          BASE="${API_BASE_URL%/}"
+          BASE="${BASE%/api}"
+          # The service skips Alpha Vantage when the Yahoo sample is healthy.
+          # Invalid Crumb, empty info, or null fundamentals fields spend the
+          # capped equity batch (default 6 tickers / 24 requests).
+          body=$(curl -fsS --max-time 600 \
+            -X POST "${BASE}/cron/av-backfill" \
+            -H "Authorization: Bearer ${ADMIN_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"dry_run": false}')
+          echo "$body"

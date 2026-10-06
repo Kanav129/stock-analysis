@@ -1,7 +1,8 @@
 """Daily Alpha Vantage drip into av_fundamentals.
 
-This does not schedule itself. POST /cron/av-backfill runs one batch. The
-GitHub workflow that calls it is manual until a daily schedule is approved.
+POST /cron/av-backfill runs one batch. The daily price+news sync calls it
+after a successful run. Alpha Vantage is contacted only when a sample of
+equities shows Yahoo fundamentals failing. A healthy sample skips the spend.
 """
 from __future__ import annotations
 
@@ -22,12 +23,14 @@ from scraper.av_backfill import (
     plan_backfill,
 )
 from scraper.av_fundamentals_store import AvFundamentalsStore
+from scraper.yahoo_health import equity_probe_sample, read_yahoo_fundamentals
 from services.holdings_service import HoldingsService
 from services.run_checkpoint_service import app_timezone
 from services.universe_service import UniverseService
 from utils.logger import logger
 
 QuoteLookup = Callable[[str], Optional[str]]
+YahooProbe = Callable[[str], str]
 
 
 def _yahoo_quote_type(ticker: str) -> Optional[str]:
@@ -54,6 +57,7 @@ class AvBackfillService:
         client: Any = None,
         quote_types: Optional[dict[str, Optional[str]]] = None,
         quote_type_lookup: Optional[QuoteLookup] = None,
+        yahoo_probe: Optional[YahooProbe] = None,
         tz: Optional[tzinfo] = None,
         daily_tickers: Optional[int] = None,
         daily_requests: Optional[int] = None,
@@ -64,6 +68,7 @@ class AvBackfillService:
         self._client = client
         self._quote_types = quote_types
         self._quote_type_lookup = quote_type_lookup
+        self._yahoo_probe = yahoo_probe
         self._tz = tz
         self._daily_tickers = daily_tickers
         self._daily_requests = daily_requests
@@ -95,6 +100,9 @@ class AvBackfillService:
             )
 
         plan = plan_backfill(candidates, today=today, limit=limit, tz=zone)
+        yahoo = self._probe_yahoo(candidates)
+        yahoo_healthy = bool(yahoo and yahoo.get("status") == "healthy")
+        selected = [] if yahoo_healthy else plan.selected
         payload: dict[str, Any] = {
             "dry_run": dry_run,
             "limit": plan.limit,
@@ -102,18 +110,29 @@ class AvBackfillService:
             "request_budget": request_budget,
             "used_today": plan.used_today,
             "skipped_etfs": plan.skipped_etfs,
-            "selected": plan.selected,
+            "selected": selected,
             "refreshed": [],
             "reused": [],
             "errors": [],
             "requests_made": 0,
-            "reason": _idle_reason(plan.selected, plan.used_today, plan.limit),
+            "reason": "yahoo_healthy"
+            if yahoo_healthy
+            else _idle_reason(selected, plan.used_today, plan.limit),
         }
+        if yahoo is not None:
+            payload["yahoo"] = yahoo
+        if yahoo_healthy:
+            logger.info(
+                "AV backfill skipped; Yahoo fundamentals healthy (%s)",
+                _yahoo_sample_text(yahoo),
+            )
+            return payload
         logger.info(
-            "AV backfill selected %s (dry_run=%s, skipped_etfs=%s)",
+            "AV backfill selected %s (dry_run=%s, skipped_etfs=%s, yahoo=%s)",
             plan.selected,
             dry_run,
             plan.skipped_etfs,
+            (yahoo or {}).get("status"),
         )
         if dry_run or not plan.selected:
             return payload
@@ -203,6 +222,44 @@ class AvBackfillService:
             return self._quote_type_lookup(ticker)
         return _yahoo_quote_type(ticker)
 
+    def _probe_yahoo(self, candidates: list[BackfillCandidate]) -> Optional[dict[str, Any]]:
+        sample = equity_probe_sample(
+            [candidate.ticker for candidate in candidates],
+            etfs={candidate.ticker for candidate in candidates if candidate.is_etf},
+        )
+        if not sample:
+            return None
+        rows: list[dict[str, str]] = []
+        status = "failing"
+        for ticker in sample:
+            result = self._yahoo_status(ticker)
+            rows.append({"ticker": ticker, "result": result})
+            if result == "ok":
+                status = "healthy"
+                break
+        report = {"status": status, "sample": rows}
+        logger.info("AV backfill Yahoo sample %s", _yahoo_sample_text(report))
+        return report
+
+    def _yahoo_status(self, ticker: str) -> str:
+        if self._yahoo_probe is not None:
+            try:
+                return str(self._yahoo_probe(ticker))
+            except Exception as exc:
+                logger.warning(
+                    "Yahoo fundamentals probe failed for %s (%s)",
+                    ticker,
+                    type(exc).__name__,
+                )
+                return "error"
+
+        def load() -> Any:
+            from scraper.yf_cache import get_yf_ticker
+
+            return getattr(get_yf_ticker(ticker), "info", None)
+
+        return read_yahoo_fundamentals(load)
+
     def _empty(
         self,
         *,
@@ -225,6 +282,15 @@ class AvBackfillService:
             "requests_made": 0,
             "reason": reason,
         }
+
+
+def _yahoo_sample_text(report: Optional[dict[str, Any]]) -> str:
+    if not report:
+        return ""
+    rows = report.get("sample") or []
+    return " ".join(
+        f"{row.get('ticker')}={row.get('result')}" for row in rows if isinstance(row, dict)
+    )
 
 
 def _idle_reason(selected: list[str], used_today: int, limit: int) -> Optional[str]:
