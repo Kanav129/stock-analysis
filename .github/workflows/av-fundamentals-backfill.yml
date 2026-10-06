@@ -1,0 +1,73 @@
+# Alpha Vantage fundamentals drip. Manual only.
+#
+# This file has no schedule. A daily run would spend the free-tier 25 requests
+# against production. Add a schedule only after an explicit yes. See README,
+# "Enabling the daily Alpha Vantage drip".
+#
+# Repo secrets (same as the other workflows):
+#   API_BASE_URL  — https://your-service.onrender.com  (no trailing slash, no /api)
+#   ADMIN_KEY     — same as Render ADMIN_KEY
+#
+# Run workflow defaults to dry_run=true so a click does not spend the API key.
+# Set dry_run to false to refresh up to 6 equity tickers.
+
+name: AV fundamentals backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan only (true) or refresh up to 6 equities (false)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Wake dyno
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          BASE="${API_BASE_URL%/}"
+          BASE="${BASE%/api}"
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 60 \
+              -H "Authorization: Bearer ${ADMIN_KEY}" \
+              "${BASE}/health"; then
+              echo "API awake"
+              exit 0
+            fi
+            echo "Waiting for cold start ($i)…"
+            sleep 20
+          done
+          echo "Health check failed after retries" >&2
+          exit 1
+
+      - name: Drip AV fundamentals
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          case "$DRY_RUN" in
+            true|false) ;;
+            *) echo "dry_run must be true or false" >&2; exit 1 ;;
+          esac
+          BASE="${API_BASE_URL%/}"
+          BASE="${BASE%/api}"
+          # 6 tickers × 4 statements, with the client spacing calls ~12.5s apart.
+          body=$(curl -fsS --max-time 600 \
+            -X POST "${BASE}/cron/av-backfill" \
+            -H "Authorization: Bearer ${ADMIN_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"dry_run\": ${DRY_RUN}}")
+          echo "$body"

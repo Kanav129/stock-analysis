@@ -4,10 +4,12 @@ Protected by ADMIN_KEY via the global auth middleware — send:
   Authorization: Bearer <ADMIN_KEY>
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
+from pydantic import BaseModel
 
 from services import run_checkpoint_service as rcs
 from services.analysis_service import analysis_service
+from services.av_backfill_service import av_backfill_service
 from services.holdings_sync_service import holdings_sync_service
 from services.ibkr_flex_service import FlexConfigError, FlexUpstreamError
 from services.sync_service import sync_service
@@ -74,3 +76,22 @@ def cron_analyze():
         return analysis_service.start(force=False)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class AvBackfillRequest(BaseModel):
+    dry_run: bool = False
+
+
+@router.post("/av-backfill")
+def cron_av_backfill(body: AvBackfillRequest = Body(default_factory=AvBackfillRequest)):
+    """Refresh a few equity snapshots into av_fundamentals.
+
+    Not scheduled. ``dry_run`` selects tickers and does not call Alpha Vantage.
+    """
+    try:
+        result = av_backfill_service.run(dry_run=body.dry_run)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if result.get("reason") == "missing_api_key":
+        raise HTTPException(status_code=503, detail="ALPHA_VANTAGE_API_KEY is not set")
+    return result

@@ -116,6 +116,36 @@ class HoldingsService:
         )
         return [row[0] for row in rows]
 
+    def current_asset_classes(self) -> dict[str, Optional[str]]:
+        """Ticker → asset class for the current snapshot. ETF wins if rows disagree."""
+        db = get_db_client()
+        snapshot_at = self._latest_snapshot_time()
+        if not snapshot_at:
+            return {}
+        rows, _ = db.fetch_query(
+            """
+            SELECT ticker, asset_class
+            FROM holdings_snapshot
+            WHERE snapshot_at = %s AND quantity <> 0
+            """,
+            (snapshot_at,),
+        )
+        found: dict[str, Optional[str]] = {}
+        for ticker, asset_class in rows:
+            symbol = str(ticker or "").strip().upper()
+            if not symbol:
+                continue
+            current = found.get(symbol)
+            if current and str(current).strip().upper() in {"ETF", "ETFS"}:
+                continue
+            incoming = str(asset_class).strip().upper() if asset_class else ""
+            if incoming in {"ETF", "ETFS"}:
+                found[symbol] = asset_class
+                continue
+            if symbol not in found:
+                found[symbol] = asset_class
+        return found
+
     def _latest_closes(self, tickers: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch latest close price and date per ticker from stock_data."""
         if not tickers:

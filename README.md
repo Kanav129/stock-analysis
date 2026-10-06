@@ -108,6 +108,7 @@ Workflows in `.github/workflows/`:
 |----------|------------|------------|----------|
 | `daily-sync.yml` | Tue–Sat 06:00 HKT (skip Sun/Mon = US weekend) | `0 22 * * 1-5` | `POST /cron/sync` |
 | `weekly-analysis.yml` | Mondays 06:00 ET | `0 11 * * 1` | wake → holdings → sync → analyze |
+| `av-fundamentals-backfill.yml` | manual only — not scheduled | — | `POST /cron/av-backfill` |
 
 **Weekly analysis order:** `IBKR holdings (best effort)` → `prices/news (required)` → `analysis (required)`.
 
@@ -132,6 +133,23 @@ Also set on Render (never commit tokens):
 **One-time Flex Query setup (Account Management → Flex Web Service):** create a Token, then a Flex Query with Open Positions for stocks/ETFs (include quantity, cost basis, mark price, unrealized P&L, % of NAV, currency, conid). Point `IBKR_FLEX_QUERY_ID` at that query. You can also sync manually from the dashboard **Sync holdings** button (`POST /holdings/sync`).
 
 You can also run workflows manually: Actions → workflow → **Run workflow**.
+
+### Enabling the daily Alpha Vantage drip
+
+`av_fundamentals` is filled a few equities at a time so Monday's `/cron/analyze` can read the cache. The gather step does **not** call Alpha Vantage. ETFs (holdings `asset_class` of `ETF`, or a watchlist quote type of ETF) are skipped. Each equity costs 4 requests; the default batch is 6 tickers (24 of the 25 free-tier requests). Missing snapshots go first, then the least recently checked name. A second run the same day does not pick another batch.
+
+The workflow is `workflow_dispatch` only, and **Run workflow** defaults to `dry_run=true` so a click does not spend the key. Set `dry_run` to `false` for a real batch. Locally:
+
+```bash
+python scripts/av_backfill.py --dry-run
+python scripts/av_backfill.py
+```
+
+Turning on a daily schedule is a separate yes. It is not wired here. When you want it:
+
+1. Confirm `ALPHA_VANTAGE_API_KEY` is set on Render. Optional caps: `AV_BACKFILL_DAILY_TICKERS` (default 6), `AV_BACKFILL_DAILY_REQUESTS` (default 24).
+2. In `.github/workflows/av-fundamentals-backfill.yml`, add a schedule that POSTs `{"dry_run": false}`. Suggested slot: 22:30 UTC (after the US session, before Monday's analysis). Do not also run the drip on Monday morning in front of `/cron/analyze` if that would share the same 25-request day — analysis only reads the cache, but the drip would still consume the key that morning.
+3. Change the workflow input default only if you want manual runs to refresh for real. Until that edit, Actions → **AV fundamentals backfill** → Run workflow stays a dry run unless you pick `false`.
 
 ### Frontend → Vercel
 
@@ -161,7 +179,8 @@ When `ADMIN_KEY` is set, non-public routes need `Authorization: Bearer <ADMIN_KE
 | POST | `/holdings/sync` | Sync IBKR Flex Open Positions into holdings |
 | POST | `/cron/holdings/sync` | Same as above (scheduler / weekly workflow) |
 | POST | `/cron/sync` | Scheduled price/news sync |
-| POST | `/cron/analyze` | Scheduled universe analysis |
+| POST | `/cron/analyze` | Scheduled universe analysis (reads cached `av_fundamentals`) |
+| POST | `/cron/av-backfill` | Drip ~6 equity fundamentals into `av_fundamentals` (not scheduled; `{"dry_run": true}` plans only) |
 | GET | `/ratings` | Latest rating per ticker |
 | GET | `/ratings/{ticker}` | Rating history |
 | POST | `/analysis/run` | Trigger analysis |

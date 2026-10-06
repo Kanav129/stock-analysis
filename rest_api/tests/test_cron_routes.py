@@ -67,3 +67,34 @@ def test_cron_holdings_sync_upstream_error(mock_sync):
     mock_sync.side_effect = FlexUpstreamError("upstream")
     response = client.post("/cron/holdings/sync")
     assert response.status_code == 502
+
+
+@patch("rest_api.routes.cron_routes.av_backfill_service.run")
+def test_cron_av_backfill_defaults_to_live_batch(mock_run):
+    mock_run.return_value = {"dry_run": False, "selected": [], "reason": "nothing_to_refresh"}
+    response = client.post("/cron/av-backfill")
+    assert response.status_code == 200
+    mock_run.assert_called_once_with(dry_run=False)
+
+
+@patch("rest_api.routes.cron_routes.av_backfill_service.run")
+def test_cron_av_backfill_dry_run(mock_run):
+    mock_run.return_value = {
+        "dry_run": True,
+        "selected": ["AAPL"],
+        "skipped_etfs": ["QQQM", "ICLN", "IDEF"],
+        "requests_made": 0,
+    }
+    response = client.post("/cron/av-backfill", json={"dry_run": True})
+    assert response.status_code == 200
+    assert response.json()["selected"] == ["AAPL"]
+    mock_run.assert_called_once_with(dry_run=True)
+
+
+@patch("rest_api.routes.cron_routes.av_backfill_service.run")
+def test_cron_av_backfill_missing_key(mock_run):
+    mock_run.return_value = {"reason": "missing_api_key", "selected": ["AAPL"]}
+    response = client.post("/cron/av-backfill", json={})
+    assert response.status_code == 503
+    assert response.json()["detail"] == "ALPHA_VANTAGE_API_KEY is not set"
+    mock_run.assert_called_once_with(dry_run=False)
