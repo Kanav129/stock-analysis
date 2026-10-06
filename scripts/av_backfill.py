@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Drip Alpha Vantage statement snapshots into av_fundamentals.
 
-Does not install a schedule. A daily run needs a separate yes — see the
-"Enabling the daily Alpha Vantage drip" section in the README.
+The daily price+news sync calls the same service after sync succeeds, and
+only spends Alpha Vantage when Yahoo fundamentals are failing. See README,
+"Daily Alpha Vantage drip".
 
 Examples:
   python scripts/av_backfill.py --dry-run

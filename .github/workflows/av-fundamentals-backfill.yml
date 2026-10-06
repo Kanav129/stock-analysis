@@ -1,8 +1,10 @@
 # Alpha Vantage fundamentals drip. Manual only.
 #
-# This file has no schedule. A daily run would spend the free-tier 25 requests
-# against production. Add a schedule only after an explicit yes. See README,
-# "Enabling the daily Alpha Vantage drip".
+# The enabled schedule is the daily price+news sync, which POSTs
+# /cron/av-backfill after sync succeeds. This file stays unscheduled so a
+# blind always-on job cannot spend the free tier. The service still skips
+# the spend when Yahoo fundamentals are healthy. See README,
+# "Daily Alpha Vantage drip".
 #
 # Repo secrets (same as the other workflows):
 #   API_BASE_URL  — https://your-service.onrender.com  (no trailing slash, no /api)
@@ -17,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Plan only (true) or refresh up to 6 equities (false)"
+        description: "Plan only (true), or refresh up to 6 equities when Yahoo is down (false)"
         required: true
         default: "true"
         type: choice

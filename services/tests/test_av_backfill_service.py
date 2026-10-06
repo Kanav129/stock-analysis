@@ -46,6 +46,7 @@ class _Client:
 
 
 def _service(client: _Client | None = None, **kwargs) -> AvBackfillService:
+    kwargs.setdefault("yahoo_probe", lambda ticker: "invalid_crumb")
     return AvBackfillService(
         universe=_Universe(["QQQM", "aapl", "ICLN", "IDEF", "MSFT", "NVDA", "ARKK"]),
         holdings=_Holdings(
@@ -75,6 +76,70 @@ def _service(client: _Client | None = None, **kwargs) -> AvBackfillService:
         daily_requests=24,
         **kwargs,
     )
+
+
+def test_yahoo_healthy_sample_does_not_spend_alpha_vantage():
+    client = _Client()
+    probed: list[str] = []
+
+    def probe(ticker: str) -> str:
+        probed.append(ticker)
+        return "ok"
+
+    result = _service(client, yahoo_probe=probe).run(dry_run=False, now=NOW)
+    assert result["reason"] == "yahoo_healthy"
+    assert result["yahoo"]["status"] == "healthy"
+    assert result["requests_made"] == 0
+    assert result["selected"] == []
+    assert client.calls == []
+    assert probed == ["AAPL"]
+    assert "QQQM" not in probed
+    assert "ARKK" not in probed
+
+
+def test_one_healthy_name_in_the_sample_skips_the_drip():
+    client = _Client()
+
+    def probe(ticker: str) -> str:
+        if ticker == "MSFT":
+            return "ok"
+        return "null_fields"
+
+    result = _service(client, yahoo_probe=probe).run(dry_run=False, now=NOW)
+    assert result["reason"] == "yahoo_healthy"
+    assert result["requests_made"] == 0
+    assert client.calls == []
+
+
+def test_yahoo_failure_drips_missing_then_stale_equities_within_budget(monkeypatch):
+    monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
+    client = _Client()
+    seen: list[str] = []
+
+    def probe(ticker: str) -> str:
+        seen.append(ticker)
+        return {"AAPL": "invalid_crumb", "MSFT": "empty", "NVDA": "null_fields"}[ticker]
+
+    result = _service(client, yahoo_probe=probe).run(dry_run=False, now=NOW)
+    assert seen == ["AAPL", "MSFT", "NVDA"]
+    assert result["yahoo"]["status"] == "failing"
+    assert [ticker for ticker, _ in client.calls] == ["AAPL", "MSFT", "NVDA"]
+    assert result["requests_made"] == 12
+    assert result["requests_made"] <= result["request_budget"]
+    assert len(result["selected"]) <= result["limit"]
+    assert result["skipped_etfs"] == ["ARKK", "ICLN", "IDEF", "QQQM"]
+    assert "QQQM" not in result["refreshed"]
+
+
+def test_yahoo_failure_dry_run_plans_without_spending():
+    client = _Client()
+    result = _service(client, yahoo_probe=lambda ticker: "invalid_crumb").run(
+        dry_run=True, now=NOW
+    )
+    assert result["reason"] is None
+    assert result["selected"] == ["AAPL", "MSFT", "NVDA"]
+    assert result["requests_made"] == 0
+    assert client.calls == []
 
 
 def test_dry_run_skips_etfs_and_does_not_call_alpha_vantage():
@@ -165,6 +230,7 @@ def test_second_run_same_day_does_not_call_alpha_vantage_again():
             store=store,
             client=client,
             quote_types={},
+            yahoo_probe=lambda ticker: "invalid_crumb",
             tz=timezone.utc,
             daily_tickers=6,
             daily_requests=24,
@@ -182,6 +248,60 @@ def test_second_run_same_day_does_not_call_alpha_vantage_again():
     assert second["reason"] == "daily_limit_reached"
     assert second["requests_made"] == 0
     assert len(calls) == 24
+
+
+def test_live_yahoo_info_skips_spend_and_does_not_log_crumb_secrets(monkeypatch):
+    secret = "SECRETKEY123"
+
+    class _Healthy:
+        info = {"trailingPE": 22.0}
+
+    class _Crumb:
+        @property
+        def info(self):
+            raise RuntimeError(f"Invalid Crumb apikey={secret}")
+
+    stocks = {"AAPL": _Healthy(), "MSFT": _Crumb()}
+    monkeypatch.setattr("scraper.yf_cache.get_yf_ticker", lambda ticker: stocks[ticker])
+    client = _Client()
+    service = AvBackfillService(
+        universe=_Universe(["AAPL", "MSFT", "QQQM"]),
+        holdings=_Holdings({"AAPL": "STK", "MSFT": "STK", "QQQM": "ETF"}),
+        store=_Store(),
+        client=client,
+        quote_types={},
+        tz=timezone.utc,
+        daily_tickers=6,
+        daily_requests=24,
+    )
+    import logging
+
+    from utils.logger import logger
+
+    messages: list[str] = []
+
+    class _Handler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    handler = _Handler()
+    logger.addHandler(handler)
+    try:
+        healthy = service.run(dry_run=False, now=NOW)
+        assert healthy["reason"] == "yahoo_healthy"
+        assert healthy["requests_made"] == 0
+        assert client.calls == []
+        stocks["AAPL"] = _Crumb()
+        failing = service.run(dry_run=False, now=NOW)
+    finally:
+        logger.removeHandler(handler)
+
+    assert failing["yahoo"]["status"] == "failing"
+    assert [ticker for ticker, _ in client.calls] == ["AAPL", "MSFT"]
+    assert failing["requests_made"] == 8
+    assert failing["requests_made"] <= failing["request_budget"]
+    assert "QQQM" not in failing["selected"]
+    assert secret not in " ".join(messages)
 
 
 def test_live_run_without_a_key_does_not_call_alpha_vantage(monkeypatch):

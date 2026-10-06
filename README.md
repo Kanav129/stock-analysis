@@ -106,9 +106,9 @@ Workflows in `.github/workflows/`:
 
 | Workflow | When (HKT) | Cron (UTC) | Endpoint |
 |----------|------------|------------|----------|
-| `daily-sync.yml` | Tue–Sat 06:00 HKT (skip Sun/Mon = US weekend) | `0 22 * * 1-5` | `POST /cron/sync` |
+| `daily-sync.yml` | Tue–Sat 06:00 HKT (skip Sun/Mon = US weekend) | `0 22 * * 1-5` | `POST /cron/sync`, then `POST /cron/av-backfill` only if Yahoo fundamentals are down |
 | `weekly-analysis.yml` | Mondays 06:00 ET | `0 11 * * 1` | wake → holdings → sync → analyze |
-| `av-fundamentals-backfill.yml` | manual only — not scheduled | — | `POST /cron/av-backfill` |
+| `av-fundamentals-backfill.yml` | manual only — same Yahoo gate, no second schedule | — | `POST /cron/av-backfill` |
 
 **Weekly analysis order:** `IBKR holdings (best effort)` → `prices/news (required)` → `analysis (required)`.
 
@@ -134,22 +134,28 @@ Also set on Render (never commit tokens):
 
 You can also run workflows manually: Actions → workflow → **Run workflow**.
 
-### Enabling the daily Alpha Vantage drip
+### Daily Alpha Vantage drip
 
-`av_fundamentals` is filled a few equities at a time so Monday's `/cron/analyze` can read the cache. The gather step does **not** call Alpha Vantage. ETFs (holdings `asset_class` of `ETF`, or a watchlist quote type of ETF) are skipped. Each equity costs 4 requests; the default batch is 6 tickers (24 of the 25 free-tier requests). Missing snapshots go first, then the least recently checked name. A second run the same day does not pick another batch.
+`av_fundamentals` is filled a few equities at a time so Monday's `/cron/analyze` can read the cache. The gather step does **not** call Alpha Vantage. The spend is attached to the daily price + news sync (`daily-sync.yml`), after that sync succeeds. There is no separate Alpha Vantage cron. Weekly analysis does not drip.
 
-The workflow is `workflow_dispatch` only, and **Run workflow** defaults to `dry_run=true` so a click does not spend the key. Set `dry_run` to `false` for a real batch. Locally:
+**When it fires.** After sync, the workflow POSTs `{"dry_run": false}` to `/cron/av-backfill`. The service probes up to three equities (preferring AAPL, MSFT, NVDA, GOOGL, AMZN, and META when they are in the universe). Yahoo is **failing** when every probed ticker hits one of:
+
+- Invalid Crumb
+- empty `stock.info`
+- no real number in trailing P/E, forward P/E, beta, gross margin, or revenue growth
+
+On that failure the drip refreshes missing equity snapshots first, then the least recently checked names.
+
+**When it skips.** If any probed ticker still has one of those fields, the run returns `reason: yahoo_healthy` and makes **no** Alpha Vantage calls. ETFs (holdings `asset_class` of `ETF`, or a watchlist quote type of ETF) are never selected. Each equity costs 4 requests; the default batch is 6 tickers (24 of the 25 free-tier requests). A second run the same day does not pick another batch. Sun/Mon HKT (US weekend) skips the whole daily sync, including the drip.
+
+`av-fundamentals-backfill.yml` stays manual. **Run workflow** defaults to `dry_run=true`. A manual live run uses the same Yahoo gate. Locally:
 
 ```bash
 python scripts/av_backfill.py --dry-run
 python scripts/av_backfill.py
 ```
 
-Turning on a daily schedule is a separate yes. It is not wired here. When you want it:
-
-1. Confirm `ALPHA_VANTAGE_API_KEY` is set on Render. Optional caps: `AV_BACKFILL_DAILY_TICKERS` (default 6), `AV_BACKFILL_DAILY_REQUESTS` (default 24).
-2. In `.github/workflows/av-fundamentals-backfill.yml`, add a schedule that POSTs `{"dry_run": false}`. Suggested slot: 22:30 UTC (after the US session, before Monday's analysis). Do not also run the drip on Monday morning in front of `/cron/analyze` if that would share the same 25-request day — analysis only reads the cache, but the drip would still consume the key that morning.
-3. Change the workflow input default only if you want manual runs to refresh for real. Until that edit, Actions → **AV fundamentals backfill** → Run workflow stays a dry run unless you pick `false`.
+`ALPHA_VANTAGE_API_KEY` must be set on Render or a day when Yahoo is down returns 503. Optional caps, unchanged by this schedule: `AV_BACKFILL_DAILY_TICKERS` (default 6), `AV_BACKFILL_DAILY_REQUESTS` (default 24).
 
 ### Frontend → Vercel
 
@@ -180,7 +186,7 @@ When `ADMIN_KEY` is set, non-public routes need `Authorization: Bearer <ADMIN_KE
 | POST | `/cron/holdings/sync` | Same as above (scheduler / weekly workflow) |
 | POST | `/cron/sync` | Scheduled price/news sync |
 | POST | `/cron/analyze` | Scheduled universe analysis (reads cached `av_fundamentals`) |
-| POST | `/cron/av-backfill` | Drip ~6 equity fundamentals into `av_fundamentals` (not scheduled; `{"dry_run": true}` plans only) |
+| POST | `/cron/av-backfill` | After daily sync, drip ~6 equities into `av_fundamentals` only when Yahoo fundamentals are failing (`{"dry_run": true}` plans only) |
 | GET | `/ratings` | Latest rating per ticker |
 | GET | `/ratings/{ticker}` | Rating history |
 | POST | `/analysis/run` | Trigger analysis |

@@ -1,5 +1,8 @@
 """Choose a few equity tickers per day for the Alpha Vantage fundamentals drip.
 
+The service calls this only after Yahoo fundamentals fail for the probe sample.
+A healthy Yahoo day does not reach a live batch.
+
 A full statement snapshot is four requests (income, balance, cash flow, overview).
 The free tier allows 25 requests a day, so the default plan is 6 tickers (24
 requests) and leaves one call unused. ETFs are not company filers and are skipped.

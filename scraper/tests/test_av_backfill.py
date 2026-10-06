@@ -187,6 +187,22 @@ def test_invalid_limit_env_falls_back(monkeypatch: pytest.MonkeyPatch):
     assert configured_ticker_and_request_budget() == (DEFAULT_DAILY_TICKERS, DEFAULT_DAILY_REQUESTS)
 
 
+def test_daily_sync_runs_av_drip_after_prices_and_news():
+    """The enabled schedule is the existing daily sync, not a second AV cron."""
+    root = Path(__file__).resolve().parents[2]
+    daily = (root / ".github" / "workflows" / "daily-sync.yml").read_text()
+    standalone = (root / ".github" / "workflows" / "av-fundamentals-backfill.yml").read_text()
+    assert 'cron: "0 22 * * 1-5"' in daily
+    assert daily.index("Wait until sync finishes") < daily.index("/cron/av-backfill")
+    assert '{"dry_run": false}' in daily
+    assert "steps.guard.outputs.skip != 'true'" in daily
+    assert "steps.wait.outcome == 'success'" in daily
+    assert "schedule:" not in standalone
+    assert "cron:" not in standalone
+    weekly = (root / ".github" / "workflows" / "weekly-analysis.yml").read_text()
+    assert "/cron/av-backfill" not in weekly
+
+
 def test_backfill_workflow_is_manual_only():
     text = (
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "av-fundamentals-backfill.yml"
