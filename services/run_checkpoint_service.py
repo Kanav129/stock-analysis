@@ -248,4 +248,5 @@ def daily_analysis_summary(cp: dict | None, universe: list[str] | None = None) -
         "completed_count": len(done_tickers),
         "universe_count": len(universe),
         "finished_at": (cp or {}).get("finished_at"),
+        "weekly_summary": (cp or {}).get("weekly_summary"),
     }

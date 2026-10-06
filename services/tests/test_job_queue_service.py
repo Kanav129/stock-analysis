@@ -612,3 +612,184 @@ def test_finish_skips_checkpoint_when_ownership_lost():
                         message="Done",
                     )
                 append.assert_not_called()
+
+
+def test_completed_weekly_run_stores_watchlist_summary():
+    checkpoint = {
+        "status": "running",
+        "tickers": ["AAPL", "MSFT"],
+        "completed": [{"ticker": "AAPL", "rating": "HOLD", "score": 0}],
+    }
+    saved: dict = {}
+
+    def _save(data, day=None):
+        saved["data"] = data
+        saved["day"] = day
+
+    with patch("services.job_queue_service.get_db_client", return_value=MagicMock()):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc._started = True
+            svc.universe.get_tickers.return_value = ["AAPL", "MSFT"]
+            with (
+                patch.object(svc, "_count_active_type", return_value=0),
+                patch(
+                    "services.job_queue_service.rcs.load_analysis",
+                    return_value=checkpoint,
+                ),
+                patch(
+                    "services.job_queue_service.rcs.save_analysis",
+                    side_effect=_save,
+                ),
+                patch("services.job_queue_service.rcs.mark_last_analysis_date"),
+                patch(
+                    "services.job_queue_service.rcs.today_key",
+                    return_value="2026-07-22",
+                ),
+                patch(
+                    "services.weekly_summary_service.compose_post_weekly_summary",
+                    return_value=(
+                        "Weekly summary\n\nWatchlist adds to consider\n"
+                        "- CRM — Stored catalyst."
+                    ),
+                ) as compose,
+            ):
+                svc._append_analysis_checkpoint(
+                    "MSFT",
+                    {"rating": "BUY", "score": 22, "report_id": 9},
+                )
+
+    assert saved["data"]["status"] == "completed"
+    assert saved["day"] == "2026-07-22"
+    assert "Watchlist adds to consider" in saved["data"]["weekly_summary"]
+    assert "CRM — Stored catalyst." in saved["data"]["weekly_summary"]
+    compose.assert_called_once()
+    completed = compose.call_args.args[0]
+    assert {row["ticker"] for row in completed} == {"AAPL", "MSFT"}
+    assert compose.call_args.kwargs["day"] == "2026-07-22"
+
+
+def test_partial_weekly_run_does_not_compose_summary():
+    checkpoint = {
+        "status": "running",
+        "tickers": ["AAPL", "MSFT"],
+        "completed": [],
+    }
+    saved: dict = {}
+
+    with patch("services.job_queue_service.get_db_client", return_value=MagicMock()):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc._started = True
+            svc.universe.get_tickers.return_value = ["AAPL", "MSFT"]
+            with (
+                patch.object(svc, "_count_active_type", return_value=1),
+                patch(
+                    "services.job_queue_service.rcs.load_analysis",
+                    return_value=checkpoint,
+                ),
+                patch(
+                    "services.job_queue_service.rcs.save_analysis",
+                    side_effect=lambda data, day=None: saved.update(data=data),
+                ),
+                patch(
+                    "services.weekly_summary_service.compose_post_weekly_summary"
+                ) as compose,
+            ):
+                svc._append_analysis_checkpoint(
+                    "AAPL",
+                    {"rating": "BUY", "score": 10},
+                )
+
+    assert saved["data"]["status"] != "completed"
+    assert "weekly_summary" not in saved["data"]
+    compose.assert_not_called()
+
+
+def test_already_completed_today_writes_summary_once():
+    checkpoint = {
+        "status": "completed",
+        "tickers": ["AAPL"],
+        "completed": [{"ticker": "AAPL", "rating": "BUY", "score": 12}],
+        "weekly_summary": "Weekly summary\n\nWatchlist adds to consider\nNo model watchlist suggestions this week",
+    }
+    saved: list = []
+
+    with patch("services.job_queue_service.get_db_client", return_value=MagicMock()):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc._started = True
+            with (
+                patch(
+                    "services.job_queue_service.rcs.today_key",
+                    return_value="2026-07-22",
+                ),
+                patch(
+                    "services.job_queue_service.rcs.load_analysis",
+                    return_value=checkpoint,
+                ),
+                patch(
+                    "services.job_queue_service.rcs.save_analysis",
+                    side_effect=lambda data, day=None: saved.append(dict(data)),
+                ),
+                patch("services.job_queue_service.rcs.mark_last_analysis_date"),
+                patch(
+                    "services.analysis_service.analysis_service._core_reports_done_for_skip",
+                    return_value={"AAPL"},
+                ),
+                patch(
+                    "services.weekly_summary_service.compose_post_weekly_summary"
+                ) as compose,
+            ):
+                out = svc.enqueue(JOB_CORE, ["AAPL"], force=False)
+
+    assert out["reason"] == "already_completed_today"
+    compose.assert_not_called()
+    assert saved[-1]["weekly_summary"] == checkpoint["weekly_summary"]
+
+
+def test_already_completed_today_composes_summary_when_missing():
+    checkpoint = {
+        "status": "completed",
+        "tickers": ["AAPL"],
+        "completed": [{"ticker": "AAPL", "rating": "SELL", "score": -8}],
+    }
+    saved: list = []
+    note = (
+        "Weekly summary\n\nTop sells\n- AAPL SELL -8\n\n"
+        "Watchlist adds to consider\nNo model watchlist suggestions this week"
+    )
+
+    with patch("services.job_queue_service.get_db_client", return_value=MagicMock()):
+        with patch("services.job_queue_service.UniverseService"):
+            svc = JobQueueService()
+            svc._started = True
+            with (
+                patch(
+                    "services.job_queue_service.rcs.today_key",
+                    return_value="2026-07-22",
+                ),
+                patch(
+                    "services.job_queue_service.rcs.load_analysis",
+                    return_value=checkpoint,
+                ),
+                patch(
+                    "services.job_queue_service.rcs.save_analysis",
+                    side_effect=lambda data, day=None: saved.append(dict(data)),
+                ),
+                patch("services.job_queue_service.rcs.mark_last_analysis_date"),
+                patch(
+                    "services.analysis_service.analysis_service._core_reports_done_for_skip",
+                    return_value={"AAPL"},
+                ),
+                patch(
+                    "services.weekly_summary_service.compose_post_weekly_summary",
+                    return_value=note,
+                ) as compose,
+            ):
+                out = svc.enqueue(JOB_CORE, ["AAPL"], force=False)
+
+    assert out["reason"] == "already_completed_today"
+    compose.assert_called_once()
+    assert saved[-1]["weekly_summary"] == note
+    assert "No model watchlist suggestions this week" in saved[-1]["weekly_summary"]

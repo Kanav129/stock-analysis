@@ -547,6 +547,7 @@ class JobQueueService:
                         if ticker in db_done and ticker not in completed_tickers
                     ],
                 )
+                self._ensure_weekly_summary(summary_checkpoint, day)
                 rcs.save_analysis(summary_checkpoint, day=day)
                 rcs.mark_last_analysis_date(day)
                 return {
@@ -924,9 +925,28 @@ class JobQueueService:
             checkpoint["status"] = "completed"
             checkpoint["finished_at"] = _utcnow().isoformat()
             rcs.mark_last_analysis_date(day)
+            self._ensure_weekly_summary(checkpoint, day)
         else:
             checkpoint["status"] = "running" if active_core else "partial"
         rcs.save_analysis(checkpoint, day=day)
+
+    def _ensure_weekly_summary(self, checkpoint: dict[str, Any], day: str) -> None:
+        """Append stored watchlist ideas to the weekly note once the run is done."""
+        existing = checkpoint.get("weekly_summary")
+        if isinstance(existing, str) and existing.strip():
+            return
+        try:
+            from services.weekly_summary_service import compose_post_weekly_summary
+
+            note = compose_post_weekly_summary(
+                list(checkpoint.get("completed") or []),
+                day=day,
+            )
+        except Exception as exc:
+            logger.error("Weekly summary composition failed: %s", exc)
+            return
+        checkpoint["weekly_summary"] = note
+        logger.info("Weekly summary for %s:\n%s", day, note)
 
     def _count_active_type(self, job_type: str) -> int:
         db = get_db_client()

@@ -436,3 +436,32 @@ jobs:
             exit 0
           fi
           exit 1
+
+      - name: Print weekly summary
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -uo pipefail
+          BASE="${API_BASE_URL%/}"
+          BASE="${BASE%/api}"
+          set +e
+          body=$(curl -fsS --max-time 60 \
+            "${BASE}/analysis/status" \
+            -H "Authorization: Bearer ${ADMIN_KEY}")
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] || [ -z "$body" ]; then
+            echo "::warning::Could not fetch the weekly summary after analysis."
+            exit 0
+          fi
+          WEEKLY_BODY="$body" python3 <<'PY'
+          import json, os
+          data = json.loads(os.environ["WEEKLY_BODY"])
+          daily = data.get("daily") or {}
+          note = daily.get("weekly_summary")
+          if isinstance(note, str) and note.strip():
+              print(note)
+          else:
+              print("Weekly summary not ready yet.")
+          PY

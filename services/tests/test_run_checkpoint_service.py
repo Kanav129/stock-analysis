@@ -63,3 +63,21 @@ def test_save_json_upserts_app_settings():
     assert "INSERT INTO app_settings" in sql
     assert params[0] == "daily_sync:2026-07-22"
     assert '"status": "running"' in params[1] or '"status":"running"' in params[1].replace(" ", "")
+
+
+def test_daily_analysis_summary_passes_through_weekly_note():
+    note = (
+        "Weekly summary\n\nWatchlist adds to consider\n"
+        "- CRM — Stored catalyst."
+    )
+    out = rcs.daily_analysis_summary(
+        {
+            "status": "completed",
+            "completed": [{"ticker": "AAPL"}],
+            "weekly_summary": note,
+            "finished_at": "2026-07-22T08:00:00+00:00",
+        },
+        ["AAPL"],
+    )
+    assert out["weekly_summary"] == note
+    assert out["already_completed_today"] is True
