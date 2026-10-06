@@ -24,6 +24,35 @@ Include:
 Be specific; reference the exact numbers provided. Keep it under 900 words."""
 
 
+def _first_float(info: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        raw = info.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _load_info(stock: Any, ticker: str) -> dict[str, Any]:
+    """Yahoo quote info. Crumb failures and empty payloads stay empty dicts."""
+    try:
+        info = stock.info
+    except Exception as exc:
+        text = str(exc)
+        if "crumb" in text.lower():
+            logger.error("yfinance info failed for %s: Invalid Crumb (%s)", ticker, text)
+        else:
+            logger.error("yfinance info failed for %s: %s", ticker, text)
+        return {}
+    if not isinstance(info, dict):
+        logger.error("yfinance info for %s was not a dict", ticker)
+        return {}
+    return info
+
+
 def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:
     ticker = state["ticker"]
     logger.info(f"---GATHER FUNDAMENTALS {ticker}---")
@@ -33,10 +62,18 @@ def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:
     # ── yfinance info ──
     try:
         stock = get_yf_ticker(ticker)
-        info = stock.info
     except Exception as exc:
-        logger.error(f"yfinance info failed: {exc}")
-        info = {}
+        logger.error("yfinance ticker failed for %s: %s", ticker, exc)
+        stock = None
+    info = _load_info(stock, ticker) if stock is not None else {}
+    if not any(
+        _first_float(info, key) is not None
+        for key in ("forwardPE", "trailingPE", "beta", "grossMargins", "revenueGrowth")
+    ):
+        logger.warning(
+            "yfinance info for %s has no P/E, beta, or margin fields",
+            ticker,
+        )
 
     market_price = state.get("live_price") or (float(info.get("currentPrice", info.get("regularMarketPrice", 0))) or 0.0)
     if not market_price:
@@ -90,43 +127,32 @@ def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:
         yf_revenue_growth=yf_growth,
     )
 
-    # Gross margin from yfinance
-    gross_margin = 0.0
-    try:
-        gm = info.get("grossMargins") or info.get("grossProfitMargins")
-        if gm:
-            gross_margin = round(float(gm) * 100, 1)
-    except (TypeError, ValueError):
-        pass
+    # Gross margin from yfinance. Unknown stays None — never a fake 0%.
+    gm = _first_float(info, "grossMargins", "grossProfitMargins")
+    gross_margin = round(gm * 100, 1) if gm is not None else None
 
-    # FCF margin
-    fcf_margin = 0.0
-    cash_exceeds_debt = False
-    try:
-        ocf = info.get("operatingCashflow") or 0.0
-        capex = info.get("capitalExpenditure") or 0.0
-        total_cash = info.get("totalCash") or 0.0
-        total_debt = info.get("totalDebt") or 0.0
-        rev = info.get("totalRevenue") or 0.0
-        if rev and rev > 0:
-            fcf_margin = round((float(ocf) - float(capex)) / float(rev) * 100, 1)
-        cash_exceeds_debt = float(total_cash) > float(total_debt)
-    except (TypeError, ValueError):
-        pass
+    # FCF margin and cash vs debt only when the inputs were actually returned.
+    ocf = _first_float(info, "operatingCashflow")
+    capex = _first_float(info, "capitalExpenditure")
+    total_cash = _first_float(info, "totalCash")
+    total_debt = _first_float(info, "totalDebt")
+    revenue = _first_float(info, "totalRevenue")
+    fcf_margin = None
+    if ocf is not None and capex is not None and revenue is not None and revenue > 0:
+        fcf_margin = round((ocf - capex) / revenue * 100, 1)
+    cash_exceeds_debt = None
+    if total_cash is not None and total_debt is not None:
+        cash_exceeds_debt = total_cash > total_debt
 
     # Shares outstanding trend
     shares_out = info.get("sharesOutstanding")
     implied_shares = info.get("impliedSharesOutstanding")
 
     # SBC estimate
-    sbc = info.get("stockBasedCompensation") or 0.0
-    sbc_to_rev = 0.0
-    try:
-        rev = info.get("totalRevenue") or 0.0
-        if rev and rev > 0:
-            sbc_to_rev = round(float(sbc) / float(rev) * 100, 1)
-    except (TypeError, ValueError):
-        pass
+    sbc = _first_float(info, "stockBasedCompensation")
+    sbc_to_rev = None
+    if sbc is not None and revenue is not None and revenue > 0:
+        sbc_to_rev = round(sbc / revenue * 100, 1)
 
     fundamental_data = {
         "overview": overview,

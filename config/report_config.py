@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -150,13 +151,27 @@ def _row_revenue(row: dict[str, Any]) -> float | None:
     return value if value else None
 
 
+def present_float(value: Any) -> float | None:
+    """Parse a real number. ``None`` and blanks stay missing; ``0`` is kept."""
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:  # NaN
+        return None
+    return number
+
+
 def annual_revenue_growth_pct(
     income_annual: list[dict[str, Any]] | None,
     yf_revenue_growth: float | None = None,
-) -> float:
+) -> float | None:
     """Average YoY revenue growth. Sorts fiscal periods ascending (oldest first).
 
     ``yf_revenue_growth`` is yfinance's trailing growth as a fraction (0.18 = 18%).
+    Returns ``None`` when neither statements nor a Yahoo growth figure exist.
     """
     rows = [r for r in (income_annual or []) if isinstance(r, dict)]
     rows = sorted(rows, key=_fiscal_sort_key)
@@ -171,42 +186,178 @@ def annual_revenue_growth_pct(
             growths.append((curr - prev) / prev * 100)
     if growths:
         return round(sum(growths) / len(growths), 1)
-    if yf_revenue_growth is not None:
-        try:
-            frac = float(yf_revenue_growth)
-        except (TypeError, ValueError):
-            return 0.0
-        # yfinance may already be percent (>1.5) or a 0–1 fraction.
-        pct = frac * 100 if abs(frac) <= 1.5 else frac
-        return round(pct, 1)
-    return 0.0
+    if yf_revenue_growth is None:
+        return None
+    frac = present_float(yf_revenue_growth)
+    if frac is None:
+        return None
+    # yfinance may already be percent (>1.5) or a 0–1 fraction.
+    pct = frac * 100 if abs(frac) <= 1.5 else frac
+    return round(pct, 1)
+
+
+def _positive_multiple(value: Any) -> float | None:
+    number = present_float(value)
+    if number is None or number <= 0:
+        return None
+    return number
+
+
+def _metric_reusable(inputs: dict[str, Any], key: str) -> bool:
+    """True when a stored growth/margin is a real observation, not a 0% default.
+
+    A stored 0 is reusable only when gross margin shows Yahoo info actually
+    arrived (so 0% FCF or 0% growth was measured, not filled in).
+    """
+    number = present_float(inputs.get(key))
+    if number is None:
+        return False
+    if number != 0:
+        return True
+    gross = present_float(inputs.get("gross_margin_pct"))
+    return gross is not None and gross != 0 and key != "gross_margin_pct"
+
+
+def _cash_reusable(inputs: dict[str, Any]) -> bool:
+    cash = inputs.get("cash_exceeds_debt")
+    if cash is True:
+        return True
+    if cash is not False:
+        return False
+    gross = present_float(inputs.get("gross_margin_pct"))
+    return gross is not None and gross != 0
+
+
+def inputs_have_real_fundamentals(inputs: dict[str, Any] | None) -> bool:
+    """True when stored inputs are not the empty-Yahoo zero default."""
+    if not isinstance(inputs, dict):
+        return False
+    if _positive_multiple(inputs.get("forward_pe")) is not None:
+        return True
+    if present_float(inputs.get("beta")) is not None:
+        return True
+    for key in ("revenue_growth_pct", "gross_margin_pct", "fcf_margin_pct"):
+        if _metric_reusable(inputs, key):
+            return True
+    return _cash_reusable(inputs)
+
+
+def fundamentals_have_real_values(fundamental_data: dict[str, Any] | None) -> bool:
+    """True when today's gather returned real multiples, growth, or margins."""
+    data = fundamental_data or {}
+    overview = data.get("overview") or {}
+    flat = {
+        "forward_pe": overview.get("forward_pe"),
+        "beta": overview.get("beta"),
+        "revenue_growth_pct": data.get("revenue_growth_pct"),
+        "gross_margin_pct": data.get("gross_margin_pct"),
+        "fcf_margin_pct": data.get("fcf_margin_pct"),
+        "cash_exceeds_debt": data.get("cash_exceeds_debt"),
+    }
+    return inputs_have_real_fundamentals(flat)
 
 
 def fundamentals_from_inputs(inputs: dict[str, Any] | None) -> dict[str, Any]:
-    """Rebuild the subset of fundamentals needed to recompute factor scores."""
+    """Rebuild the subset of fundamentals needed to recompute factor scores.
+
+    Missing numbers stay ``None``. They are not coerced to 0%.
+    """
     data = inputs or {}
-    return {
+    cash = data.get("cash_exceeds_debt")
+    rebuilt: dict[str, Any] = {
         "overview": {
-            "forward_pe": data.get("forward_pe"),
-            "beta": data.get("beta"),
+            "forward_pe": present_float(data.get("forward_pe")),
+            "beta": present_float(data.get("beta")),
         },
-        "revenue_growth_pct": data.get("revenue_growth_pct", 0),
-        "gross_margin_pct": data.get("gross_margin_pct", 0),
-        "fcf_margin_pct": data.get("fcf_margin_pct", 0),
-        "cash_exceeds_debt": bool(data.get("cash_exceeds_debt", False)),
+        "revenue_growth_pct": present_float(data.get("revenue_growth_pct")),
+        "gross_margin_pct": present_float(data.get("gross_margin_pct")),
+        "fcf_margin_pct": present_float(data.get("fcf_margin_pct")),
+        "cash_exceeds_debt": cash if isinstance(cash, bool) else None,
     }
+    if data.get("as_of"):
+        rebuilt["fundamentals_as_of"] = data.get("as_of")
+    return rebuilt
 
 
-def _factor_inputs(fundamentals: dict[str, Any]) -> dict[str, Any]:
+def apply_previous_fundamentals(
+    current: dict[str, Any] | None,
+    previous_inputs: dict[str, Any] | None,
+    previous_as_of: str | None = None,
+) -> dict[str, Any]:
+    """Fill missing scoring inputs from the last snapshot that had real numbers.
+
+    Today's measured values win. A previous report of coerced zeros is ignored.
+    When the whole fetch failed, ``fundamentals_as_of`` is that snapshot's date.
+    """
+    data = dict(current or {})
+    overview = dict(data.get("overview") or {})
+    prev = previous_inputs if isinstance(previous_inputs, dict) else {}
+    if not inputs_have_real_fundamentals(prev):
+        data["overview"] = overview
+        return data
+
+    today_snapshot = {
+        "overview": overview,
+        "revenue_growth_pct": data.get("revenue_growth_pct"),
+        "gross_margin_pct": data.get("gross_margin_pct"),
+        "fcf_margin_pct": data.get("fcf_margin_pct"),
+        "cash_exceeds_debt": data.get("cash_exceeds_debt"),
+    }
+    today_had_real = fundamentals_have_real_values(today_snapshot)
+    reused: list[str] = []
+
+    if _positive_multiple(overview.get("forward_pe")) is None and _positive_multiple(prev.get("forward_pe")) is not None:
+        overview["forward_pe"] = _positive_multiple(prev.get("forward_pe"))
+        reused.append("forward_pe")
+    if present_float(overview.get("beta")) is None and present_float(prev.get("beta")) is not None:
+        overview["beta"] = present_float(prev.get("beta"))
+        reused.append("beta")
+    for key in ("revenue_growth_pct", "gross_margin_pct", "fcf_margin_pct"):
+        if present_float(data.get(key)) is None and _metric_reusable(prev, key):
+            data[key] = present_float(prev.get(key))
+            reused.append(key)
+    if not isinstance(data.get("cash_exceeds_debt"), bool) and _cash_reusable(prev):
+        data["cash_exceeds_debt"] = bool(prev.get("cash_exceeds_debt"))
+        reused.append("cash_exceeds_debt")
+
+    data["overview"] = overview
+    if not reused:
+        return data
+    data["fundamentals_reused"] = True
+    data["fundamentals_reused_fields"] = reused
+    as_of = previous_as_of or prev.get("as_of")
+    if today_had_real:
+        data["fundamentals_reused_as_of"] = as_of
+    else:
+        data["fundamentals_as_of"] = as_of
+        data["fundamentals_carried_forward"] = True
+    return data
+
+
+def _factor_inputs(
+    fundamentals: dict[str, Any],
+    *,
+    as_of: str | None = None,
+    reused_as_of: str | None = None,
+    reused_fields: list[str] | None = None,
+) -> dict[str, Any]:
     overview = fundamentals.get("overview") or {}
-    return {
-        "forward_pe": overview.get("forward_pe"),
-        "beta": overview.get("beta"),
-        "revenue_growth_pct": fundamentals.get("revenue_growth_pct", 0),
-        "gross_margin_pct": fundamentals.get("gross_margin_pct", 0),
-        "fcf_margin_pct": fundamentals.get("fcf_margin_pct", 0),
-        "cash_exceeds_debt": bool(fundamentals.get("cash_exceeds_debt", False)),
+    cash = fundamentals.get("cash_exceeds_debt")
+    inputs: dict[str, Any] = {
+        "forward_pe": present_float(overview.get("forward_pe")),
+        "beta": present_float(overview.get("beta")),
+        "revenue_growth_pct": present_float(fundamentals.get("revenue_growth_pct")),
+        "gross_margin_pct": present_float(fundamentals.get("gross_margin_pct")),
+        "fcf_margin_pct": present_float(fundamentals.get("fcf_margin_pct")),
+        "cash_exceeds_debt": cash if isinstance(cash, bool) else None,
     }
+    if as_of:
+        inputs["as_of"] = as_of
+    if reused_as_of:
+        inputs["reused_as_of"] = reused_as_of
+    if reused_fields:
+        inputs["reused_fields"] = list(reused_fields)
+    return inputs
 
 
 def compute_factor_scores(
@@ -215,37 +366,39 @@ def compute_factor_scores(
     sentiment_data: dict[str, Any],
 ) -> dict[str, Any]:
     """Compute standardized 0-100 factor scores deterministically from data.
-    These match the sample report's dimensional study outputs."""
+
+    Unknown fundamentals score neutral (50) and are listed in ``data_missing``.
+    A measured 0% growth or margin still scores as a real low result.
+    """
 
     scores: dict[str, Any] = {}
+    missing: set[str] = set()
+    overview = fundamentals.get("overview") or {}
 
     # ── Value (0–100): lower P/E = higher score ──
-    fwd_pe = fundamentals.get("overview", {}).get("forward_pe")
-    try:
-        fwd_pe_val = float(fwd_pe) if fwd_pe else None
-    except (TypeError, ValueError):
-        fwd_pe_val = None
-    if fwd_pe_val is not None and fwd_pe_val > 0:
-        if fwd_pe_val <= 15:
-            scores["value"] = 100
-        elif fwd_pe_val <= 25:
-            scores["value"] = 75
-        elif fwd_pe_val <= 40:
-            scores["value"] = 50
-        elif fwd_pe_val <= 80:
-            scores["value"] = 25
-        else:
-            scores["value"] = 0
+    fwd_pe_val = present_float(overview.get("forward_pe"))
+    if fwd_pe_val is None:
+        scores["value"] = 50
+        missing.add("forward_pe")
+    elif fwd_pe_val <= 0:
+        scores["value"] = 50
+    elif fwd_pe_val <= 15:
+        scores["value"] = 100
+    elif fwd_pe_val <= 25:
+        scores["value"] = 75
+    elif fwd_pe_val <= 40:
+        scores["value"] = 50
+    elif fwd_pe_val <= 80:
+        scores["value"] = 25
     else:
-        scores["value"] = 50  # unknown
+        scores["value"] = 0
 
     # ── Growth (0–100): revenue growth rate ──
-    rev_growth = fundamentals.get("revenue_growth_pct", 0)
-    try:
-        rev_growth_float = float(rev_growth)
-    except (TypeError, ValueError):
-        rev_growth_float = 0
-    if rev_growth_float >= 30:
+    rev_growth_float = present_float(fundamentals.get("revenue_growth_pct"))
+    if rev_growth_float is None:
+        scores["growth"] = 50
+        missing.add("revenue_growth_pct")
+    elif rev_growth_float >= 30:
         scores["growth"] = 100
     elif rev_growth_float >= 20:
         scores["growth"] = 75
@@ -257,29 +410,35 @@ def compute_factor_scores(
         scores["growth"] = 0
 
     # ── Quality (0–100): gross margin + FCF margin + debt/cash ──
-    gross_margin = fundamentals.get("gross_margin_pct", 0)
-    fcf_margin = fundamentals.get("fcf_margin_pct", 0)
-    cash_debt_ok = fundamentals.get("cash_exceeds_debt", False)
-    try:
-        gm = float(gross_margin)
-        fm = float(fcf_margin)
-    except (TypeError, ValueError):
-        gm = 0
-        fm = 0
+    # Missing legs contribute their midpoint so a blank fetch is 50, not 0.
+    gm = present_float(fundamentals.get("gross_margin_pct"))
+    fm = present_float(fundamentals.get("fcf_margin_pct"))
+    cash_debt_ok = fundamentals.get("cash_exceeds_debt")
+    if not isinstance(cash_debt_ok, bool):
+        cash_debt_ok = None
     quality = 0
-    if gm >= 70:
+    if gm is None:
+        quality += 18
+        missing.add("gross_margin_pct")
+    elif gm >= 70:
         quality += 35
     elif gm >= 50:
         quality += 20
     elif gm > 0:
         quality += 10
-    if fm > 20:
+    if fm is None:
+        quality += 17
+        missing.add("fcf_margin_pct")
+    elif fm > 20:
         quality += 35
     elif fm > 10:
         quality += 20
     elif fm > 0:
         quality += 10
-    if cash_debt_ok:
+    if cash_debt_ok is None:
+        quality += 15
+        missing.add("cash_exceeds_debt")
+    elif cash_debt_ok:
         quality += 30
     scores["quality"] = min(quality, 100)
 
@@ -313,12 +472,11 @@ def compute_factor_scores(
     scores["momentum"] = min(mom, 100)
 
     # ── Low Risk (0–100): inverse of beta, volatility ──
-    beta = fundamentals.get("overview", {}).get("beta")
-    try:
-        beta_val = float(beta) if beta else 1.0
-    except (TypeError, ValueError):
-        beta_val = 1.0
-    if beta_val <= 0.8:
+    beta_val = present_float(overview.get("beta"))
+    if beta_val is None:
+        scores["low_risk"] = 50
+        missing.add("beta")
+    elif beta_val <= 0.8:
         scores["low_risk"] = 90
     elif beta_val <= 1.0:
         scores["low_risk"] = 70
@@ -344,7 +502,25 @@ def compute_factor_scores(
     st = sentiment_data.get("stocktwits", {})
     bullish_pct = st.get("bullish_pct", 0)
     scores["sentiment"] = min(max(int(bullish_pct), 0), 100)
-    scores["_inputs"] = _factor_inputs(fundamentals)
+    data_missing = [key for key in FACTOR_INPUT_KEYS if key in missing]
+    if data_missing:
+        scores["data_missing"] = data_missing
+
+    as_of = fundamentals.get("fundamentals_as_of")
+    if (
+        not fundamentals.get("fundamentals_carried_forward")
+        and not as_of
+        and fundamentals_have_real_values(fundamentals)
+    ):
+        as_of = datetime.now(timezone.utc).date().isoformat()
+    reused_as_of = fundamentals.get("fundamentals_reused_as_of")
+    reused_fields = fundamentals.get("fundamentals_reused_fields")
+    scores["_inputs"] = _factor_inputs(
+        fundamentals,
+        as_of=as_of if isinstance(as_of, str) and as_of else None,
+        reused_as_of=reused_as_of if isinstance(reused_as_of, str) and reused_as_of else None,
+        reused_fields=reused_fields if isinstance(reused_fields, list) else None,
+    )
 
     return scores
 

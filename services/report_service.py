@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
+from config.report_config import inputs_have_real_fundamentals
 from db.db_factory import get_db_client
 from services import run_checkpoint_service as rcs
 from utils.logger import logger
@@ -95,6 +96,45 @@ class ReportService:
         new_id = rows[0][0] if rows else -1
         logger.info(f"Saved {report_type} report {new_id} for {ticker}")
         return new_id
+
+    def find_last_good_fundamentals(
+        self,
+        ticker: str,
+        report_type: str | None = "core",
+        *,
+        limit: int = 12,
+    ) -> Optional[dict[str, Any]]:
+        """Newest stored factor inputs that are real numbers, with their date.
+
+        Skips reports whose ``_inputs`` are the empty-Yahoo zeros (missing P/E
+        and beta, growth and margins coerced to 0). ``as_of`` prefers the date
+        saved with those inputs, then the report's ``created_at``.
+        """
+        if report_type:
+            rows, cols = self._db.fetch_query(
+                "SELECT factor_scores, created_at FROM stock_reports "
+                "WHERE ticker=%s AND report_type=%s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (ticker.upper(), report_type, limit),
+            )
+        else:
+            rows, cols = self._db.fetch_query(
+                "SELECT factor_scores, created_at FROM stock_reports "
+                "WHERE ticker=%s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (ticker.upper(), limit),
+            )
+        for row in rows:
+            item = self._row_to_dict(row, cols)
+            scores = item.get("factor_scores")
+            inputs = scores.get("_inputs") if isinstance(scores, dict) else None
+            if not inputs_have_real_fundamentals(inputs):
+                continue
+            as_of = inputs.get("as_of") if isinstance(inputs, dict) else None
+            if not as_of:
+                as_of = item.get("created_at")
+            return {"inputs": inputs, "as_of": as_of}
+        return None
 
     def get_latest_report(
         self, ticker: str, report_type: str | None = "core"

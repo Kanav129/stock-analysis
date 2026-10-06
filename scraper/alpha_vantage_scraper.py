@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -17,6 +19,18 @@ from utils.logger import logger
 CACHE_DIR = Path(__file__).resolve().parent.parent / ".av_cache"
 CACHE_TTL_DAYS = 7
 RATE_LIMIT_WINDOW = 60  # seconds for 5-call-per-minute limit
+_APIKEY_PARAM = re.compile(r"(apikey=)[^&\s\"']+", re.IGNORECASE)
+
+
+def redact_av_secrets(text: Any, api_key: str = "") -> str:
+    """Strip the Alpha Vantage key from log lines and stored error text."""
+    redacted = str(text)
+    if api_key:
+        redacted = redacted.replace(api_key, "[REDACTED]")
+        encoded = quote(api_key, safe="")
+        if encoded and encoded != api_key:
+            redacted = redacted.replace(encoded, "[REDACTED]")
+    return _APIKEY_PARAM.sub(r"\1[REDACTED]", redacted)
 
 
 def _optional_yahoo_attr(stock: Any, name: str, ticker: str) -> Any:
@@ -110,15 +124,18 @@ class AlphaVantageClient:
             if "Note" in data or "Information" in data:
                 note = data.get("Note") or data.get("Information", "")
                 if "rate limit" in str(note).lower() or "thank you for using" in str(note).lower():
-                    logger.warning(f"AV rate limit hit — {note}")
-                    return {"_error": "rate_limit", "_message": str(note)}
+                    safe_note = redact_av_secrets(note, self._api_key)
+                    logger.warning("AV rate limit hit — %s", safe_note)
+                    return {"_error": "rate_limit", "_message": safe_note}
             if "Error Message" in data:
-                logger.warning(f"AV returned error: {data['Error Message']}")
-                return {"_error": data["Error Message"]}
+                safe_error = redact_av_secrets(data["Error Message"], self._api_key)
+                logger.warning("AV returned error: %s", safe_error)
+                return {"_error": safe_error}
             return data
         except Exception as exc:
-            logger.error(f"AV request failed: {params.get('function')} — {exc}")
-            return {"_error": str(exc)}
+            safe_exc = redact_av_secrets(exc, self._api_key)
+            logger.error("AV request failed: %s — %s", params.get("function"), safe_exc)
+            return {"_error": safe_exc}
 
     def _get_with_cache(
         self,
