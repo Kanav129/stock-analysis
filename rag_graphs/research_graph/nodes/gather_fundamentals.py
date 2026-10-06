@@ -101,9 +101,11 @@ def gather_fundamentals(state: ResearchState) -> Dict[str, Any]:
     overview = {k: (v if v is not None else None) for k, v in overview.items()}
 
     # ── Alpha Vantage fundamentals ──
+    # Read av_fundamentals only. A universe pass must not spend the 25-request
+    # daily budget; the drip job (POST /cron/av-backfill) fills the cache.
     try:
         av = AlphaVantageClient()
-        av_snapshot = av.get_financial_snapshot(ticker)
+        av_snapshot = av.get_financial_snapshot(ticker, refresh=False)
         av_errors = av_snapshot.get("errors", {})
         if av_errors:
             logger.warning(f"AV data gaps for {ticker}: {av_errors}")

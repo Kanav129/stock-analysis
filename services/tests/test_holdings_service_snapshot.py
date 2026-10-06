@@ -180,3 +180,32 @@ def test_get_current_holdings_keeps_ibkr_and_recomputes_live(
     assert h["market_price"] == 200.0
     assert h["market_value"] == 2000.0
     assert h["unrealized_pnl"] == 500.0
+
+
+@patch("services.holdings_service.get_db_client")
+def test_current_asset_classes_prefers_etf(mock_get_db):
+    import json
+
+    snap = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    db = MagicMock()
+    db.fetch_query.side_effect = [
+        ([(json.dumps({"snapshot_at": snap.isoformat()}),)], ["value"]),
+        (
+            [
+                ("AAPL", "STK"),
+                ("QQQM", "STK"),
+                ("QQQM", "ETF"),
+                ("ICLN", "ETF"),
+                ("IDEF", "etf"),
+            ],
+            ["ticker", "asset_class"],
+        ),
+    ]
+    mock_get_db.return_value = db
+
+    found = HoldingsService().current_asset_classes()
+
+    assert found["AAPL"] == "STK"
+    assert found["QQQM"] == "ETF"
+    assert found["ICLN"] == "ETF"
+    assert str(found["IDEF"]).upper() == "ETF"

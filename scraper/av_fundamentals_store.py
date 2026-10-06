@@ -40,6 +40,17 @@ class AvFundamentalsStore:
             "snapshot": snapshot,
         }
 
+    def list_status(self) -> list[dict[str, Any]]:
+        """Ticker plus fetch/check timestamps for drip rotation. No snapshot bodies."""
+        db = get_db_client()
+        rows, cols = db.fetch_query(
+            """
+            SELECT ticker, fetched_at, checked_at
+            FROM av_fundamentals
+            """
+        )
+        return [dict(zip(cols, row)) for row in rows]
+
     def save(
         self,
         ticker: str,

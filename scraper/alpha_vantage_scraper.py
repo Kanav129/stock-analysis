@@ -73,6 +73,8 @@ class AlphaVantageClient:
     def __init__(self, api_key: Optional[str] = None) -> None:
         self._api_key = api_key or os.getenv("ALPHA_VANTAGE_API_KEY", "")
         self._last_request: float = 0.0
+        self.requests_made: int = 0
+        self.rate_limited: bool = False
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Rate limiting ─────────────────────────────────────────────
@@ -116,14 +118,16 @@ class AlphaVantageClient:
     def _fetch(self, params: dict[str, str]) -> dict[str, Any]:
         self._rate_limit()
         params.setdefault("apikey", self._api_key)
+        self.requests_made += 1
         try:
             resp = requests.get(self.BASE_URL, params=params, timeout=20)
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
-            # Detect rate limit message
+            # Detect rate limit message. Log the code only — the note can echo the key.
             if "Note" in data or "Information" in data:
                 note = data.get("Note") or data.get("Information", "")
                 if "rate limit" in str(note).lower() or "thank you for using" in str(note).lower():
+                    self.rate_limited = True
                     safe_note = redact_av_secrets(note, self._api_key)
                     logger.warning("AV rate limit hit — %s", safe_note)
                     return {"_error": "rate_limit", "_message": safe_note}
@@ -196,18 +200,34 @@ class AlphaVantageClient:
         *,
         store: Any = None,
         now: Optional[datetime] = None,
+        refresh: bool = True,
+        mark_checked: bool = False,
     ) -> dict[str, Any]:
         """Statement snapshot for the fundamentals node.
 
         Reuses the Postgres copy until Yahoo shows an earnings print newer than
         that save. A same-day retry is skipped when Alpha Vantage still has the
         previous fiscal period.
+
+        ``refresh=False`` is the weekly/gather path: return the saved snapshot
+        and do not call Alpha Vantage, even when a newer earnings print exists.
+        The daily drip is what spends the 25-request budget.
         """
         moment = now or datetime.now(timezone.utc)
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
         holder = store if store is not None else AvFundamentalsStore()
         stored = _load_stored(holder, ticker)
+        if not refresh:
+            if stored:
+                logger.info(
+                    "AV fundamentals cache hit for %s (fiscal %s) — live fetch skipped",
+                    ticker,
+                    stored.get("fiscal_date_ending"),
+                )
+                return stored["snapshot"]
+            logger.info("AV fundamentals cache miss for %s — live fetch skipped", ticker)
+            return _empty_snapshot()
         earnings_at = lookup_reported_earnings(ticker)
         fetched_at = stored.get("fetched_at") if stored else None
         checked_at = stored.get("checked_at") if stored else None
@@ -217,6 +237,15 @@ class AlphaVantageClient:
             reported_earnings_at=earnings_at,
             now=moment,
         ):
+            if mark_checked:
+                _save_stored(
+                    holder,
+                    ticker,
+                    snapshot=stored["snapshot"],
+                    fiscal_date_ending=_coerce_date(stored.get("fiscal_date_ending")),
+                    fetched_at=stored.get("fetched_at"),
+                    checked_at=moment,
+                )
             logger.info(
                 "AV fundamentals reused for %s (fiscal %s)",
                 ticker,
@@ -236,6 +265,19 @@ class AlphaVantageClient:
         cashflow = self._get_with_cache(ticker, "CASH_FLOW", bypass_disk_cache=bypass_disk_cache)
         overview = self._get_with_cache(ticker, "OVERVIEW", bypass_disk_cache=bypass_disk_cache)
         return _assemble_snapshot(self, income, balance, cashflow, overview)
+
+
+def _empty_snapshot() -> dict[str, Any]:
+    return {
+        "overview": {},
+        "income_annual": [],
+        "income_quarterly": [],
+        "balance_annual": [],
+        "balance_quarterly": [],
+        "cashflow_annual": [],
+        "cashflow_quarterly": [],
+        "errors": {"cache": "missing"},
+    }
 
 
 def _assemble_snapshot(
