@@ -1,0 +1,115 @@
+# Build the API image and redeploy it on the always-on Compute Engine VM.
+#
+# One-time Workload Identity setup and the two secrets below: see DEPLOY.md.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   GCP_WIF_PROVIDER — projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github
+#   GCP_SA_EMAIL     — github-actions-deploy@stock-analysis-511406.iam.gserviceaccount.com
+#
+# Does not use a JSON service-account key. Scheduled sync/analysis workflows are unchanged.
+
+name: Deploy API to GCP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - requirements.txt
+      - docker-compose.yml
+      - rest_api/**
+      - services/**
+      - db/**
+      - utils/**
+      - scripts/**
+      - config/**
+      - forecast/**
+      - rag_graphs/**
+      - scraper/**
+      - .github/workflows/deploy-gcp-api.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-gcp-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PROJECT_ID: stock-analysis-511406
+      ZONE: us-central1-a
+      INSTANCE: stocks-insights-api
+      IMAGE: us-central1-docker.pkg.dev/stock-analysis-511406/apps/stocks-insights-api
+      HEALTH_URL: https://34-63-128-121.sslip.io/health
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Artifact Registry docker auth
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+
+      - name: Redeploy container on the VM
+        run: |
+          set -euo pipefail
+          remote=$(cat <<'EOS'
+          set -euo pipefail
+          TOKEN=$(curl -fsS -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+            | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+          test -n "$TOKEN"
+          echo "$TOKEN" | sudo docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev
+          sudo docker pull us-central1-docker.pkg.dev/stock-analysis-511406/apps/stocks-insights-api:latest
+          sudo docker rm -f stocks-api
+          sudo docker run -d --name stocks-api --restart=unless-stopped \
+            -p 127.0.0.1:8001:8001 \
+            --env-file /opt/stocks.env \
+            us-central1-docker.pkg.dev/stock-analysis-511406/apps/stocks-insights-api:latest
+          sudo docker ps --filter name=stocks-api
+          EOS
+          )
+          # base64 keeps the remote script one argument, so SSH quoting cannot split it.
+          payload=$(printf '%s\n' "$remote" | base64 -w0)
+          gcloud compute ssh "$INSTANCE" \
+            --project="$PROJECT_ID" \
+            --zone="$ZONE" \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-flag="-o StrictHostKeyChecking=accept-new" \
+            --command="echo ${payload} | base64 -d | bash"
+
+      - name: Wait for HTTPS health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 36); do
+            if body=$(curl -fsS --max-time 15 "$HEALTH_URL") \
+              && printf '%s' "$body" | grep -q '"status":"ok"'; then
+              echo "healthy: $body"
+              exit 0
+            fi
+            echo "attempt $i: $HEALTH_URL not ready"
+            sleep 10
+          done
+          echo "health check failed: $HEALTH_URL" >&2
+          exit 1

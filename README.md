@@ -83,6 +83,10 @@ Regenerate a deep report after setup to refresh the Kronos section and chart.
 
 ## Deploy
 
+### Backend → GCP VM (always on)
+
+The API container runs on Compute Engine and is redeployed by `.github/workflows/deploy-gcp-api.yml` when API code is pushed to `main`. One-time Workload Identity setup and the `GCP_WIF_PROVIDER` and `GCP_SA_EMAIL` secrets are in [DEPLOY.md](DEPLOY.md). Health check: `https://34-63-128-121.sslip.io/health`.
+
 ### Backend → Render (Docker, free tier)
 
 1. Push this repo to GitHub.
