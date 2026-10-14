@@ -26,8 +26,8 @@ RATING_SCORE_BANDS = {
 RATING_SET = set(RATING_TAGS)
 
 # After a successful core report, auto-enqueue deep dive when |score| >= this.
-# BUY/SELL bands start at |40|; ACCUMULATE (~30) is not auto-deep.
-AUTO_DEEP_SCORE_ABS_THRESHOLD = 40
+# |30| covers strong ACCUMULATE/REDUCE and the BUY/SELL bands; weaker scores stay core-only.
+AUTO_DEEP_SCORE_ABS_THRESHOLD = 30
 
 # BUY/STRONG_BUY entry must be within this fraction of live price.
 BUY_ENTRY_MAX_DISTANCE = 0.04
