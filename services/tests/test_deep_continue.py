@@ -188,7 +188,7 @@ def test_continue_deep_from_core_skips_core_llm_gathers_and_omits_report_id():
     sent.assert_not_called()
 
 
-def test_maybe_auto_enqueue_deep_when_abs_score_ge_40():
+def test_maybe_auto_enqueue_deep_when_abs_score_ge_30():
     from services.job_queue_service import JobQueueService
 
     svc = JobQueueService()
@@ -200,7 +200,7 @@ def test_maybe_auto_enqueue_deep_when_abs_score_ge_40():
         ),
         patch.object(svc, "enqueue", return_value={"started": True}) as enq,
     ):
-        svc._maybe_auto_enqueue_deep("aapl", {"score": 40, "decision_ok": True})
+        svc._maybe_auto_enqueue_deep("aapl", {"score": 30, "decision_ok": True})
 
     enq.assert_called_once_with("deep_dive", ["AAPL"])
 
@@ -217,7 +217,7 @@ def test_maybe_auto_enqueue_deep_negative_score_threshold():
         ),
         patch.object(svc, "enqueue", return_value={"started": True}) as enq,
     ):
-        svc._maybe_auto_enqueue_deep("MSFT", {"score": -40})
+        svc._maybe_auto_enqueue_deep("MSFT", {"score": -30})
 
     enq.assert_called_once_with("deep_dive", ["MSFT"])
 
@@ -227,10 +227,10 @@ def test_maybe_auto_enqueue_deep_skips_below_threshold():
 
     svc = JobQueueService()
     with patch.object(svc, "enqueue") as enq:
-        svc._maybe_auto_enqueue_deep("AAPL", {"score": 39})
-        svc._maybe_auto_enqueue_deep("AAPL", {"score": -39})
+        svc._maybe_auto_enqueue_deep("AAPL", {"score": 29})
+        svc._maybe_auto_enqueue_deep("AAPL", {"score": -29})
         svc._maybe_auto_enqueue_deep("AAPL", {})
-        svc._maybe_auto_enqueue_deep("AAPL", {"score": 40, "decision_ok": False})
+        svc._maybe_auto_enqueue_deep("AAPL", {"score": 30, "decision_ok": False})
         svc._maybe_auto_enqueue_deep(
             "AAPL",
             {"score": 50, "decision_ok": True, "error_message": "403 quota exhausted"},
