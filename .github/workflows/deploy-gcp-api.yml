@@ -80,6 +80,12 @@ jobs:
             | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
           test -n "$TOKEN"
           echo "$TOKEN" | sudo docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev
+          # Free disk before pull. The running container keeps its image, so a
+          # failed pull leaves the live API up. Image and builder prune only;
+          # do not system-prune volumes.
+          sudo docker image prune -af
+          sudo docker builder prune -af
+          df -h
           sudo docker pull us-central1-docker.pkg.dev/stock-analysis-511406/apps/stocks-insights-api:latest
           sudo docker rm -f stocks-api
           sudo docker run -d --name stocks-api --restart=unless-stopped \
