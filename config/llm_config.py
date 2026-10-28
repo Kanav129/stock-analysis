@@ -51,9 +51,37 @@ def _setting(key: str, env_keys: list[str], default: str = "") -> str:
     return default
 
 
+def _db_llm_api_key() -> str:
+    """Stored app_settings key only.
+
+    SettingsService.get_raw("llm_api_key") also falls back to QWEN_API_KEY, which
+    would hide OPENAI_EMBEDDING_API_KEY. Read the row directly.
+    """
+    try:
+        from services.settings_service import SettingsService
+
+        stored = SettingsService()._stored()
+    except Exception:
+        return ""
+    if not isinstance(stored, dict):
+        return ""
+    return str(stored.get("llm_api_key") or stored.get("openrouter_api_key") or "").strip()
+
+
 def resolve_llm_api_key() -> str:
-    """API key for the configured OpenAI-compatible LLM provider (Qwen / DashScope by default)."""
-    return _setting("llm_api_key", _LLM_API_KEY_ENV_KEYS, "")
+    """API key for chat/analysis (Qwen model ids stay on ANALYSIS_MODEL / RESEARCH_MODEL).
+
+    Order: DB llm_api_key, then OPENAI_EMBEDDING_API_KEY / EMBEDDING_API_KEY
+    (pay-as-you-go account that can call qwen models), then Token Plan
+    QWEN_API_KEY and the other chat env keys.
+    """
+    db_key = _db_llm_api_key()
+    if db_key:
+        return db_key
+    embed = _env_first(*_EMBEDDING_API_KEY_ENV_KEYS)
+    if embed:
+        return embed
+    return _env_first(*_LLM_API_KEY_ENV_KEYS)
 
 
 def resolve_openrouter_api_key() -> str:
@@ -166,6 +194,17 @@ def _fallback_chain(role: Literal["analysis", "research"], primary_name: str) ->
 
 
 def resolve_llm_base_url() -> str:
+    """Chat base URL.
+
+    When chat is using the embedding account (that key is set and no DB
+    llm_api_key overrides it) and OPENAI_EMBEDDING_BASE_URL or EMBEDDING_BASE_URL
+    is set, use that endpoint, normalized the same way as embeddings.
+    Otherwise OPENAI_BASE_URL or the DashScope default.
+    """
+    embed_key = _env_first(*_EMBEDDING_API_KEY_ENV_KEYS)
+    explicit = _env_first("OPENAI_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL")
+    if embed_key and explicit and not _db_llm_api_key():
+        return _normalize_embedding_base_url(explicit)
     return (os.getenv("OPENAI_BASE_URL") or DEFAULT_LLM_BASE_URL).strip()
 
 
@@ -186,7 +225,11 @@ def _env_first(*env_keys: str) -> str:
 
 
 def resolve_embedding_api_key() -> str:
-    """API key used only for news vector embeddings (not chat/analysis)."""
+    """API key for news vector embeddings.
+
+    Chat/analysis prefers this same embedding account when it is set; see
+    resolve_llm_api_key. Without it, embeddings fall back to the chat key.
+    """
     return _env_first(*_EMBEDDING_API_KEY_ENV_KEYS) or _llm_api_key()
 
 
