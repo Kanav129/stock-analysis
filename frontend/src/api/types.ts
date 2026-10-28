@@ -275,6 +275,10 @@ export interface DailyRunSummary {
   news_done_count?: number;
   prices_done_count?: number;
   completed_count?: number;
+  /** Universe tickers whose latest core decision has rating and score. */
+  good_count?: number;
+  /** True when good_count covers the universe. */
+  ratings_ok?: boolean;
   /** Watchlist/holdings universe size for progress denominators. */
   universe_count?: number;
   finished_at: string | null;

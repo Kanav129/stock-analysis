@@ -70,6 +70,90 @@ def test_core_reports_done_today_queries_pinned_hkt_utc_window():
     assert params == (start, end)
 
 
+def test_core_reports_done_today_requires_successful_decision():
+    svc = _service()
+    db = MagicMock()
+    db.fetch_query.return_value = ([], ["ticker"])
+    start = datetime(2026, 10, 25, 16, tzinfo=timezone.utc)
+    end = datetime(2026, 10, 26, 16, tzinfo=timezone.utc)
+
+    with (
+        patch("services.analysis_service.get_db_client", return_value=db),
+        patch(
+            "services.analysis_service.rcs.day_bounds_utc",
+            return_value=(start, end),
+        ),
+    ):
+        svc._core_reports_done_today("2026-10-26")
+
+    sql = db.fetch_query.call_args.args[0]
+    assert "(rating->>'decision_ok') IS DISTINCT FROM 'false'" in sql
+    assert "rating->>'rating'" in sql
+    assert "rating->>'score'" in sql
+
+
+def test_core_reports_done_since_requires_successful_decision():
+    svc = _service()
+    db = MagicMock()
+    db.fetch_query.return_value = ([], ["ticker"])
+    since = datetime(2026, 10, 25, 11, tzinfo=timezone.utc)
+
+    with patch("services.analysis_service.get_db_client", return_value=db):
+        svc._core_reports_done_since(since)
+
+    sql = db.fetch_query.call_args.args[0]
+    assert "(rating->>'decision_ok') IS DISTINCT FROM 'false'" in sql
+    assert "rating->>'rating'" in sql
+    assert "rating->>'score'" in sql
+
+
+def test_get_status_clears_false_completed_when_decisions_failed():
+    svc = _service()
+    universe = ["AAPL", "MSFT"]
+    checkpoint = {
+        "status": "completed",
+        "tickers": universe,
+        "completed": [
+            {"ticker": "AAPL", "rating": None, "score": None, "decision_ok": False},
+            {"ticker": "MSFT"},
+        ],
+        "finished_at": "2026-10-26T04:00:00",
+    }
+    saved = []
+
+    with (
+        patch.object(svc.universe, "get_tickers", return_value=universe),
+        patch("services.analysis_service.rcs.today_key", return_value="2026-10-26"),
+        patch("services.analysis_service.rcs.load_analysis", return_value=checkpoint),
+        patch.object(svc, "_core_reports_done_for_skip", return_value=set()),
+        patch(
+            "services.analysis_service.rcs.save_analysis",
+            side_effect=lambda data, day=None: saved.append((dict(data), day)),
+        ),
+        patch("services.job_queue_service.job_queue_service.ensure_started"),
+        patch(
+            "services.job_queue_service.job_queue_service.count_active",
+            return_value=0,
+        ),
+        patch(
+            "services.job_queue_service.job_queue_service.list_jobs",
+            return_value=[],
+        ),
+    ):
+        result = svc.get_status()
+
+    daily = result["daily"]
+    assert daily["already_completed_today"] is False
+    assert daily["can_resume"] is True
+    assert daily["ratings_ok"] is False
+    assert daily["good_count"] == 0
+    assert daily["status"] == "partial"
+    assert saved, "false completed checkpoint should be rewritten"
+    assert saved[-1][0]["status"] == "partial"
+    assert saved[-1][0]["completed"] == []
+    assert saved[-1][1] == "2026-10-26"
+
+
 def test_start_returns_already_completed_today_from_hybrid_done_set():
     svc = _service()
     universe = ["AAPL", "MSFT"]
@@ -235,7 +319,10 @@ def test_get_status_embeds_daily_analysis_summary():
     svc = _service()
     svc._progress["tickers"] = ["AAPL"]
     universe = ["AAPL", "MSFT"]
-    checkpoint = {"status": "partial", "completed": [{"ticker": "AAPL"}]}
+    checkpoint = {
+        "status": "partial",
+        "completed": [{"ticker": "AAPL", "rating": "BUY", "score": 4, "decision_ok": True}],
+    }
     daily = {"status": "partial", "can_resume": True}
 
     with (

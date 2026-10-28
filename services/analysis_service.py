@@ -66,6 +66,14 @@ DAILY_STATUS_CACHE_SECONDS = 30
 # Weekly analysis can cross HKT midnight (GitHub 6h cap). Skip reports from
 # this rolling window so a Monday 17:30 UTC resume does not redo Monday's work.
 CORE_REPORT_SKIP_HOURS = 24
+# Failure envelopes from record_failed_analysis are still report_type=core.
+# They must not count as "done today" or the weekly job treats an LLM outage
+# as already_completed_today and the next resume no-ops.
+_SUCCESSFUL_CORE_REPORT_FILTER = """
+  AND (rating->>'decision_ok') IS DISTINCT FROM 'false'
+  AND NULLIF(BTRIM(rating->>'rating'), '') IS NOT NULL
+  AND NULLIF(BTRIM(rating->>'score'), '') IS NOT NULL
+"""
 
 
 def _env_float(name: str, default: float) -> float:
@@ -287,25 +295,41 @@ class AnalysisService:
             for item in (checkpoint or {}).get("completed") or []
             if isinstance(item, dict) and item.get("ticker")
         ]
-        checkpoint_done = {
-            str(item["ticker"]).upper()
-            for item in completed
-        }
+        good_entries = [item for item in completed if rcs.analysis_entry_succeeded(item)]
+        good_tickers = {str(item["ticker"]).upper() for item in good_entries}
         try:
             db_done = self._core_reports_done_for_skip(day)
         except Exception as exc:
             logger.warning("Could not read today's core reports for status: %s", exc)
             db_done = set()
-        effective_checkpoint = dict(checkpoint or {})
-        effective_checkpoint["completed"] = completed + [
-            {"ticker": ticker}
+        effective_completed = list(good_entries) + [
+            {"ticker": ticker, "verified_report": True}
             for ticker in sorted(db_done)
-            if ticker not in checkpoint_done
+            if ticker not in good_tickers
         ]
+        effective_checkpoint = dict(checkpoint or {})
+        effective_checkpoint["completed"] = effective_completed
         daily = rcs.daily_analysis_summary(
             effective_checkpoint,
             universe,
         )
+        if (
+            checkpoint
+            and not active
+            and checkpoint.get("status") == "completed"
+            and not daily.get("already_completed_today")
+        ):
+            healed = dict(checkpoint)
+            healed["status"] = "partial"
+            healed["completed"] = list(good_entries)
+            healed["finished_at"] = None
+            try:
+                rcs.save_analysis(healed, day=day)
+            except Exception as exc:
+                logger.warning("Could not clear false-complete analysis checkpoint: %s", exc)
+            effective_checkpoint = dict(healed)
+            effective_checkpoint["completed"] = effective_completed
+            daily = rcs.daily_analysis_summary(effective_checkpoint, universe)
         self._daily_cache_day = day
         self._daily_cache = daily
         self._daily_cache_at = time.monotonic()
@@ -343,7 +367,7 @@ class AnalysisService:
             WHERE report_type = 'core'
               AND created_at >= %s
               AND created_at < %s
-            """,
+            """ + _SUCCESSFUL_CORE_REPORT_FILTER,
             (start, end),
         )
         return {str(row[0]).upper() for row in rows if row and row[0]}
@@ -357,7 +381,7 @@ class AnalysisService:
             FROM stock_reports
             WHERE report_type = 'core'
               AND created_at >= %s
-            """,
+            """ + _SUCCESSFUL_CORE_REPORT_FILTER,
             (since,),
         )
         return {str(row[0]).upper() for row in rows if row and row[0]}

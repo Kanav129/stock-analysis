@@ -512,7 +512,9 @@ class JobQueueService:
             checkpoint_done = {
                 str(item["ticker"]).upper()
                 for item in (checkpoint or {}).get("completed") or []
-                if isinstance(item, dict) and item.get("ticker")
+                if isinstance(item, dict)
+                and item.get("ticker")
+                and rcs.analysis_entry_succeeded(item)
             }
             from services.analysis_service import analysis_service
 
@@ -532,7 +534,9 @@ class JobQueueService:
                 completed = [
                     dict(item)
                     for item in (checkpoint or {}).get("completed") or []
-                    if isinstance(item, dict) and item.get("ticker")
+                    if isinstance(item, dict)
+                    and item.get("ticker")
+                    and rcs.analysis_entry_succeeded(item)
                 ]
                 completed_tickers = {
                     str(item["ticker"]).upper() for item in completed
@@ -542,7 +546,7 @@ class JobQueueService:
                     tickers=target,
                     completed=completed
                     + [
-                        {"ticker": ticker}
+                        {"ticker": ticker, "verified_report": True}
                         for ticker in target
                         if ticker in db_done and ticker not in completed_tickers
                     ],
@@ -572,6 +576,13 @@ class JobQueueService:
                 checkpoint = rcs.empty_analysis_checkpoint(target)
             else:
                 checkpoint = dict(checkpoint or rcs.empty_analysis_checkpoint(target))
+            checkpoint["completed"] = [
+                item
+                for item in (checkpoint.get("completed") or [])
+                if isinstance(item, dict)
+                and item.get("ticker")
+                and rcs.analysis_entry_succeeded(item)
+            ]
             checkpoint.update(
                 status="running",
                 tickers=target,
@@ -907,17 +918,24 @@ class JobQueueService:
             "rating": result.get("rating"),
             "score": result.get("score"),
             "report_id": result.get("report_id"),
+            "decision_ok": result.get("decision_ok", True) is not False,
         }
-        # Replace existing ticker entry if present
+        # Replace existing ticker entry if present. A failed decision must not
+        # occupy the done-set or the next resume treats the ticker as finished.
         completed = [
             c for c in completed
             if not (isinstance(c, dict) and str(c.get("ticker", "")).upper() == ticker.upper())
         ]
-        completed.append(entry)
+        if rcs.analysis_entry_succeeded(entry):
+            completed.append(entry)
         checkpoint["completed"] = completed
         tickers = [str(t).upper() for t in (checkpoint.get("tickers") or [])]
         universe = tickers or [str(t).upper() for t in self.universe.get_tickers()]
-        done = {str(c.get("ticker", "")).upper() for c in completed if isinstance(c, dict)}
+        done = {
+            str(c.get("ticker", "")).upper()
+            for c in completed
+            if rcs.analysis_entry_succeeded(c)
+        }
         # Still running if other core jobs queued/running
         active_core = self._count_active_type(JOB_CORE)
         if active_core == 0 and universe and all(t in done for t in universe):
