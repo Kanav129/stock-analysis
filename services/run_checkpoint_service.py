@@ -222,30 +222,66 @@ def daily_sync_summary(cp: dict | None, universe: list[str] | None = None) -> di
     }
 
 
+def analysis_entry_succeeded(entry: Any) -> bool:
+    """True when a checkpoint row is a real core decision, not a failure envelope.
+
+    ``verified_report`` marks a ticker whose persisted report already passed the
+    decision_ok / rating / score query. Ticker-only stubs and decision_ok false
+    rows do not count — those were written when LLM failures were saved as reports.
+    """
+    if not isinstance(entry, dict) or not entry.get("ticker"):
+        return False
+    if entry.get("verified_report") is True:
+        return True
+    if entry.get("decision_ok") is False:
+        return False
+    rating = entry.get("rating")
+    if rating is None or not str(rating).strip():
+        return False
+    score = entry.get("score")
+    if score is None or not str(score).strip():
+        return False
+    return True
+
+
 def daily_analysis_summary(cp: dict | None, universe: list[str] | None = None) -> dict[str, Any]:
     day = today_key()
     tz_name = str(app_timezone())
     completed = cp.get("completed") or [] if cp else []
-    done_tickers = {str(c.get("ticker", "")).upper() for c in completed if isinstance(c, dict)}
+    done_tickers = {
+        str(c.get("ticker", "")).upper()
+        for c in completed
+        if analysis_entry_succeeded(c)
+    }
     universe = [t.upper() for t in (universe or (cp or {}).get("tickers") or [])]
-    complete = bool(universe) and all(t in done_tickers for t in universe) and (
-        (cp or {}).get("status") in ("completed", "done")
+    stored = (cp or {}).get("status") or "idle"
+    complete = bool(universe) and bool(done_tickers) and all(
+        ticker in done_tickers for ticker in universe
     )
-    # Also treat full coverage as complete even if status lagging
-    if universe and all(t in done_tickers for t in universe) and done_tickers:
-        complete = True
-    status = (cp or {}).get("status") or "idle"
+    status = stored
     if complete:
         status = "completed"
-    elif done_tickers and not complete:
-        status = "partial" if status not in ("running", "failed", "cancelled") else status
+    elif done_tickers and stored not in ("running", "failed", "cancelled"):
+        status = "partial"
+    elif not complete and stored == "completed":
+        status = "partial"
+    # A day marked completed (or healed to partial) with missing decisions must
+    # stay resumable. A still-running checkpoint with zero completions does not.
+    can_resume = (not complete) and bool(universe) and (
+        bool(done_tickers)
+        or status in ("partial", "failed")
+        or stored in ("completed", "partial", "failed")
+    )
+    good_count = len(done_tickers)
     return {
         "date": day,
         "timezone": tz_name,
         "status": status,
-        "can_resume": bool(done_tickers) and not complete,
+        "can_resume": bool(can_resume),
         "already_completed_today": bool(complete),
-        "completed_count": len(done_tickers),
+        "completed_count": good_count,
+        "good_count": good_count,
+        "ratings_ok": bool(complete),
         "universe_count": len(universe),
         "finished_at": (cp or {}).get("finished_at"),
     }

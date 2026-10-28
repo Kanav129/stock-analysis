@@ -26,6 +26,9 @@ jobs:
     # this run may go partial; the 17:30 UTC schedule resumes leftovers.
     timeout-minutes: 360
     steps:
+      - name: Checkout ratings gate
+        uses: actions/checkout@v4
+
       - name: Wake dyno
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
@@ -275,15 +278,27 @@ jobs:
           # Same formula as services/analysis_service.compute_analysis_timeouts (defaults):
           # core=780s/ticker (~13 min), buffer=1.2, min total=600s — Aug 24 measured rate.
           ANALYSIS_START_BODY="$body" python3 <<'PY'
-          import json, math, os
+          import json, math, os, sys
+          sys.path.insert(0, "scripts")
+          from analysis_ratings_gate import analysis_success_is_usable
           body = json.loads(os.environ["ANALYSIS_START_BODY"])
           daily = body.get("daily") or {}
           if body.get("reason") == "sync_not_complete":
               print("Sync not complete — cannot start analysis")
               raise SystemExit(1)
-          if body.get("reason") == "already_completed_today" or (
+          claimed_done = body.get("reason") == "already_completed_today" or (
               body.get("started") is False and body.get("reason") == "already_completed_today"
-          ) or daily.get("already_completed_today"):
+          ) or daily.get("already_completed_today")
+          if claimed_done:
+              if not analysis_success_is_usable(daily):
+                  print(
+                      "Core ratings are not usable "
+                      f"(good_count={daily.get('good_count')}, "
+                      f"universe_count={daily.get('universe_count')}, "
+                      f"ratings_ok={daily.get('ratings_ok')}). "
+                      "Failing so a later resume can re-run analyze."
+                  )
+                  raise SystemExit(1)
               print(f"Already completed today ({body.get('date') or daily.get('date')}) — no-op success")
               with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
                   fh.write("skip_wait=true\n")
@@ -386,24 +401,42 @@ jobs:
             TRANSIENT=0
             echo "$body"
             eval "$(ANALYSIS_BODY="$body" python3 <<'PY'
-          import json, os
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          from analysis_ratings_gate import (
+              analysis_success_is_usable,
+              should_fail_idle_without_ratings,
+          )
           d = json.loads(os.environ["ANALYSIS_BODY"])
           daily = d.get("daily") or {}
           def sh(name, value):
               print(f'{name}={json.dumps(str(value))}')
+          running = bool(d.get("running")) or str(d.get("status") or "") in ("running", "pending")
           sh("running", d.get("running", False))
           sh("status", d.get("status", ""))
           sh("daily_status", daily.get("status", ""))
           sh("can_resume", bool(daily.get("can_resume")))
           sh("already_done", bool(daily.get("already_completed_today")))
           sh("completed_count", daily.get("completed_count") or 0)
+          good = daily.get("good_count")
+          sh("good_count", "" if good is None else int(good))
+          sh("usable", analysis_success_is_usable(daily))
+          sh("fail_idle", should_fail_idle_without_ratings(daily, running=running))
           PY
           )"
             if [ "$already_done" = "True" ]; then
+              if [ "$usable" != "True" ]; then
+                echo "Analysis reported already_completed_today but core ratings are not usable (good_count=${good_count:-unknown})" >&2
+                exit 1
+              fi
               echo "Analysis finished successfully (already_completed_today)"
               exit 0
             fi
             if { [ "$status" = "done" ] || [ "$status" = "completed" ]; } && [ "$daily_status" = "completed" ]; then
+              if [ "$usable" != "True" ]; then
+                echo "Analysis reported completed but core ratings are not usable (good_count=${good_count:-unknown})" >&2
+                exit 1
+              fi
               echo "Analysis finished successfully (completed_count=${completed_count})"
               exit 0
             fi
@@ -412,6 +445,11 @@ jobs:
               continue
             fi
             # Dyno recycle / crash: process idle but HKT checkpoint incomplete.
+            # Zero good decisions is a failed day, not a resume loop.
+            if [ "$fail_idle" = "True" ]; then
+              echo "No usable core ratings (decision_ok false or null rating/score). Failing so a later resume can re-run analyze." >&2
+              exit 1
+            fi
             if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
               if [ "$RESUMES" -ge "$MAX_RESUMES" ]; then
                 echo "Exceeded ${MAX_RESUMES} resume attempts (status=${status}, daily=${daily_status})" >&2

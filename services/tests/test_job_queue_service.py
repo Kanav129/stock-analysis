@@ -75,6 +75,130 @@ def _job_row(
     )
 
 
+def test_enqueue_core_still_skips_when_persisted_reports_are_good():
+    """A dirty checkpoint must not redo tickers that already have a real decision."""
+    db = MagicMock()
+    checkpoint = {
+        "status": "completed",
+        "tickers": ["AAPL", "MSFT"],
+        "completed": [
+            {"ticker": "AAPL", "decision_ok": False, "rating": None, "score": None},
+            {"ticker": "MSFT"},
+        ],
+    }
+    saved = []
+    universe = MagicMock()
+    universe.get_tickers.return_value = ["AAPL", "MSFT"]
+
+    with (
+        patch("services.job_queue_service.get_db_client", return_value=db),
+        patch("services.job_queue_service.UniverseService", return_value=universe),
+        patch("services.job_queue_service.rcs.today_key", return_value="2026-10-26"),
+        patch("services.job_queue_service.rcs.load_analysis", return_value=checkpoint),
+        patch(
+            "services.job_queue_service.rcs.save_analysis",
+            side_effect=lambda data, day=None: saved.append(dict(data)),
+        ),
+        patch(
+            "services.analysis_service.analysis_service._core_reports_done_for_skip",
+            return_value={"AAPL", "MSFT"},
+        ),
+    ):
+        svc = JobQueueService()
+        svc._started = True
+        out = svc.enqueue(JOB_CORE, ["AAPL", "MSFT"])
+
+    assert out["reason"] == "already_completed_today"
+    assert out["started"] is False
+    assert saved[-1]["status"] == "completed"
+    assert all(item.get("verified_report") is True for item in saved[-1]["completed"])
+    db.execute_values.assert_not_called()
+
+
+def test_enqueue_core_does_not_skip_checkpoint_without_decisions():
+    db = MagicMock()
+    cols = _job_cols()
+    db.fetch_query.side_effect = [
+        ([], cols),
+        ([(0, 2)], ["running", "queued"]),
+    ]
+    checkpoint = {
+        "status": "completed",
+        "tickers": ["AAPL", "MSFT"],
+        "completed": [
+            {"ticker": "AAPL", "decision_ok": False, "rating": None, "score": None},
+            {"ticker": "MSFT"},
+        ],
+    }
+    saved = []
+    universe = MagicMock()
+    universe.get_tickers.return_value = ["AAPL", "MSFT"]
+
+    with (
+        patch("services.job_queue_service.get_db_client", return_value=db),
+        patch("services.job_queue_service.UniverseService", return_value=universe),
+        patch("services.job_queue_service.rcs.today_key", return_value="2026-10-26"),
+        patch("services.job_queue_service.rcs.load_analysis", return_value=checkpoint),
+        patch(
+            "services.job_queue_service.rcs.save_analysis",
+            side_effect=lambda data, day=None: saved.append(dict(data)),
+        ),
+        patch(
+            "services.analysis_service.analysis_service._core_reports_done_for_skip",
+            return_value=set(),
+        ),
+    ):
+        svc = JobQueueService()
+        svc._started = True
+        out = svc.enqueue(JOB_CORE, ["AAPL", "MSFT"])
+
+    assert out.get("reason") != "already_completed_today"
+    assert out["started"] is True
+    assert {job["ticker"] for job in out["enqueued"]} == {"AAPL", "MSFT"}
+    assert saved
+    assert saved[-1]["status"] == "running"
+    assert saved[-1].get("completed") == []
+
+
+def test_append_checkpoint_does_not_finish_day_on_failed_decision():
+    saved = []
+    marked = []
+    checkpoint = {
+        "status": "running",
+        "tickers": ["AAPL", "MSFT"],
+        "completed": [
+            {"ticker": "MSFT", "rating": "BUY", "score": 12, "decision_ok": True},
+        ],
+    }
+
+    with (
+        patch("services.job_queue_service.get_db_client", return_value=MagicMock()),
+        patch("services.job_queue_service.UniverseService"),
+        patch("services.job_queue_service.rcs.today_key", return_value="2026-10-26"),
+        patch("services.job_queue_service.rcs.load_analysis", return_value=checkpoint),
+        patch(
+            "services.job_queue_service.rcs.save_analysis",
+            side_effect=lambda data, day=None: saved.append(dict(data)),
+        ),
+        patch(
+            "services.job_queue_service.rcs.mark_last_analysis_date",
+            side_effect=lambda day=None: marked.append(day),
+        ),
+        patch.object(JobQueueService, "_count_active_type", return_value=0),
+    ):
+        svc = JobQueueService()
+        svc._started = True
+        svc._append_analysis_checkpoint(
+            "AAPL",
+            {"rating": None, "score": None, "decision_ok": False, "report_id": None},
+        )
+
+    assert saved
+    assert saved[-1]["status"] != "completed"
+    assert [item["ticker"] for item in saved[-1]["completed"]] == ["MSFT"]
+    assert marked == []
+
+
 def test_enqueue_dedupes_active_job():
     db = MagicMock()
     existing_id = str(uuid4())

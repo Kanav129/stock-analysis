@@ -54,6 +54,68 @@ def test_sync_todos_resume_and_force():
     assert forced["cleared"] is True
 
 
+def test_daily_analysis_summary_does_not_complete_failed_decisions():
+    """Failure rows and ticker-only stubs are not a finished analysis day."""
+    cp = {
+        "status": "completed",
+        "tickers": ["AAPL", "MSFT"],
+        "completed": [
+            {"ticker": "AAPL", "rating": None, "score": None, "decision_ok": False},
+            {"ticker": "MSFT"},
+        ],
+        "finished_at": "2026-10-26T04:00:00",
+    }
+    summary = rcs.daily_analysis_summary(cp, ["AAPL", "MSFT"])
+    assert summary["already_completed_today"] is False
+    assert summary["ratings_ok"] is False
+    assert summary["good_count"] == 0
+    assert summary["completed_count"] == 0
+    assert summary["status"] == "partial"
+    assert summary["can_resume"] is True
+
+
+def test_daily_analysis_summary_accepts_legacy_and_verified_reports():
+    legacy = {
+        "status": "completed",
+        "completed": [
+            {"ticker": "AAPL", "rating": "BUY", "score": 10},
+            {"ticker": "MSFT", "rating": "HOLD", "score": 0, "decision_ok": True},
+        ],
+    }
+    summary = rcs.daily_analysis_summary(legacy, ["AAPL", "MSFT"])
+    assert summary["already_completed_today"] is True
+    assert summary["ratings_ok"] is True
+    assert summary["good_count"] == 2
+    assert summary["can_resume"] is False
+
+    verified = {
+        "status": "completed",
+        "completed": [
+            {"ticker": "AAPL", "verified_report": True},
+            {"ticker": "MSFT", "verified_report": True},
+        ],
+    }
+    verified_summary = rcs.daily_analysis_summary(verified, ["AAPL", "MSFT"])
+    assert verified_summary["ratings_ok"] is True
+    assert verified_summary["good_count"] == 2
+
+
+def test_daily_analysis_summary_partial_when_only_some_decisions_ok():
+    cp = {
+        "status": "completed",
+        "completed": [
+            {"ticker": "AAPL", "rating": "BUY", "score": 8, "decision_ok": True},
+            {"ticker": "MSFT", "rating": None, "score": None, "decision_ok": False},
+        ],
+    }
+    summary = rcs.daily_analysis_summary(cp, ["AAPL", "MSFT"])
+    assert summary["already_completed_today"] is False
+    assert summary["ratings_ok"] is False
+    assert summary["good_count"] == 1
+    assert summary["can_resume"] is True
+    assert summary["status"] == "partial"
+
+
 def test_save_json_upserts_app_settings():
     db = MagicMock()
     with patch("services.run_checkpoint_service.get_db_client", return_value=db):
