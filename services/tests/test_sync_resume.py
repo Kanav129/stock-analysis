@@ -158,6 +158,114 @@ def test_start_resumes_todos_and_sizes_timeouts_from_remaining_counts():
     _close_scheduled_coroutine(loop.return_value.create_task)
 
 
+def test_get_status_heals_zombie_memory_when_worker_is_dead():
+    """status=running and running=false left the UI on 'Fetching news · VRTX'."""
+    svc = SyncService()
+    svc._running = False
+    svc._status.update(
+        status="running",
+        running=True,
+        message="Fetching news · VRTX (33/33)",
+        current_ticker="VRTX",
+        stage="news",
+    )
+    cp = {
+        "status": "running",
+        "tickers": ["VRTX"],
+        "news_done": [],
+        "prices_done": ["VRTX"],
+        "vectors_done": False,
+        "finished_at": None,
+    }
+    saved = {}
+
+    def fake_save(data, day=None):
+        saved["cp"] = dict(data)
+
+    with (
+        patch.object(svc.universe, "get_tickers", return_value=["VRTX"]),
+        patch("services.sync_service.rcs.load_sync", return_value=cp),
+        patch("services.sync_service.rcs.save_sync", side_effect=fake_save),
+    ):
+        result = svc.get_status()
+
+    assert result["running"] is False
+    assert result["status"] == "partial"
+    assert result["current_ticker"] is None
+    assert "Fetching news" not in (result.get("message") or "")
+    assert saved["cp"]["status"] == "partial"
+    assert result["daily"]["can_resume"] is True
+    assert result["daily"]["status"] == "partial"
+
+
+def test_get_status_keeps_live_worker_message():
+    svc = SyncService()
+    svc._running = True
+    svc._task = None
+    svc._status.update(
+        status="running",
+        message="Fetching news · VRTX (33/33)",
+        current_ticker="VRTX",
+    )
+    cp = {
+        "status": "running",
+        "tickers": ["VRTX"],
+        "news_done": [],
+        "prices_done": ["VRTX"],
+        "vectors_done": False,
+    }
+
+    with (
+        patch.object(svc.universe, "get_tickers", return_value=["VRTX"]),
+        patch("services.sync_service.rcs.load_sync", return_value=cp),
+        patch("services.sync_service.rcs.save_sync") as save_sync,
+        patch("services.sync_service.rcs.daily_sync_summary", return_value={"status": "running"}),
+    ):
+        result = svc.get_status()
+
+    save_sync.assert_not_called()
+    assert result["running"] is True
+    assert result["status"] == "running"
+    assert result["current_ticker"] == "VRTX"
+    assert "VRTX" in result["message"]
+
+
+def test_get_status_heals_when_task_finished_but_flag_still_set():
+    svc = SyncService()
+    svc._running = True
+
+    class _Finished:
+        def done(self) -> bool:
+            return True
+
+    svc._task = _Finished()
+    svc._status.update(
+        status="running",
+        message="Fetching news · VRTX (33/33)",
+        current_ticker="VRTX",
+    )
+    cp = {
+        "status": "running",
+        "tickers": ["VRTX"],
+        "news_done": [],
+        "prices_done": [],
+        "vectors_done": False,
+    }
+
+    with (
+        patch.object(svc.universe, "get_tickers", return_value=["VRTX"]),
+        patch("services.sync_service.rcs.load_sync", return_value=cp),
+        patch("services.sync_service.rcs.save_sync") as save_sync,
+    ):
+        result = svc.get_status()
+
+    save_sync.assert_called_once()
+    assert save_sync.call_args.args[0]["status"] == "partial"
+    assert result["running"] is False
+    assert result["status"] != "running"
+    assert svc._running is False
+
+
 def test_get_status_embeds_daily_summary():
     svc = SyncService()
     svc._status["tickers"] = ["AAPL"]
@@ -221,6 +329,60 @@ def test_stale_worker_callback_does_not_save_after_generation_changes():
 
     save_sync.assert_not_called()
     mark_last.assert_not_called()
+
+
+def test_worker_records_failed_news_ticker_and_continues():
+    svc = SyncService()
+    svc._running = True
+    cp = {
+        "status": "running",
+        "tickers": ["VRTX", "AAPL"],
+        "news_done": [],
+        "prices_done": ["VRTX", "AAPL"],
+        "vectors_done": True,
+        "suggestions_done": True,
+        "errors": [],
+    }
+    news = MagicMock()
+
+    def scrape(tickers, on_progress=None, on_ticker_done=None, on_ticker_failed=None, **_k):
+        assert on_ticker_failed is not None
+        on_ticker_failed("VRTX", TimeoutError("news fetch timed out after 60s"))
+        on_ticker_done("AAPL")
+
+    news.scrape_all_tickers.side_effect = scrape
+    snapshots = []
+
+    with (
+        patch(
+            "services.sync_service.NewsScraperFactory.create_scraper",
+            return_value=news,
+        ),
+        patch("services.sync_service.StockScraperFactory") as stock_factory,
+        patch(
+            "services.sync_service.rcs.save_sync",
+            side_effect=lambda data, day=None: snapshots.append(dict(data)),
+        ),
+        patch("services.sync_service.rcs.mark_last_sync_date"),
+        patch("services.outcome_service.outcome_service.refresh", return_value=None),
+    ):
+        asyncio.run(
+            svc._run_worker(
+                ["VRTX", "AAPL"],
+                ["VRTX", "AAPL"],
+                [],
+                False,
+                checkpoint_seed=cp,
+                day="2026-11-05",
+            )
+        )
+
+    stock_factory.assert_not_called()
+    assert snapshots[-1]["news_done"] == ["VRTX", "AAPL"]
+    assert any(
+        item.get("ticker") == "VRTX" and "timed out" in item.get("error", "")
+        for item in snapshots[-1]["errors"]
+    )
 
 
 def test_worker_checkpoints_each_ticker_and_completes():

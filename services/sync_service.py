@@ -144,17 +144,56 @@ class SyncService:
     def is_running(self) -> bool:
         return self._running
 
+    def _sync_worker_alive(self) -> bool:
+        """True only while this process still has the sync task in flight.
+
+        ``_running`` is cleared when the worker exits, but ``_status`` can stay
+        ``running`` (the UI keeps "Fetching news · VRTX"). A finished task with
+        the flag still set is the same zombie.
+        """
+        if not self._running:
+            return False
+        task = self._task
+        if task is not None and task.done():
+            return False
+        return True
+
     def get_status(self) -> dict[str, Any]:
         checkpoint = rcs.load_sync()
         # After a Render recycle, RAM is idle but the checkpoint may still say
         # "running". Heal to partial so UI/cron know they can resume.
-        if checkpoint and checkpoint.get("status") == "running" and not self._running:
-            checkpoint = dict(checkpoint)
-            checkpoint["status"] = "partial"
-            try:
-                rcs.save_sync(checkpoint)
-            except Exception as exc:
-                logger.warning("Could not heal stale sync checkpoint: %s", exc)
+        # Also correct in-memory status when it still says running but no worker
+        # is alive, so clients stop showing the last ticker forever.
+        if not self._sync_worker_alive():
+            if self._running:
+                self._running = False
+                self._status["running"] = False
+            if checkpoint and checkpoint.get("status") == "running":
+                checkpoint = dict(checkpoint)
+                checkpoint["status"] = "partial"
+                try:
+                    rcs.save_sync(checkpoint)
+                except Exception as exc:
+                    logger.warning("Could not heal stale sync checkpoint: %s", exc)
+            if self._status.get("status") == "running":
+                healed = "idle"
+                if checkpoint and checkpoint.get("status") in (
+                    "partial",
+                    "error",
+                    "cancelled",
+                    "completed",
+                    "idle",
+                ):
+                    healed = str(checkpoint["status"])
+                elif checkpoint:
+                    healed = "partial"
+                self._status["status"] = healed
+                self._status["running"] = False
+                self._status["current_ticker"] = None
+                if healed != "completed":
+                    self._status["message"] = (
+                        "Sync worker is not running. Resume to continue."
+                    )
         universe = [str(ticker).upper() for ticker in self.universe.get_tickers()]
         return {
             **self._status,
@@ -463,6 +502,15 @@ class SyncService:
                         done.append(normalized)
                     rcs.save_sync(checkpoint, day=day)
 
+            def _news_failed(ticker: str, exc: BaseException) -> None:
+                message = f"news: {exc}"
+                with self._generation_lock:
+                    if generation != self._run_generation:
+                        return
+                    errors.append({"ticker": str(ticker).upper(), "error": message})
+                    checkpoint["errors"] = list(errors)
+                _checkpoint_ticker("news_done", ticker)
+
             def _news_progress(ticker: str, index: int, total_n: int) -> None:
                 if not _is_current():
                     return
@@ -548,6 +596,7 @@ class SyncService:
                                 "news_done",
                                 ticker,
                             ),
+                            on_ticker_failed=_news_failed,
                             should_continue=_should_continue,
                         ),
                     ),
