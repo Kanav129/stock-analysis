@@ -2,7 +2,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import yfinance as yf
 from dotenv import load_dotenv
@@ -12,12 +12,29 @@ from scraper.concurrency import sync_max_concurrent
 from scraper.generic_scraper import GenericScraper
 from utils.logger import logger
 
+# One hung Yahoo news lookup must not block the rest of the daily sync.
+# Measured news fetches are ~30s/ticker; 60s leaves headroom without a multi-hour stall.
+NEWS_FETCH_TIMEOUT_SECONDS = 60
+
+
+def news_ticker_timeout_seconds() -> float:
+    raw = os.getenv("SYNC_NEWS_TICKER_TIMEOUT_SECONDS", "")
+    if raw.strip():
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return float(NEWS_FETCH_TIMEOUT_SECONDS)
+
 
 class NewsScraper(GenericScraper):
     def __init__(self, collection_name, scrape_num_articles=1):
         self.collection_name = collection_name
         self.scrape_num_articles = scrape_num_articles
         self.mongo_client = MongoDBClient()
+        self._insert_guards: Dict[str, Callable[[], bool]] = {}
 
     @staticmethod
     def _parse_yfinance_item(item: Dict[str, Any], ticker: str) -> Optional[Dict[str, Any]]:
@@ -73,15 +90,65 @@ class NewsScraper(GenericScraper):
             logger.warning(f"No news articles found for {ticker}.")
             return []
 
+        guard = self._insert_guards.get(ticker)
+        if guard is not None and not guard():
+            logger.warning(f"Dropping news for {ticker} after the fetch timed out.")
+            return []
+
         self.mongo_client.insert_many(self.collection_name, articles)
         logger.info(f"Inserted {len(articles)} articles for {ticker} into MongoDB.")
         return articles
+
+    def _scrape_one(self, ticker: str) -> None:
+        """Fetch one ticker, giving up if Yahoo news does not return in time.
+
+        The underlying yfinance call can block past any socket timeout. The
+        worker thread is a daemon so a late response cannot keep the process
+        alive, and it is not allowed to insert articles after we have moved on.
+        """
+        timeout = news_ticker_timeout_seconds()
+        error: list[BaseException] = []
+        abandoned = threading.Event()
+        key = ticker.upper()
+        self._insert_guards[key] = lambda: not abandoned.is_set()
+
+        def target() -> None:
+            try:
+                self.scrape_articles(ticker)
+            except BaseException as exc:  # re-raised on the caller thread
+                error.append(exc)
+
+        thread = threading.Thread(target=target, name=f"news-{ticker}", daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            abandoned.set()
+            raise TimeoutError(f"news fetch timed out after {timeout:g}s")
+        if error:
+            self._insert_guards.pop(key, None)
+            raise error[0]
+        self._insert_guards.pop(key, None)
+
+    @staticmethod
+    def _record_failure(
+        ticker: str,
+        exc: BaseException,
+        on_ticker_failed: Optional[Callable[..., None]],
+    ) -> None:
+        logger.error(f"Error while scraping news for {ticker}: {exc}")
+        if on_ticker_failed is None:
+            return
+        try:
+            on_ticker_failed(ticker, exc)
+        except Exception:
+            logger.exception(f"News failure callback failed for {ticker}")
 
     def scrape_all_tickers(
         self,
         tickers,
         on_progress=None,
         on_ticker_done=None,
+        on_ticker_failed=None,
         should_continue=None,
     ):
         total = len(tickers)
@@ -98,9 +165,9 @@ class NewsScraper(GenericScraper):
                     except Exception:
                         pass
                 try:
-                    self.scrape_articles(ticker)
+                    self._scrape_one(ticker)
                 except Exception as e:
-                    logger.error(f"Error while scraping news for {ticker}: {e}")
+                    self._record_failure(ticker, e, on_ticker_failed)
                     continue
                 if on_ticker_done:
                     try:
@@ -114,7 +181,7 @@ class NewsScraper(GenericScraper):
 
         def _one(ticker: str) -> str:
             logger.info(f"Scraping news for ticker: {ticker}")
-            self.scrape_articles(ticker)
+            self._scrape_one(ticker)
             return ticker
 
         with ThreadPoolExecutor(max_workers=max_c) as pool:
@@ -134,7 +201,7 @@ class NewsScraper(GenericScraper):
                 try:
                     fut.result()
                 except Exception as e:
-                    logger.error(f"Error while scraping news for {ticker}: {e}")
+                    self._record_failure(ticker, e, on_ticker_failed)
                     continue
                 with lock:
                     done_count += 1

@@ -152,6 +152,9 @@ jobs:
           echo "Polling /sync/status up to ${MAX_POLLS} times every ${POLL_SECONDS}s"
           # If Render restarts mid-run, in-memory status becomes idle but the
           # daily checkpoint still has remaining work — re-POST /cron/sync.
+          # A zombie is different: status stays "running" (UI still says
+          # "Fetching news · VRTX") while running is false. Only running=true
+          # means a live worker. Resumable checkpoints POST /cron/sync.
           # Transient edge errors (520/502/503/504/timeouts) must not abort the
           # wait loop while the sync job is still running on the dyno.
           for i in $(seq 1 "$MAX_POLLS"); do
@@ -204,15 +207,33 @@ jobs:
                   chroma = msg
                   break
           sh("chroma_err", chroma)
+          def poll_action(payload):
+              """Wait while a live worker runs; resume a zombie or partial checkpoint."""
+              daily = payload.get("daily") or {}
+              running = bool(payload.get("running"))
+              status = str(payload.get("status") or "")
+              daily_status = str(daily.get("status") or "")
+              can_resume = bool(daily.get("can_resume"))
+              already_done = bool(daily.get("already_completed_today"))
+              if already_done or status == "completed" or daily_status == "completed":
+                  return "success"
+              # running=true is the only liveness signal. status==running with
+              # running false is the zombie left after a dead worker.
+              if running:
+                  return "wait"
+              if can_resume or daily_status in ("partial", "running"):
+                  return "resume"
+              return "fail"
+          sh("action", poll_action(d))
           PY
           )"
-            if [ "$already_done" = "True" ] || [ "$status" = "completed" ] || [ "$daily_status" = "completed" ]; then
+            if [ "$action" = "success" ]; then
               # Prefer daily completion over in-memory running: post-stages
               # (outcome/suggestions) may still be finishing after coverage is done.
               echo "Sync finished successfully"
               exit 0
             fi
-            if [ "$running" = "True" ] || [ "$status" = "running" ]; then
+            if [ "$action" = "wait" ]; then
               sleep "$POLL_SECONDS"
               continue
             fi
@@ -225,7 +246,7 @@ jobs:
                 exit 1
               fi
             fi
-            if [ "$can_resume" = "True" ] || [ "$daily_status" = "partial" ] || [ "$daily_status" = "running" ]; then
+            if [ "$action" = "resume" ]; then
               if [ "$RESUMES" -ge "$MAX_RESUMES" ]; then
                 echo "Exceeded ${MAX_RESUMES} resume attempts (status=${status}, daily=${daily_status})" >&2
                 exit 1
