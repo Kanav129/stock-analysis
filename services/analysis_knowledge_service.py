@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from db.db_factory import get_db_client
-from services.outcome_service import MIN_SLICE_N, score_band_key
+from services.outcome_service import MIN_SLICE_N, hold_outcome_rule, score_band_key
 from utils.logger import logger
 
 MAX_PRIORS_CHARS = 2000
@@ -157,6 +157,7 @@ def build_priors_markdown(
         "_Use these priors to calibrate conviction only. "
         "Current research dominates; if priors conflict, say so in reasoning._"
     )
+    lines.append(hold_outcome_rule())
 
     text = "\n".join(lines)
     if len(text) <= max_chars:
@@ -213,6 +214,7 @@ class AnalysisKnowledgeService:
                 "Current research dominates; do not copy the last tag. "
                 "If last +20d missed, say so in reasoning rather than blindly reversing._"
             )
+            lines.append(hold_outcome_rule())
             return "\n".join(lines)
         except Exception as exc:
             logger.warning("Core priors failed for %s: %s", ticker, exc)

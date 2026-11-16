@@ -46,3 +46,16 @@ def test_rubric_prompt_reasons_then_scores():
     assert "strong_sell" in RUBRIC_V1_SYSTEM
     assert "before" in RUBRIC_V1_SYSTEM.lower()
     assert "Do NOT pick an overall integer score" in RUBRIC_V1_SYSTEM
+
+
+def test_prompts_score_hold_instead_of_leaving_it_ungraded():
+    from evals.decision_scoring.prompts import BASELINE_SYSTEM, RUBRIC_V1_SYSTEM
+    from rag_graphs.research_graph.nodes.synthesize_decision import DECISION_SYSTEM
+
+    for prompt in (BASELINE_SYSTEM, TIGHT_V1_SYSTEM, SCORE_FIRST_SYSTEM, RUBRIC_V1_SYSTEM, DECISION_SYSTEM):
+        assert "HOLD is a scored call" in prompt
+        assert "≥ 10% at 5-day" in prompt
+        assert "≥ 15% at 20-day" in prompt
+        assert "miss, not n/a" in prompt
+        assert "do not assume HOLD cannot be wrong" in prompt
+        assert "do nothing this week at current prices" in prompt

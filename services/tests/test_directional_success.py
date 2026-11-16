@@ -98,7 +98,7 @@ def test_one_core_row_per_ticker_per_hkt_week_keeps_earliest():
     assert card["overall"]["5d"]["hit_rate"] == 1.0
 
 
-def test_hold_is_listed_and_excluded_from_denominator():
+def test_hold_is_listed_and_counted_in_the_rate():
     card = build_directional_success(
         [
             _row(
@@ -118,10 +118,10 @@ def test_hold_is_listed_and_excluded_from_denominator():
                 rated_at=WEEK_A,
                 rating="HOLD",
                 score=0,
-                return_5d=0.04,
+                return_5d=0.008,
                 return_20d=0.05,
-                direction_hit_5d=None,
-                direction_hit_20d=None,
+                direction_hit_5d=True,
+                direction_hit_20d=True,
             ),
             _row(
                 rating_id=3,
@@ -137,9 +137,17 @@ def test_hold_is_listed_and_excluded_from_denominator():
         ]
     )
     outcomes = {r["ticker"]: r["outcome"] for r in card["week"]["rows"]}
-    assert outcomes == {"AAPL": "hit", "IBM": "miss", "MSFT": "unscored"}
-    assert card["overall"]["5d"] == {"hit_rate": 0.5, "hits": 1, "n": 2}
-    assert card["overall"]["20d"] == {"hit_rate": 0.5, "hits": 1, "n": 2}
+    assert outcomes == {"AAPL": "hit", "IBM": "miss", "MSFT": "hit"}
+    # BUY hit, HOLD hit, SELL miss — HOLD is in the denominator.
+    assert card["overall"]["5d"] == {"hit_rate": 2 / 3, "hits": 2, "n": 3}
+    assert card["overall"]["20d"] == {"hit_rate": 2 / 3, "hits": 2, "n": 3}
+    disclaimer = card["disclaimer"].lower()
+    assert "weekly core calls only" in disclaimer
+    assert "10%" in card["disclaimer"]
+    assert "15%" in card["disclaimer"]
+    assert "not a performance promise" in disclaimer
+    assert "excluded" not in disclaimer
+    assert "out of the rate" not in disclaimer
 
 
 def test_pending_latest_week_falls_back_to_previous_complete_week():
@@ -281,8 +289,8 @@ def test_pending_week_with_no_earlier_complete_week():
 def test_empty_history():
     card = build_directional_success([])
     assert card["scope"] == "core"
-    assert "experiment" in card["disclaimer"].lower()
     assert "promise" in card["disclaimer"].lower()
+    assert "hold" in card["disclaimer"].lower()
     assert card["week"]["status"] == "empty"
     assert card["week"]["rows"] == []
     assert card["overall"]["5d"]["n"] == 0

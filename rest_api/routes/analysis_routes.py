@@ -101,12 +101,30 @@ def cancel_analysis():
 
 
 @router.post("/analysis/outcomes/refresh")
-def refresh_rating_outcomes(limit: Optional[int] = Query(None, ge=1, le=5000)):
-    """Backfill / refresh forward +5d/+20d outcomes and calibration snapshots."""
+def refresh_rating_outcomes(
+    limit: Optional[int] = Query(None, ge=1, le=5000),
+    holds_only: bool = Query(
+        False,
+        description=(
+            "Rewrite stored HOLD direction_hit_5d/20d from saved returns "
+            "and rebuild today's calibration snapshots. Skips the price walk."
+        ),
+    ),
+):
+    """Backfill / refresh forward +5d/+20d outcomes and calibration snapshots.
+
+    After the HOLD band change, an admin can regrade existing rows without
+    recomputing prices:
+
+        POST /analysis/outcomes/refresh?holds_only=true
+
+    Authorization: Bearer admin key. Idempotent. A full refresh (no flag)
+    also regrades stored HOLDs after the price walk and rebuilds snapshots.
+    """
     from services.outcome_service import outcome_service
 
     try:
-        return outcome_service.refresh(limit=limit)
+        return outcome_service.refresh(limit=limit, holds_only=holds_only)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

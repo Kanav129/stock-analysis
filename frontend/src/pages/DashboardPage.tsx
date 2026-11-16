@@ -15,7 +15,7 @@ import { Sparkline } from '../components/Sparkline';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 import { AnalysisErrorIcon } from '../components/AnalysisErrorIcon';
 import { RatingBadge } from '../components/RatingBadge';
-import { DirectionalSuccessCard } from '../components/DirectionalSuccessCard';
+import { DirectionalSuccessControl } from '../components/DirectionalSuccessCard';
 import { WatchlistSuggestions } from '../components/WatchlistSuggestions';
 import type { DeskSnapshot, JobsSnapshot, Rating } from '../api/types';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
@@ -276,11 +276,22 @@ export function DashboardPage() {
         </p>
       ) : null}
 
-      {guest ? null : deskPending ? (
-        <LoadingState label="Loading portfolio…" compact minHeight="3rem" />
-      ) : (
-        <PortfolioSummaryCard summary={summary} />
-      )}
+      <div
+        className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5 border-b border-[var(--gridline)] pb-2"
+        aria-label="Portfolio summary"
+      >
+        {guest ? null : deskPending ? (
+          <LoadingState
+            label="Loading portfolio…"
+            compact
+            minHeight="1.5rem"
+            className="items-start py-1"
+          />
+        ) : (
+          <PortfolioSummaryCard summary={summary} />
+        )}
+        <DirectionalSuccessControl className="ml-auto" />
+      </div>
 
       <Panel title="Calls to review" subtitle="Sell / reduce / buy first · then by |score|" dense>
         {callsToReview.length === 0 ? (
@@ -354,8 +365,6 @@ export function DashboardPage() {
           </div>
         )}
       </Panel>
-
-      <DirectionalSuccessCard />
 
       <div className="terminal-grid">
         <div className="col-span-12 lg:col-span-8">
