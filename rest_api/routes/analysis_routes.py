@@ -111,6 +111,17 @@ def refresh_rating_outcomes(limit: Optional[int] = Query(None, ge=1, le=5000)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/analysis/outcomes/directional")
+def directional_rating_outcomes():
+    """Weekly core directional hit rate. Deterministic read of rating_outcomes."""
+    from services.outcome_service import outcome_service
+
+    try:
+        return outcome_service.directional_success()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/analysis/status")
 def analysis_status():
     return analysis_service.get_status()

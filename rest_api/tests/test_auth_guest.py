@@ -88,6 +88,22 @@ def test_guest_cannot_run_analysis():
     assert resp.status_code == 403
 
 
+@patch("services.outcome_service.outcome_service.directional_success")
+def test_guest_can_read_directional_success(mock_card):
+    """Same read surface as the rest of the desk. Not a public unauthenticated route."""
+    mock_card.return_value = {"scope": "core", "overall": {}, "week": {"rows": []}}
+    open_resp = client.get("/analysis/outcomes/directional")
+    assert open_resp.status_code == 401
+    resp = client.get("/analysis/outcomes/directional", headers=_guest_headers())
+    assert resp.status_code == 200
+    assert resp.json()["scope"] == "core"
+
+
+def test_guest_cannot_refresh_outcomes():
+    resp = client.post("/analysis/outcomes/refresh", headers=_guest_headers())
+    assert resp.status_code == 403
+
+
 def test_guest_cannot_sync_data():
     resp = client.post("/sync/data", json={}, headers=_guest_headers())
     assert resp.status_code == 403

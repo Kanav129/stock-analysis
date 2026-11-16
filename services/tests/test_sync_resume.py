@@ -596,7 +596,7 @@ def test_worker_marks_completed_before_suggestions_on_resume():
             ),
         ),
         patch("services.sync_service.rcs.mark_last_sync_date") as mark_last,
-        patch("services.outcome_service.outcome_service.refresh", return_value=None),
+        patch("services.outcome_service.outcome_service.refresh", return_value=None) as refresh,
         patch(
             "services.idea_scan_service.IdeaScanService.rebuild",
             side_effect=fake_rebuild,
@@ -622,6 +622,7 @@ def test_worker_marks_completed_before_suggestions_on_resume():
     assert svc._status["status"] == "completed"
     assert svc._status["percent"] == 100
     mark_last.assert_called_once_with("2026-08-13")
+    refresh.assert_called_once_with()
 
 
 def test_compute_resume_timeouts_includes_post_stage_buffer_when_suggestions_needed():

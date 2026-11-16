@@ -368,5 +368,38 @@ class OutcomeService:
             count += 1
         return count
 
+    def directional_success(self) -> dict[str, Any]:
+        """Core-only weekly directional card from rating_outcomes.
+
+        Ratings that the daily sync has not refreshed yet are included via
+        LEFT JOIN so the latest HKT week can show as not ready.
+        """
+        from services.directional_success import build_directional_success
+
+        rows, cols = self._db.fetch_query(
+            """
+            SELECT r.id AS rating_id,
+                   r.ticker,
+                   r.created_at AS rated_at,
+                   r.rating,
+                   r.score,
+                   r.report_type,
+                   o.return_5d,
+                   o.return_20d,
+                   o.direction_hit_5d,
+                   o.direction_hit_20d,
+                   o.status
+            FROM stock_ratings r
+            LEFT JOIN rating_outcomes o ON o.rating_id = r.id
+            WHERE r.decision_ok IS TRUE
+              AND r.rating IS NOT NULL
+              AND r.score IS NOT NULL
+              AND r.report_type = 'core'
+            ORDER BY r.created_at ASC
+            """
+        )
+        parsed = [dict(zip(cols, row)) for row in (rows or [])]
+        return build_directional_success(parsed)
+
 
 outcome_service = OutcomeService()
