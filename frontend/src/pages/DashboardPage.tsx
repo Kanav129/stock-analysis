@@ -15,6 +15,7 @@ import { Sparkline } from '../components/Sparkline';
 import { LoadingSpinner, LoadingState } from '../components/LoadingSpinner';
 import { AnalysisErrorIcon } from '../components/AnalysisErrorIcon';
 import { RatingBadge } from '../components/RatingBadge';
+import { DirectionalSuccessCard } from '../components/DirectionalSuccessCard';
 import { WatchlistSuggestions } from '../components/WatchlistSuggestions';
 import type { DeskSnapshot, JobsSnapshot, Rating } from '../api/types';
 import { useLivePriceRefresh } from '../hooks/useLivePriceRefresh';
@@ -146,6 +147,7 @@ export function DashboardPage() {
       void qc.invalidateQueries({ queryKey: ['ratings'] });
       void qc.invalidateQueries({ queryKey: ['watchlist'] });
       void qc.invalidateQueries({ queryKey: ['report'] });
+      void qc.invalidateQueries({ queryKey: ['directional-success'] });
     }
     wasRunning.current = running;
   }, [analysisQ.data?.running, qc]);
@@ -352,6 +354,8 @@ export function DashboardPage() {
           </div>
         )}
       </Panel>
+
+      <DirectionalSuccessCard />
 
       <div className="terminal-grid">
         <div className="col-span-12 lg:col-span-8">
