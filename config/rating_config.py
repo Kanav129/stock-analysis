@@ -1,6 +1,8 @@
 """Shared rating tags and AI score scale (−100 strong sell … +100 strong buy)."""
 from __future__ import annotations
 
+import os
+
 # Ordered bearish → bullish
 RATING_TAGS = (
     "STRONG_SELL",
@@ -26,8 +28,16 @@ RATING_SCORE_BANDS = {
 RATING_SET = set(RATING_TAGS)
 
 # After a successful core report, auto-enqueue deep dive when |score| >= this.
-# |30| covers strong ACCUMULATE/REDUCE and the BUY/SELL bands; weaker scores stay core-only.
+# |30| covers strong ACCUMULATE/REDUCE and the BUY/SELL bands. This rule is not
+# capped and is not turned off when the decision model says no.
 AUTO_DEEP_SCORE_ABS_THRESHOLD = 30
+
+# Extra deep dives the core decision model may request per ISO week when
+# |score| is below AUTO_DEEP_SCORE_ABS_THRESHOLD. Does not limit the score rule.
+# Override with MODEL_DEEP_WEEKLY_CAP (integer). 0 blocks model requests.
+# Negative, "none", "off", or "unlimited" disables the cap. The week is
+# Monday 00:00 through the next Monday in APP_TIMEZONE (default Asia/Hong_Kong).
+DEFAULT_MODEL_DEEP_WEEKLY_CAP = 8
 
 # BUY/STRONG_BUY entry must be within this fraction of live price.
 BUY_ENTRY_MAX_DISTANCE = 0.04
@@ -61,6 +71,26 @@ def normalize_rating(rating: str | None) -> str:
     }
     key = aliases.get(key, key)
     return key if key in RATING_SET else "HOLD"
+
+
+def model_deep_weekly_cap() -> int | None:
+    """Cap on model-requested deeps for the current ISO week.
+
+    ``None`` means unlimited. The |score| threshold is not subject to this cap.
+    """
+    raw = os.getenv("MODEL_DEEP_WEEKLY_CAP")
+    if raw is None or not str(raw).strip():
+        return DEFAULT_MODEL_DEEP_WEEKLY_CAP
+    text = str(raw).strip().lower()
+    if text in {"none", "unlimited", "off"}:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return DEFAULT_MODEL_DEEP_WEEKLY_CAP
+    if value < 0:
+        return None
+    return value
 
 
 def clamp_score(score: int | float | None, default: int = 0) -> int:

@@ -48,6 +48,8 @@ class ResearchState(TypedDict, total=False):
     entry_levels: dict[str, Any]
     posture: str
     calibration_note: str
+    # Core-only audit: whether the decision model asked for a deep dive.
+    deep_request: dict[str, Any]
 
     # ── Section markdown (for frontend rendering) ──
     sections_markdown: Annotated[dict[str, str], merge_dicts]

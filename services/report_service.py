@@ -292,6 +292,57 @@ class ReportService:
             )
         logger.info(f"Updated rating on report {report_id}")
 
+    def count_model_enqueued_deeps(self, start: datetime, end: datetime) -> int:
+        """Core reports this week whose deep dive was enqueued by the model.
+
+        Score-threshold and cap-blocked rows are not counted. ``start``/``end``
+        are the ISO week bounds from ``week_bounds_utc``.
+        """
+        rows, _cols = self._db.fetch_query(
+            """
+            SELECT COUNT(*) FROM stock_reports
+            WHERE report_type = 'core'
+              AND created_at >= %s
+              AND created_at < %s
+              AND rating->'deep_request'->>'enqueued_by' = 'model'
+            """,
+            (start, end),
+        )
+        if not rows or rows[0][0] is None:
+            return 0
+        return int(rows[0][0])
+
+    def record_core_deep_request(
+        self, report_id: int, deep_request: dict[str, Any]
+    ) -> None:
+        """Store the core deep-dive recommendation on rating JSON.
+
+        ``enqueued_by`` is ``score``, ``model``, ``cap_blocked``, or null when
+        nothing was enqueued. No schema migration: the field lives in JSONB.
+        """
+        reason = " ".join(str(deep_request.get("reason") or "").split())[:240]
+        enqueued_by = deep_request.get("enqueued_by")
+        if enqueued_by not in ("score", "model", "cap_blocked"):
+            enqueued_by = None
+        payload = {
+            "recommended": deep_request.get("recommended") is True,
+            "reason": reason,
+            "enqueued_by": enqueued_by,
+        }
+        self._db.execute_query(
+            """
+            UPDATE stock_reports
+            SET rating = jsonb_set(
+                COALESCE(rating, '{}'::jsonb),
+                '{deep_request}',
+                %s::jsonb,
+                true
+            )
+            WHERE id = %s AND report_type = 'core'
+            """,
+            (json.dumps(payload), int(report_id)),
+        )
+
     def get_report_by_id(self, ticker: str, report_id: int) -> Optional[dict[str, Any]]:
         """Return one report scoped to ticker, or None."""
         rows, cols = self._db.fetch_query(
