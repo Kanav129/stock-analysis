@@ -24,10 +24,7 @@ export function PortfolioSummaryCard({ summary }: { summary: PortfolioSummary })
   const overallPct = overallChangePct(summary);
 
   return (
-    <div
-      className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5 border-b border-[var(--gridline)] pb-2"
-      aria-label="Portfolio summary"
-    >
+    <>
       <div className="inline-flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <span className="font-mono text-[length:var(--text-label)] text-[var(--color-text-muted)]">
           Value
@@ -76,6 +73,6 @@ export function PortfolioSummaryCard({ summary }: { summary: PortfolioSummary })
           </span>
         </>
       )}
-    </div>
+    </>
   );
 }
