@@ -376,3 +376,39 @@ export type SyncStartResponse = SyncProgress & {
   date?: string;
   resumed?: boolean;
 };
+
+export interface DirectionalHitRate {
+  hit_rate: number | null;
+  hits: number;
+  n: number;
+}
+
+export type DirectionalOutcome = 'hit' | 'miss' | 'unscored';
+
+export interface DirectionalWeekRow {
+  ticker: string;
+  rating: Rating | null;
+  score: number | null;
+  rated_at: string;
+  /** Fraction, e.g. 0.012 is +1.2%. Null when the 5-day close is not in yet. */
+  return_5d: number | null;
+  outcome: DirectionalOutcome;
+}
+
+/** GET /analysis/outcomes/directional — weekly core direction experiment. */
+export interface DirectionalSuccess {
+  scope: 'core';
+  disclaimer: string;
+  overall: {
+    '5d': DirectionalHitRate;
+    '20d': DirectionalHitRate;
+  };
+  week: {
+    status: 'ready' | 'pending_fallback' | 'pending' | 'empty';
+    week_start: string | null;
+    week_end: string | null;
+    pending_week_start: string | null;
+    message: string | null;
+    rows: DirectionalWeekRow[];
+  };
+}
