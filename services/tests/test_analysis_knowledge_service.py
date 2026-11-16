@@ -54,6 +54,8 @@ def test_build_priors_rich_history():
     assert "AAPL" in md
     assert "MSFT" in md
     assert "calibrate conviction" in md.lower()
+    assert "HOLD is a scored call" in md
+    assert "not n/a" in md
 
 
 def test_build_priors_thin_aggregates():
@@ -152,3 +154,20 @@ def test_priors_for_core_formats_same_ticker_only(monkeypatch):
     assert "AAPL" in md
     assert "Similar cases" not in md
     assert "Aggregate" not in md
+    assert "not n/a" in md
+    hold = format_case_line(
+        {
+            "ticker": "MSFT",
+            "rated_at": "2026-11-02",
+            "rating": "HOLD",
+            "score": 0,
+            "return_5d": 0.008,
+            "return_20d": 0.20,
+            "direction_hit_5d": True,
+            "direction_hit_20d": False,
+        }
+    )
+    assert "HOLD" in hold
+    assert "(hit)" in hold
+    assert "(miss)" in hold
+    assert "(n/a)" not in hold

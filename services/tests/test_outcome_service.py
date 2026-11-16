@@ -2,6 +2,8 @@
 from datetime import datetime, timezone
 
 from services.outcome_service import (
+    HOLD_BAND_20D,
+    HOLD_BAND_5D,
     compute_return,
     direction_hit,
     extract_entry_price,
@@ -28,8 +30,37 @@ def test_direction_hit_rules():
     assert direction_hit("STRONG_BUY", -0.02) is False
     assert direction_hit("SELL", -0.04) is True
     assert direction_hit("REDUCE", 0.01) is False
-    assert direction_hit("HOLD", 0.03) is None
+    assert direction_hit("ACCUMULATE", 0.01) is True
+    assert direction_hit("STRONG_SELL", 0.02, horizon="20d") is False
     assert direction_hit("BUY", None) is None
+    assert direction_hit(None, 0.04) is None
+
+
+def test_direction_hit_hold_bands():
+    """HOLD is scored on absolute move. Exactly the band is a miss. Missing stays None."""
+    assert direction_hit("HOLD", 0.0, horizon="5d") is True
+    assert direction_hit("HOLD", HOLD_BAND_5D - 0.0001, horizon="5d") is True
+    assert direction_hit("HOLD", -(HOLD_BAND_5D - 0.0001), horizon="5d") is True
+    assert direction_hit("HOLD", HOLD_BAND_5D, horizon="5d") is False
+    assert direction_hit("HOLD", -HOLD_BAND_5D, horizon="5d") is False
+    assert direction_hit("HOLD", HOLD_BAND_5D + 0.02, horizon="5d") is False
+    assert direction_hit("HOLD", None, horizon="5d") is None
+
+    assert direction_hit("HOLD", 0.0, horizon="20d") is True
+    assert direction_hit("HOLD", HOLD_BAND_20D - 0.0001, horizon="20d") is True
+    assert direction_hit("HOLD", -(HOLD_BAND_20D - 0.0001), horizon="20d") is True
+    assert direction_hit("HOLD", HOLD_BAND_20D, horizon="20d") is False
+    assert direction_hit("HOLD", -HOLD_BAND_20D, horizon="20d") is False
+    assert direction_hit("HOLD", HOLD_BAND_20D + 0.05, horizon="20d") is False
+    assert direction_hit("HOLD", None, horizon="20d") is None
+
+    # 12% breaks the 5-day band and stays inside the 20-day band.
+    assert direction_hit("HOLD", 0.12, horizon="5d") is False
+    assert direction_hit("HOLD", 0.12, horizon="20d") is True
+    # Default horizon is 5-day, so a 3% HOLD is a hit, not unscored.
+    assert direction_hit("HOLD", 0.03) is True
+    assert direction_hit("HOLD", "nope", horizon="5d") is None
+    assert direction_hit("HOLD", 0.01, horizon="1d") is None
 
 
 def test_forward_close_nth_trading_day():

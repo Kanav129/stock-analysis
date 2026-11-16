@@ -12,11 +12,14 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from services.outcome_service import HOLD_BAND_20D, HOLD_BAND_5D
 from services.run_checkpoint_service import app_timezone
 
 DISCLAIMER = (
-    "Directional experiment on weekly core ratings. "
-    "A hit means the later close moved with the call. "
+    "Weekly core calls only. "
+    "A hit for directional calls means the later close moved with the call. "
+    f"For HOLD, a hit means the close stayed inside the {HOLD_BAND_5D:.0%} (5-day) / "
+    f"{HOLD_BAND_20D:.0%} (20-day) band. "
     "Not a performance promise."
 )
 
@@ -73,7 +76,10 @@ def canonical_weekly_core(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _hit_summary(rows: list[dict[str, Any]], hit_key: str) -> dict[str, Any]:
-    """HOLD and other unscored rows (hit is None) stay out of the denominator."""
+    """Null hits (missing return, or a skipped row) stay out of n and hit_rate.
+
+    A scored HOLD is True or False and counts in both.
+    """
     scored = [row for row in rows if row.get(hit_key) is not None]
     n = len(scored)
     hits = sum(1 for row in scored if row.get(hit_key) is True)

@@ -13,6 +13,22 @@ from utils.logger import logger
 BULLISH = frozenset({"ACCUMULATE", "BUY", "STRONG_BUY"})
 BEARISH = frozenset({"REDUCE", "SELL", "STRONG_SELL"})
 MIN_SLICE_N = 10
+# HOLD is a scored call. A move at or beyond the band is a miss; inside is a hit.
+# Kept separate so 5-day and 20-day do not share one magic number.
+HOLD_BAND_5D = 0.10
+HOLD_BAND_20D = 0.15
+
+
+def hold_outcome_rule() -> str:
+    """Model-facing HOLD grading rule. Thresholds stay the named constants."""
+    five = f"{HOLD_BAND_5D:.0%}"
+    twenty = f"{HOLD_BAND_20D:.0%}"
+    return (
+        "HOLD is a scored call. A later close with "
+        f"|move| ≥ {five} at 5-day or ≥ {twenty} at 20-day is a miss; "
+        "a move inside the band is a hit. When reading Historical performance priors, "
+        "a past HOLD that broke the band is a miss, not n/a; do not assume HOLD cannot be wrong."
+    )
 
 
 def extract_entry_price(price_summary: Any, report_live_price: Any = None) -> float | None:
@@ -46,17 +62,38 @@ def compute_return(entry_price: float, exit_price: float) -> float:
     return (exit_price - entry_price) / entry_price
 
 
-def direction_hit(rating: str | None, ret: float | None) -> bool | None:
-    """Whether return moved in the rating's direction. HOLD → None."""
+def direction_hit(
+    rating: str | None,
+    ret: float | None,
+    *,
+    horizon: str = "5d",
+) -> bool | None:
+    """Whether this horizon's return matched the rating.
+
+    Buy-side calls hit when the close rose; sell-side calls hit when it fell.
+    HOLD hits when the absolute move stays inside that horizon's band
+    (``HOLD_BAND_5D`` / ``HOLD_BAND_20D``). A move exactly at the band is a miss.
+    Missing return, missing rating, or an unknown HOLD horizon → None.
+    """
     if ret is None or rating is None:
+        return None
+    try:
+        move = float(ret)
+    except (TypeError, ValueError):
         return None
     tag = normalize_rating(rating)
     if tag == "HOLD":
-        return None
+        if horizon == "5d":
+            band = HOLD_BAND_5D
+        elif horizon == "20d":
+            band = HOLD_BAND_20D
+        else:
+            return None
+        return abs(move) < band
     if tag in BULLISH:
-        return ret > 0
+        return move > 0
     if tag in BEARISH:
-        return ret < 0
+        return move < 0
     return None
 
 
@@ -131,8 +168,29 @@ class OutcomeService:
     def __init__(self) -> None:
         self._db = get_db_client()
 
-    def refresh(self, *, limit: int | None = None) -> dict[str, Any]:
-        """Upsert outcomes for successful ratings and refresh calibration snapshots."""
+    def refresh(self, *, limit: int | None = None, holds_only: bool = False) -> dict[str, Any]:
+        """Upsert outcomes for successful ratings and refresh calibration snapshots.
+
+        ``holds_only`` skips the price walk and only rewrites stored HOLD
+        direction hits from the returns already on ``rating_outcomes``, then
+        rebuilds today's calibration snapshots. Idempotent. Use that after the
+        HOLD band change when daily bars should be left untouched.
+        """
+        if holds_only:
+            stats = self.regrade_hold_direction_hits()
+            logger.info(
+                "HOLD regrade only: rows=%s updated=%s snapshots=%s",
+                stats["hold_rows"],
+                stats["updated"],
+                stats["snapshots"],
+            )
+            return {
+                "candidates": stats["hold_rows"],
+                "updated": stats["updated"],
+                "skipped": stats["hold_rows"] - stats["updated"],
+                "snapshots": stats["snapshots"],
+                "holds_only": True,
+            }
         ratings = self._load_candidate_ratings(limit=limit)
         updated = 0
         skipped = 0
@@ -149,6 +207,10 @@ class OutcomeService:
                     exc,
                 )
                 skipped += 1
+        try:
+            self.regrade_hold_direction_hits(rebuild_snapshots=False)
+        except Exception as exc:
+            logger.warning("HOLD direction regrade failed: %s", exc)
         snap_count = 0
         try:
             snap_count = self.refresh_calibration_snapshots()
@@ -242,12 +304,12 @@ class OutcomeService:
             if fwd5:
                 price_5d, ready_5d_at = fwd5
                 return_5d = compute_return(entry, price_5d)
-                hit_5d = direction_hit(rating, return_5d)
+                hit_5d = direction_hit(rating, return_5d, horizon="5d")
             fwd20 = forward_close(closes, rated_at, 20)
             if fwd20:
                 price_20d, ready_20d_at = fwd20
                 return_20d = compute_return(entry, price_20d)
-                hit_20d = direction_hit(rating, return_20d)
+                hit_20d = direction_hit(rating, return_20d, horizon="20d")
 
         status = outcome_status(
             entry_price=entry,
@@ -306,6 +368,48 @@ class OutcomeService:
             ),
         )
         return True
+
+    def regrade_hold_direction_hits(self, *, rebuild_snapshots: bool = True) -> dict[str, int]:
+        """Rewrite HOLD direction hits from stored returns. Does not touch prices.
+
+        Idempotent: a second run updates nothing when the stored booleans already
+        match ``direction_hit``. Rows with a null return stay null (unscored).
+        When ``rebuild_snapshots`` is set, today's calibration snapshots are
+        rebuilt so old HOLD ``n/a`` slices pick up the new hits.
+        """
+        rows, _ = self._db.fetch_query(
+            """
+            SELECT rating_id, return_5d, return_20d,
+                   direction_hit_5d, direction_hit_20d
+            FROM rating_outcomes
+            WHERE upper(coalesce(rating, '')) = 'HOLD'
+            """
+        )
+        pending: list[tuple[Any, ...]] = []
+        for rating_id, ret_5d, ret_20d, hit_5d, hit_20d in rows or []:
+            new_5d = direction_hit("HOLD", ret_5d, horizon="5d")
+            new_20d = direction_hit("HOLD", ret_20d, horizon="20d")
+            if new_5d != hit_5d or new_20d != hit_20d:
+                pending.append((new_5d, new_20d, rating_id))
+        if pending:
+            self._db.execute_many(
+                """
+                UPDATE rating_outcomes
+                SET direction_hit_5d = %s,
+                    direction_hit_20d = %s,
+                    updated_at = NOW()
+                WHERE rating_id = %s
+                """,
+                pending,
+            )
+        snapshots = 0
+        if rebuild_snapshots:
+            snapshots = self.refresh_calibration_snapshots()
+        return {
+            "hold_rows": len(rows or []),
+            "updated": len(pending),
+            "snapshots": snapshots,
+        }
 
     def refresh_calibration_snapshots(self, *, as_of: date | None = None) -> int:
         """Rebuild today's calibration snapshots from completed/partial outcomes."""

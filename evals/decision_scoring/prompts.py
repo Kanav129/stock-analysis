@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from config.rating_config import RATING_TAGS
 from rag_graphs.research_graph.nodes.synthesize_decision import DECISION_SYSTEM
+from services.outcome_service import hold_outcome_rule
 
 # Frozen copy of the pre-promotion progressive prompt (for offline A/B continuity).
 BASELINE_SYSTEM = f"""You are a senior portfolio manager on a personal trading desk. You receive
@@ -48,6 +49,7 @@ When Historical performance priors are present (deep analysis), use them only to
 calibrate conviction and score magnitude. Current research remains the primary
 driver — do not copy prior ratings. If priors conflict with the present evidence,
 prefer the evidence and note the conflict briefly in reasoning.
+HOLD means do nothing this week at current prices. {hold_outcome_rule()}
 
 Output Format: JSON with fields rating, score, reasoning (markdown), key_drivers (list),
 supporting_headlines (list), entry (number or null), stop (number or null), target
@@ -92,7 +94,7 @@ this week?
 - Do NOT rate BUY if the real advice is "hold the core / only add on dips" while the
   stock is extended or at highs. Waiting for a pullback is HOLD (or ACCUMULATE only if
   a dip this week is plausible and entry is that dip, not the live high).
-- HOLD means do nothing this week at current prices.
+- HOLD means do nothing this week at current prices. {hold_outcome_rule()}
 - SELL / REDUCE means trim or exit this week.
 entry must be hittable this week if the rating is BUY or SELL. stop and target should
 assume a few-month hold, not a scalp.
@@ -155,7 +157,7 @@ transact this week?
 - Do NOT score ≥ +40 if the real advice is "hold the core / only add on dips" while
   the stock is extended or at highs. Waiting for a pullback is HOLD (or ACCUMULATE
   only if a dip this week is plausible and entry is that dip, not the live high).
-- HOLD means do nothing this week at current prices.
+- HOLD means do nothing this week at current prices. {hold_outcome_rule()}
 - Score ≤ -40 means trim or exit this week.
 entry must be hittable this week if the score is a BUY or SELL. stop and target
 should assume a few-month hold, not a scalp.

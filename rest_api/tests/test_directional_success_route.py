@@ -47,3 +47,18 @@ def test_directional_route_returns_service_payload(mock_card):
     assert body["overall"]["5d"]["n"] == 2
     assert body["week"]["rows"][0]["outcome"] == "hit"
     mock_card.assert_called_once_with()
+
+
+@patch("services.outcome_service.outcome_service.refresh")
+def test_refresh_route_can_regrade_holds_only(mock_refresh):
+    mock_refresh.return_value = {
+        "candidates": 2,
+        "updated": 2,
+        "skipped": 0,
+        "snapshots": 3,
+        "holds_only": True,
+    }
+    response = client.post("/analysis/outcomes/refresh?holds_only=true")
+    assert response.status_code == 200
+    assert response.json()["holds_only"] is True
+    mock_refresh.assert_called_once_with(limit=None, holds_only=True)

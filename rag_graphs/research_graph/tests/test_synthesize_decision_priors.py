@@ -101,6 +101,28 @@ def test_deep_includes_priors(mock_priors, mock_port, mock_chat_llm, mock_model,
     assert mock_build.call_args.kwargs.get("priors_markdown", "").find("prior case") >= 0
 
 
+@patch("rag_graphs.research_graph.nodes.synthesize_decision.desk_scores_markdown_for", return_value="")
+@patch("rag_graphs.research_graph.nodes.synthesize_decision._call_decision_llm")
+@patch(
+    "rag_graphs.research_graph.nodes.synthesize_decision.portfolio_markdown_for",
+    return_value="## Personal Portfolio\n- held",
+)
+@patch(
+    "services.analysis_knowledge_service.analysis_knowledge_service.priors_for_core",
+    return_value="## Historical performance priors\n- core prior",
+)
+def test_user_prompt_tells_the_model_hold_is_scored(mock_priors, mock_port, mock_llm, mock_desk):
+    mock_llm.side_effect = RuntimeError("stop before the model")
+    synthesize_decision(_base_state(report_type="core"))  # type: ignore[arg-type]
+    prompt, variables = mock_llm.call_args.args
+    rendered = prompt.format(**variables)
+    assert "HOLD means do nothing this week at current prices." in rendered
+    assert "HOLD is a scored call" in rendered
+    assert "≥ 10% at 5-day" in rendered
+    assert "≥ 15% at 20-day" in rendered
+    assert "miss, not n/a" in rendered
+
+
 @patch(
     "rag_graphs.research_graph.nodes.synthesize_decision.build_decision_context",
     wraps=build_decision_context,

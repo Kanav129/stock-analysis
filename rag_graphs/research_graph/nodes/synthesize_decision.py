@@ -31,6 +31,7 @@ from config.report_config import (
 )
 from config.score_composite import composite_score
 from rag_graphs.research_graph.state import ResearchState
+from services.outcome_service import hold_outcome_rule
 from services.portfolio_context_service import portfolio_markdown_for
 from utils.logger import logger
 
@@ -178,6 +179,7 @@ Dimensions:
 Horizon: act this week only; intended hold is a few months. entry must be hittable
 this week if this_week_action is buy or strong_buy (or sell / strong_sell). stop and
 target assume a few-month hold.
+HOLD means do nothing this week at current prices. """ + hold_outcome_rule() + """
 
 Portfolio is for position_note and posture. Stock research drives dimension 1–5s.
 If a desk scores table is present, do not copy a neighbor's 1–5s or action.
@@ -607,6 +609,7 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
 Horizon: act this week only; intended hold is a few months. this_week_action must
 match what to do at/near the live price this week — not a "buy the dip later"
 thesis dressed as buy/strong_buy.
+HOLD means do nothing this week at current prices. """ + hold_outcome_rule() + """
 
 For each dimension, list bearish then bullish evidence from the research before
 the 1–5. The server computes the numeric score.

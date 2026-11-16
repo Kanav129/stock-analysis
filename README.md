@@ -195,6 +195,8 @@ When `ADMIN_KEY` is set, non-public routes need `Authorization: Bearer <ADMIN_KE
 | GET | `/ratings/{ticker}` | Rating history |
 | POST | `/analysis/run` | Trigger analysis |
 | GET | `/analysis/status` | Analysis job status |
+| GET | `/analysis/outcomes/directional` | Weekly core directional hit rate (guest read) |
+| POST | `/analysis/outcomes/refresh` | Recompute +5d/+20d outcomes and today's calibration snapshots (admin). `?holds_only=true` regrades stored HOLD hits from saved returns and rebuilds snapshots, without walking prices |
 | GET | `/jobs` | Job queue snapshot |
 | POST | `/sync/data` | Manual news/price sync |
 | GET | `/settings` | App settings (admin only) |
