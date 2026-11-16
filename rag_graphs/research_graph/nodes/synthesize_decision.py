@@ -117,6 +117,22 @@ class DecisionOutput(BaseModel):
         default="",
         description="Brief posture statement for the decision brief",
     )
+    request_deep: bool = Field(
+        default=False,
+        description=(
+            "Core reports only. True only if hot money/flows, policy, lockup, "
+            "and/or debate could change or settle this week's call. False when "
+            "the core thesis is already settled. Always false on a deep report."
+        ),
+    )
+    request_deep_reason: str = Field(
+        default="",
+        description=(
+            "One short line required when request_deep is true, naming which of "
+            "flows, policy, lockup, or debate could change the this-week call. "
+            "Empty when request_deep is false. An empty reason is not a yes."
+        ),
+    )
 
     @field_validator("this_week_action", mode="before")
     @classmethod
@@ -183,6 +199,47 @@ Strong setup: accelerating results, reasonable/cheap valuation, washout, constru
 tape; several 4–5s; this_week_action buy or strong_buy.
 
 Output the structured object. Fill lists before every 1–5."""
+
+# Appended only for core reports. Kept off DECISION_SYSTEM so deep synthesis
+# and the shared eval rubric are not asked to request another deep dive.
+CORE_DEEP_REQUEST_GUIDANCE = """Deep-dive request (core reports only):
+A later deep dive can add sections this core report does not have:
+- Hot money / flows
+- Policy
+- Lockup / supply overhang
+- Debate (research plan, trader proposal, and portfolio decision)
+
+Set request_deep true only if one or more of those sections could reasonably
+change or settle the this-week call. That means the core thesis is messy, a
+policy, lockup, or flow question is material and still unanswered, or the four
+core sections (market, fundamentals, news, sentiment) cannot settle the rating.
+Set request_deep false when the core research already looks settled.
+
+When request_deep is true, request_deep_reason must be one short line naming
+which of those sections could change the call. An empty reason is not a yes.
+When request_deep is false, leave request_deep_reason empty."""
+
+
+def decision_system_prompt(report_type: str | None) -> str:
+    """System prompt for decision synthesis. Core reports also judge a deep dive."""
+    if (report_type or "core").strip().lower() == "deep":
+        return DECISION_SYSTEM
+    return DECISION_SYSTEM.rstrip() + "\n\n" + CORE_DEEP_REQUEST_GUIDANCE
+
+
+def _deep_request_from_decision(
+    decision: Any, report_type: str | None
+) -> dict[str, Any] | None:
+    """Core-only yes/no. Empty reasons stay recommended so enqueue can reject them."""
+    if (report_type or "core").strip().lower() == "deep":
+        return None
+    recommended = getattr(decision, "request_deep", False)
+    reason = getattr(decision, "request_deep_reason", "")
+    if not isinstance(recommended, bool):
+        recommended = False
+    if not isinstance(reason, str):
+        reason = ""
+    return {"recommended": recommended, "reason": " ".join(reason.split())[:240]}
 
 
 def build_decision_context(
@@ -545,9 +602,7 @@ def synthesize_decision(state: ResearchState) -> Dict[str, Any]:
         desk_scores_markdown=desk_md,
     )
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", DECISION_SYSTEM),
-        ("human", """Synthesize the decision for {ticker} based on this analysis.
+    human = """Synthesize the decision for {ticker} based on this analysis.
 
 Horizon: act this week only; intended hold is a few months. this_week_action must
 match what to do at/near the live price this week — not a "buy the dip later"
@@ -558,7 +613,17 @@ the 1–5. The server computes the numeric score.
 
 {context}
 
-Return the structured rubric (no overall score or rating tag)."""),
+Return the structured rubric (no overall score or rating tag)."""
+    if report_type != "deep":
+        human += """
+
+Also fill request_deep and request_deep_reason. request_deep is true only when
+flows, policy, lockup, or debate could change or settle this week's call, and
+then request_deep_reason is one non-empty line. Otherwise request_deep is false
+and the reason is empty."""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", decision_system_prompt(report_type)),
+        ("human", human),
     ])
 
     used_model = "analysis"
@@ -691,7 +756,7 @@ Return the structured rubric (no overall score or rating tag)."""),
     if construction not in reasoning:
         reasoning = f"### Score construction\n{construction}\n\n{reasoning}".rstrip()
 
-    return {
+    outcome: dict[str, Any] = {
         "decision_ok": True,
         "error_message": None,
         "rating": rating,
@@ -706,3 +771,7 @@ Return the structured rubric (no overall score or rating tag)."""),
         "model": used_model,
         "posture": decision.posture,
     }
+    deep_request = _deep_request_from_decision(decision, report_type)
+    if deep_request is not None:
+        outcome["deep_request"] = deep_request
+    return outcome

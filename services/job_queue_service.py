@@ -1193,18 +1193,38 @@ class JobQueueService:
                 )
                 if isinstance(payload, dict):
                     final.update(payload)
-        return {
+        out = {
             "ticker": ticker,
             "report_id": final.get("report_id"),
             "rating": final.get("rating"),
             "score": final.get("score"),
             "decision_ok": final.get("decision_ok", True),
         }
+        error_message = final.get("error_message")
+        if error_message:
+            out["error_message"] = error_message
+        deep_request = final.get("deep_request")
+        if isinstance(deep_request, dict):
+            out["deep_request"] = {
+                "recommended": deep_request.get("recommended") is True,
+                "reason": " ".join(str(deep_request.get("reason") or "").split())[:240],
+            }
+        return out
 
     def _maybe_auto_enqueue_deep(self, ticker: str, result: dict[str, Any]) -> None:
-        """Enqueue deep dive when core |score| crosses the auto-deep threshold."""
-        from config.rating_config import AUTO_DEEP_SCORE_ABS_THRESHOLD
+        """Enqueue deep dive from the score rule and, below that, a model yes.
+
+        |score| >= AUTO_DEEP_SCORE_ABS_THRESHOLD still enqueues on its own.
+        A model yes with a non-empty reason can enqueue when the score is
+        below that line, subject to the weekly model cap. Both paths share
+        the unusable-core, quota, active-job, and same-day skips.
+        """
+        from config.rating_config import (
+            AUTO_DEEP_SCORE_ABS_THRESHOLD,
+            model_deep_weekly_cap,
+        )
         from services.report_service import ReportService
+        from services.run_checkpoint_service import week_bounds_utc
 
         if result.get("decision_ok") is False:
             return
@@ -1219,16 +1239,47 @@ class JobQueueService:
             score = int(raw_score)
         except (TypeError, ValueError):
             return
-        if abs(score) < AUTO_DEEP_SCORE_ABS_THRESHOLD:
+
+        raw_request = result.get("deep_request")
+        if isinstance(raw_request, dict):
+            recommended = raw_request.get("recommended") is True
+            reason = " ".join(str(raw_request.get("reason") or "").split())[:240]
+        else:
+            recommended = False
+            reason = ""
+        score_hit = abs(score) >= AUTO_DEEP_SCORE_ABS_THRESHOLD
+        model_hit = recommended and bool(reason)
+        ticker_u = ticker.upper()
+
+        def _persist(enqueued_by: str | None) -> None:
+            report_id = result.get("report_id")
+            if not report_id:
+                return
+            payload = {
+                "recommended": recommended,
+                "reason": reason,
+                "enqueued_by": enqueued_by,
+            }
+            try:
+                ReportService().record_core_deep_request(int(report_id), payload)
+            except Exception as exc:
+                logger.warning(
+                    "Could not record deep request for %s: %s",
+                    ticker_u,
+                    exc,
+                )
+
+        if not score_hit and not model_hit:
+            _persist(None)
             return
 
-        ticker_u = ticker.upper()
         if self.find_active(ticker_u, JOB_DEEP):
             logger.info(
                 "Skip auto deep for %s — deep job already active (score=%s)",
                 ticker_u,
                 score,
             )
+            _persist(None)
             return
         try:
             if ReportService().get_same_day_deep_report(ticker_u):
@@ -1237,18 +1288,57 @@ class JobQueueService:
                     ticker_u,
                     score,
                 )
+                _persist(None)
                 return
         except Exception as exc:
             logger.warning("Same-day deep lookup failed for %s: %s", ticker_u, exc)
 
+        via = "score" if score_hit else "model"
+        if via == "model":
+            cap = model_deep_weekly_cap()
+            if cap is not None:
+                try:
+                    start, end = week_bounds_utc()
+                    used = ReportService().count_model_enqueued_deeps(start, end)
+                except Exception as exc:
+                    logger.warning(
+                        "Skip model-requested deep for %s — weekly cap lookup failed: %s",
+                        ticker_u,
+                        exc,
+                    )
+                    _persist(None)
+                    return
+                if used >= cap:
+                    logger.info(
+                        "Skip model-requested deep for %s — weekly cap %s reached "
+                        "(%s model deeps this Hong Kong week). Model asked: %s",
+                        ticker_u,
+                        cap,
+                        used,
+                        reason,
+                    )
+                    _persist("cap_blocked")
+                    return
+
         try:
             out = self.enqueue(JOB_DEEP, [ticker_u])
-            logger.info(
-                "Auto-enqueued deep_dive for %s (score=%s, started=%s)",
-                ticker_u,
-                score,
-                out.get("started"),
-            )
+            if via == "model":
+                logger.info(
+                    "Auto-enqueued deep_dive for %s via model request "
+                    "(score=%s, reason=%s, started=%s)",
+                    ticker_u,
+                    score,
+                    reason,
+                    out.get("started"),
+                )
+            else:
+                logger.info(
+                    "Auto-enqueued deep_dive for %s (score=%s, started=%s)",
+                    ticker_u,
+                    score,
+                    out.get("started"),
+                )
+            _persist(via)
         except Exception as exc:
             logger.error("Failed to auto-enqueue deep_dive for %s: %s", ticker_u, exc)
 

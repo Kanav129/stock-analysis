@@ -230,6 +230,7 @@ See `.env.example` (API) and `frontend/.env.example` (Vite).
 | `JOB_MAX_CONCURRENT` | Render (`1`) / local | Parallel LLM analysis jobs |
 | `JOB_WORKER_ID` | Optional | Stable worker identity; default `{hostname}-{pid}` |
 | `KRONOS_ENABLED` | Render | `false` on free/Starter (512 MB); `true` locally / Standard+ |
+| `MODEL_DEEP_WEEKLY_CAP` | Render / local | Extra deep dives the core decision model may request per ISO week when the absolute score is below 30 (default `8`). Does not cap the absolute-score auto-deep rule. `0` blocks model requests; `none` / `unlimited` disables the cap. Week is Monday–Monday in `APP_TIMEZONE` (default Asia/Hong_Kong). |
 | `SYNC_INTERVAL` | Render | Seconds between in-process syncs (default 86400) |
 | `ANALYSIS_INTERVAL` | Render | Seconds between in-process analyses (default 604800) |
 | `RESEARCH_MODEL` / `ANALYSIS_MODEL` | Render | Qwen models (`qwen3.7-plus`, `qwen3.8-max`, etc.) |

@@ -33,6 +33,24 @@ def day_bounds_utc(day: str | None = None) -> tuple[datetime, datetime]:
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
+def week_bounds_utc(moment: datetime | None = None) -> tuple[datetime, datetime]:
+    """ISO week [Monday 00:00, next Monday) in the app timezone, as UTC.
+
+    APP_TIMEZONE defaults to Asia/Hong_Kong, so this is the Hong Kong week
+    used by the model-requested deep-dive cap.
+    """
+    tz = app_timezone()
+    now = moment or _now_utc()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    local = now.astimezone(tz)
+    start_local = datetime(
+        local.year, local.month, local.day, tzinfo=tz
+    ) - timedelta(days=local.weekday())
+    end_local = start_local + timedelta(days=7)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
 def sync_key(day: str | None = None) -> str:
     return f"daily_sync:{day or today_key()}"
 
