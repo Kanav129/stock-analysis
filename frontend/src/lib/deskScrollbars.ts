@@ -35,6 +35,7 @@ type Track = {
   painted: boolean;
   priming: boolean;
   wantsOn: boolean;
+  onFadeInEnd: ((event: TransitionEvent) => void) | null;
 };
 
 type Bucket = {
@@ -91,6 +92,7 @@ function isScrollOverflow(value: string): boolean {
 
 function removeTrack(track: Track): void {
   window.clearTimeout(track.hideTimer);
+  clearFadeInWait(track);
   track.thumb.remove();
   const bucket = buckets.get(track.el);
   if (!bucket) return;
@@ -104,6 +106,7 @@ function removeTrack(track: Track): void {
 function dismiss(track: Track): void {
   track.wantsOn = false;
   window.clearTimeout(track.hideTimer);
+  clearFadeInWait(track);
   track.thumb.classList.remove('is-on');
 }
 
@@ -187,15 +190,44 @@ function holdMs(): number {
   return HOLD_MS;
 }
 
+function fadeOut(track: Track): void {
+  if (!track.wantsOn || track.hovering || track.dragging) return;
+  track.wantsOn = false;
+  track.thumb.classList.remove('is-on');
+}
+
+function clearFadeInWait(track: Track): void {
+  if (!track.onFadeInEnd) return;
+  track.thumb.removeEventListener('transitionend', track.onFadeInEnd);
+  track.onFadeInEnd = null;
+}
+
+/** After scrolling stops, stay fully visible for HOLD_MS, then fade out.
+ *  A 2s fade-in that is still running does not count as that hold. */
+function armHide(track: Track): void {
+  window.clearTimeout(track.hideTimer);
+  clearFadeInWait(track);
+  if (!track.wantsOn || track.hovering || track.dragging) return;
+  const opacity = Number.parseFloat(getComputedStyle(track.thumb).opacity);
+  const stillFadingIn = opacity < 0.99 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (stillFadingIn) {
+    const onEnd = (event: TransitionEvent) => {
+      if (event.propertyName !== 'opacity') return;
+      clearFadeInWait(track);
+      if (!track.wantsOn || track.hovering || track.dragging) return;
+      track.hideTimer = window.setTimeout(() => fadeOut(track), holdMs());
+    };
+    track.onFadeInEnd = onEnd;
+    track.thumb.addEventListener('transitionend', onEnd);
+    return;
+  }
+  track.hideTimer = window.setTimeout(() => fadeOut(track), holdMs());
+}
+
 function finishReveal(track: Track): void {
   if (!track.wantsOn) return;
   track.thumb.classList.add('is-on');
-  if (track.hovering || track.dragging) return;
-  track.hideTimer = window.setTimeout(() => {
-    if (track.hovering || track.dragging) return;
-    track.wantsOn = false;
-    track.thumb.classList.remove('is-on');
-  }, holdMs());
+  armHide(track);
 }
 
 function reveal(track: Track): void {
@@ -255,6 +287,7 @@ function ensureTrack(el: HTMLElement, axis: Axis): Track {
     painted: false,
     priming: false,
     wantsOn: false,
+    onFadeInEnd: null,
   };
   thumb.addEventListener('pointerenter', () => {
     track.hovering = true;
