@@ -6,7 +6,7 @@ thumb on document.body, shows it while scrolling, then fades it out.
 Wheel, trackpad, and keyboard scrolling stay on the real element.
 */
 
-const HIDE_MS = 800;
+const HIDE_MS = 640;
 const MIN_THUMB = 24;
 const HIT = 12;
 const INSET = 2;
@@ -30,6 +30,10 @@ type Track = {
   hideTimer: number;
   hovering: boolean;
   dragging: boolean;
+  /** True once the thumb has been painted at opacity 0, so the next class change can fade. */
+  painted: boolean;
+  priming: boolean;
+  wantsOn: boolean;
 };
 
 type Bucket = {
@@ -96,25 +100,26 @@ function removeTrack(track: Track): void {
   }
 }
 
-function hideThumb(track: Track): void {
-  track.thumb.hidden = true;
+function dismiss(track: Track): void {
+  track.wantsOn = false;
+  window.clearTimeout(track.hideTimer);
   track.thumb.classList.remove('is-on');
 }
 
-function place(track: Track): void {
+function place(track: Track): boolean {
   const { el, axis, thumb } = track;
   const bucket = buckets.get(el);
   if (!bucket || !el.isConnected) {
-    hideThumb(track);
-    return;
+    dismiss(track);
+    return false;
   }
   const metrics = bucket.metrics;
   const rect = metrics.viewport
     ? new DOMRect(0, 0, window.innerWidth, window.innerHeight)
     : el.getBoundingClientRect();
   if (rect.width < 2 || rect.height < 2) {
-    hideThumb(track);
-    return;
+    dismiss(track);
+    return false;
   }
 
   const client = axis === 'y' ? el.clientHeight : el.clientWidth;
@@ -122,8 +127,8 @@ function place(track: Track): void {
   const pos = axis === 'y' ? el.scrollTop : el.scrollLeft;
   const max = scroll - client;
   if (max <= 2) {
-    hideThumb(track);
-    return;
+    dismiss(track);
+    return false;
   }
 
   if (axis === 'y') {
@@ -131,15 +136,14 @@ function place(track: Track): void {
     const portBottom = portTop + client;
     const visTop = Math.max(portTop, 0);
     let visBottom = Math.min(portBottom, window.innerHeight);
-    if (bucket.x && !bucket.x.thumb.hidden) visBottom -= HIT;
+    if (bucket.x) visBottom -= HIT;
     const vis = visBottom - visTop;
     if (vis < MIN_THUMB) {
-      hideThumb(track);
-      return;
+      dismiss(track);
+      return false;
     }
     const thumbLen = Math.min(vis, Math.max(MIN_THUMB, (client / scroll) * vis));
     const along = (pos / max) * (vis - thumbLen);
-    thumb.hidden = false;
     thumb.style.top = `${visTop + along}px`;
     thumb.style.height = `${thumbLen}px`;
     thumb.style.width = `${HIT}px`;
@@ -153,7 +157,7 @@ function place(track: Track): void {
       thumb.style.right = `${Math.max(0, window.innerWidth - rightEdge + INSET)}px`;
       thumb.style.left = 'auto';
     }
-    return;
+    return true;
   }
 
   const portLeft = rect.left + metrics.borderLeft;
@@ -162,29 +166,51 @@ function place(track: Track): void {
   const visRight = Math.min(portRight, window.innerWidth);
   const vis = visRight - visLeft;
   if (vis < MIN_THUMB) {
-    hideThumb(track);
-    return;
+    dismiss(track);
+    return false;
   }
   const thumbLen = Math.min(vis, Math.max(MIN_THUMB, (client / scroll) * vis));
   const along = (pos / max) * (vis - thumbLen);
   const bottomEdge = Math.min(rect.bottom - metrics.borderBottom, window.innerHeight);
-  thumb.hidden = false;
   thumb.style.left = `${visLeft + along}px`;
   thumb.style.width = `${thumbLen}px`;
   thumb.style.height = `${HIT}px`;
   thumb.style.bottom = `${Math.max(0, window.innerHeight - bottomEdge + INSET)}px`;
   thumb.style.top = 'auto';
   thumb.style.right = 'auto';
+  return true;
+}
+
+function finishReveal(track: Track): void {
+  if (!track.wantsOn) return;
+  track.thumb.classList.add('is-on');
+  if (track.hovering || track.dragging) return;
+  track.hideTimer = window.setTimeout(() => {
+    if (track.hovering || track.dragging) return;
+    track.wantsOn = false;
+    track.thumb.classList.remove('is-on');
+  }, HIDE_MS);
 }
 
 function reveal(track: Track): void {
-  if (track.thumb.hidden) return;
-  track.thumb.classList.add('is-on');
+  track.wantsOn = true;
   window.clearTimeout(track.hideTimer);
-  if (track.hovering || track.dragging) return;
-  track.hideTimer = window.setTimeout(() => {
-    if (!track.hovering && !track.dragging) track.thumb.classList.remove('is-on');
-  }, HIDE_MS);
+  // The thumb is inserted in the same turn as the first scroll. Adding .is-on
+  // immediately skips the opacity transition, so wait until it has painted at 0.
+  if (!track.painted) {
+    if (!track.priming) {
+      track.priming = true;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          track.painted = true;
+          track.priming = false;
+          finishReveal(track);
+        });
+      });
+    }
+    return;
+  }
+  finishReveal(track);
 }
 
 function ensureBucket(el: HTMLElement): Bucket {
@@ -213,7 +239,6 @@ function ensureTrack(el: HTMLElement, axis: Axis): Track {
   thumb.className = `desk-scroll-thumb desk-scroll-thumb--${axis}`;
   thumb.dataset.deskScrollThumb = axis;
   thumb.setAttribute('aria-hidden', 'true');
-  thumb.hidden = true;
   const track: Track = {
     el,
     axis,
@@ -221,6 +246,9 @@ function ensureTrack(el: HTMLElement, axis: Axis): Track {
     hideTimer: 0,
     hovering: false,
     dragging: false,
+    painted: false,
+    priming: false,
+    wantsOn: false,
   };
   thumb.addEventListener('pointerenter', () => {
     track.hovering = true;
@@ -312,14 +340,8 @@ function onScroll(event: Event): void {
   if (!buckets.has(el)) syncEl(el);
   const bucket = buckets.get(el);
   if (!bucket) return;
-  if (bucket.y) {
-    place(bucket.y);
-    reveal(bucket.y);
-  }
-  if (bucket.x) {
-    place(bucket.x);
-    reveal(bucket.x);
-  }
+  if (bucket.y && place(bucket.y)) reveal(bucket.y);
+  if (bucket.x && place(bucket.x)) reveal(bucket.x);
   if (el === document.scrollingElement) {
     for (const [other, otherBucket] of buckets) {
       if (other === el) continue;

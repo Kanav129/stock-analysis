@@ -1565,14 +1565,17 @@ html.desk-scrollbars *::-webkit-scrollbar {
   pointer-events: none;
   background: transparent;
   touch-action: none;
-  transition: opacity 280ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* Fade-out is the resting transition. Adding .is-on replaces it with the shorter fade-in.
+     A standard ease keeps the hairline visible through the middle of the fade.
+     Expo ease-out spends that time already near 0, which reads as a snap. */
+  transition: opacity 600ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .desk-scroll-thumb.is-on {
   opacity: 1;
   pointer-events: auto;
   cursor: grab;
-  transition-duration: 90ms;
+  transition: opacity 280ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .desk-scroll-thumb.is-dragging {
@@ -1619,7 +1622,8 @@ html.desk-scroll-dragging {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .desk-scroll-thumb {
+  .desk-scroll-thumb,
+  .desk-scroll-thumb.is-on {
     transition: none;
   }
 }
