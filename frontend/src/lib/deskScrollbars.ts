@@ -7,7 +7,7 @@ Wheel, trackpad, and keyboard scrolling stay on the real element.
 */
 
 /** Fully visible after the last scroll event, before the fade-out starts. */
-const HOLD_MS = 1500;
+const HOLD_MS = 3000;
 const MIN_THUMB = 24;
 const HIT = 12;
 const INSET = 2;

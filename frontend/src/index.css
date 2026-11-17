@@ -1567,7 +1567,7 @@ html.desk-scrollbars *::-webkit-scrollbar {
   touch-action: none;
   /* Fade-out is the resting transition. Adding .is-on replaces it with the shorter fade-in.
      The hold before this fade starts lives in deskScrollbars.ts (HOLD_MS). */
-  transition: opacity 2000ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 3000ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .desk-scroll-thumb.is-on {
