@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -15,12 +16,13 @@ function truncate(text: string, max = 100) {
 export function WatchlistSuggestions({
   dense = false,
   asPanel = true,
-  maxRows,
+  scrollRows,
 }: {
   dense?: boolean;
   /** When false, render a plain section (Watchlist page). */
   asPanel?: boolean;
-  maxRows?: number;
+  /** Clip the list to this many rows and scroll the rest. Does not drop items. */
+  scrollRows?: number;
 }) {
   const qc = useQueryClient();
   const guest = isGuest();
@@ -56,18 +58,43 @@ export function WatchlistSuggestions({
   });
 
   const items = suggestionsQ.data?.items ?? [];
-  const visible = maxRows != null ? items.slice(0, maxRows) : items;
   const accepting = accept.isPending ? accept.variables : null;
+  const listRef = useRef<HTMLDivElement>(null);
+  const [clipHeight, setClipHeight] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (scrollRows == null) return;
+    const list = listRef.current;
+    if (!list) return;
+
+    const measure = () => {
+      const rows = Array.from(list.children).slice(0, scrollRows) as HTMLElement[];
+      const first = rows[0];
+      const last = rows[rows.length - 1];
+      if (!first || !last) return;
+      const next = Math.round(last.getBoundingClientRect().bottom - first.getBoundingClientRect().top);
+      setClipHeight((prev) => (prev === next ? prev : next));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    for (const child of Array.from(list.children).slice(0, scrollRows)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [scrollRows, suggestionsQ.data, dense, guest]);
 
   const body = suggestionsQ.isLoading ? (
     <LoadingState label="Loading suggestions…" compact={dense} minHeight={dense ? '6rem' : '8rem'} />
-  ) : visible.length === 0 ? (
+  ) : items.length === 0 ? (
     <p className="text-xs text-[var(--color-text-muted)]">
       No strong ideas right now. Sync again later — some days may have none.
     </p>
   ) : (
-    <div className={`flex flex-col ${dense ? '' : 'gap-0'}`}>
-      {visible.map((item) => {
+    <div
+      ref={listRef}
+      className={`flex flex-col ${scrollRows != null ? 'overflow-y-auto overscroll-y-contain' : ''}`}
+      style={scrollRows != null && clipHeight != null ? { maxHeight: clipHeight } : undefined}
+    >
+      {items.map((item) => {
         const blurb = item.company_blurb?.trim() || item.company_name?.trim() || '';
         return (
           <div

@@ -413,7 +413,7 @@ export function DashboardPage() {
             )}
           </Panel>
 
-          <WatchlistSuggestions dense maxRows={8} />
+          <WatchlistSuggestions dense scrollRows={3} />
 
           <Panel
             title="Universe heatmap"
