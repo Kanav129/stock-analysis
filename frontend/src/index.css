@@ -77,6 +77,10 @@
   box-sizing: border-box;
 }
 
+html {
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {
@@ -1498,5 +1502,130 @@ body {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Thin desk scrollbars.
+   Native thumbs stay light on this dark UI, and styling ::-webkit-scrollbar
+   turns off overlay auto-hide. The page draws its own hairline (see
+   deskScrollbars.ts) and hides the native bar. Tokens stay between
+   surface-3 and muted ink — never a light gray track. */
+:root {
+  --desk-scrollbar-thumb: oklch(0.42 0.012 255);
+  --desk-scrollbar-thumb-hot: oklch(0.55 0.014 255);
+}
+
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--desk-scrollbar-thumb) transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--desk-scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--desk-scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+html.desk-scrollbars,
+html.desk-scrollbars * {
+  scrollbar-width: none;
+}
+
+html.desk-scrollbars::-webkit-scrollbar,
+html.desk-scrollbars *::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+.desk-scroll-thumb {
+  position: fixed;
+  z-index: 70;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: transparent;
+  touch-action: none;
+  transition: opacity 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.desk-scroll-thumb.is-on {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: grab;
+  transition-duration: 90ms;
+}
+
+.desk-scroll-thumb.is-dragging {
+  cursor: grabbing;
+}
+
+.desk-scroll-thumb::before {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background: var(--desk-scrollbar-thumb);
+}
+
+.desk-scroll-thumb--y {
+  width: 12px;
+}
+
+.desk-scroll-thumb--y::before {
+  top: 0;
+  bottom: 0;
+  right: 1px;
+  width: 3px;
+}
+
+.desk-scroll-thumb--x {
+  height: 12px;
+}
+
+.desk-scroll-thumb--x::before {
+  left: 0;
+  right: 0;
+  bottom: 1px;
+  height: 3px;
+}
+
+.desk-scroll-thumb.is-on:hover::before,
+.desk-scroll-thumb.is-dragging::before {
+  background: var(--desk-scrollbar-thumb-hot);
+}
+
+html.desk-scroll-dragging {
+  user-select: none;
+  cursor: grabbing;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desk-scroll-thumb {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .desk-scroll-thumb::before {
+    background: CanvasText;
   }
 }

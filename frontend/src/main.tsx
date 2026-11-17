@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import './styles/actionButtons.css'
 import App from './App.tsx'
+import { installDeskScrollbars } from './lib/deskScrollbars.ts'
+
+installDeskScrollbars()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
