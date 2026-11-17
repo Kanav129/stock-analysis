@@ -226,7 +226,7 @@ export function DirectionalSuccessControl({ className = '' }: { className?: stri
           ) : null}
 
           {visible.length > 0 ? (
-            <div className="mt-2 flex max-h-72 flex-col overflow-auto">
+            <div className="mt-2 flex max-h-72 flex-col overflow-y-auto pe-4">
               <p className="sr-only">Ticker, core rating, score, 5-day return, and hit or miss.</p>
               {visible.map((row) => (
                 <Link
