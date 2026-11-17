@@ -6,7 +6,8 @@ thumb on document.body, shows it while scrolling, then fades it out.
 Wheel, trackpad, and keyboard scrolling stay on the real element.
 */
 
-const HIDE_MS = 640;
+/** Fully visible after the last scroll event, before the fade-out starts. */
+const HOLD_MS = 1500;
 const MIN_THUMB = 24;
 const HIT = 12;
 const INSET = 2;
@@ -181,6 +182,11 @@ function place(track: Track): boolean {
   return true;
 }
 
+function holdMs(): number {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 0;
+  return HOLD_MS;
+}
+
 function finishReveal(track: Track): void {
   if (!track.wantsOn) return;
   track.thumb.classList.add('is-on');
@@ -189,7 +195,7 @@ function finishReveal(track: Track): void {
     if (track.hovering || track.dragging) return;
     track.wantsOn = false;
     track.thumb.classList.remove('is-on');
-  }, HIDE_MS);
+  }, holdMs());
 }
 
 function reveal(track: Track): void {
