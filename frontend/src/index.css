@@ -1565,16 +1565,17 @@ html.desk-scrollbars *::-webkit-scrollbar {
   pointer-events: none;
   background: transparent;
   touch-action: none;
-  /* Fade-out is the resting transition. Adding .is-on replaces it with the fade-in.
-     The 3s hold before fade-out starts lives in deskScrollbars.ts (HOLD_MS). */
-  transition: opacity 3000ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* Fade-out is the resting transition: 3s, no delay.
+     Adding .is-on replaces it with a 1s fade-in that starts immediately.
+     The 2s hold before fade-out starts lives in deskScrollbars.ts (HOLD_MS). */
+  transition: opacity 3000ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;
 }
 
 .desk-scroll-thumb.is-on {
   opacity: 1;
   pointer-events: auto;
   cursor: grab;
-  transition: opacity 2000ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: opacity 1000ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;
 }
 
 .desk-scroll-thumb.is-dragging {
