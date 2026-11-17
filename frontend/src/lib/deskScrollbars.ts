@@ -6,8 +6,8 @@ thumb on document.body, shows it while scrolling, then fades it out.
 Wheel, trackpad, and keyboard scrolling stay on the real element.
 */
 
-/** Fully visible after the last scroll event, before the fade-out starts. */
-const HOLD_MS = 3000;
+/** Fully visible after fade-in completes, before the 3s fade-out starts. */
+const HOLD_MS = 2000;
 const MIN_THUMB = 24;
 const HIT = 12;
 const INSET = 2;
@@ -203,7 +203,8 @@ function clearFadeInWait(track: Track): void {
 }
 
 /** After scrolling stops, stay fully visible for HOLD_MS, then fade out.
- *  A 2s fade-in that is still running does not count as that hold. */
+ *  A fade-in that is still running does not count as that hold.
+ *  Scrolling again during the hold or the fade-out reveals immediately. */
 function armHide(track: Track): void {
   window.clearTimeout(track.hideTimer);
   clearFadeInWait(track);
@@ -215,6 +216,13 @@ function armHide(track: Track): void {
       if (event.propertyName !== 'opacity') return;
       clearFadeInWait(track);
       if (!track.wantsOn || track.hovering || track.dragging) return;
+      // A cancelled fade-out can still emit transitionend. Keep waiting
+      // until this thumb has actually reached full opacity.
+      if (Number.parseFloat(getComputedStyle(track.thumb).opacity) < 0.99) {
+        track.onFadeInEnd = onEnd;
+        track.thumb.addEventListener('transitionend', onEnd);
+        return;
+      }
       track.hideTimer = window.setTimeout(() => fadeOut(track), holdMs());
     };
     track.onFadeInEnd = onEnd;
@@ -226,7 +234,20 @@ function armHide(track: Track): void {
 
 function finishReveal(track: Track): void {
   if (!track.wantsOn) return;
-  track.thumb.classList.add('is-on');
+  const thumb = track.thumb;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // A fade-out still running is a reversal. Browsers shorten that, so a new
+  // scroll would not get the full 1s fade-in. Commit the current opacity with
+  // no transition, then start a fresh fade. An already-on thumb stays put.
+  if (!thumb.classList.contains('is-on') && !reduced) {
+    const current = getComputedStyle(thumb).opacity;
+    thumb.style.transition = 'none';
+    thumb.style.opacity = current;
+    void thumb.offsetWidth;
+  }
+  thumb.classList.add('is-on');
+  thumb.style.transition = '';
+  thumb.style.opacity = '';
   armHide(track);
 }
 
